@@ -44,6 +44,23 @@ test('the attention list keeps server entries, skips kept drift and adds the oth
   expect(list[2].valueId).toBeUndefined();
 });
 
+test('a handler setting the platform requires is taken care of by entering its secret or value, or by a tick', () => {
+  const H = 'handlers/token_v1/handler';
+  const p = plan({
+    needsAttention: [
+      { id: `handler-settings:${H}#key_b64`, kind: 'handler-settings', key: H, valueId: 'handler/TOKEN_V1__KEY_B64', message: 'Token needs key_b64 before its settings can be saved in Test.' },
+      { id: `handler-settings:${H}#client_id`, kind: 'handler-settings', key: H, valueId: `${H}#properties.client_id.value`, message: 'Token needs client_id before its settings can be saved in Test.' },
+    ],
+  });
+  const [secret, value] = attentionList(p);
+  expect(secret).toMatchObject({ kind: 'handler-settings', send: true, valueId: 'handler/TOKEN_V1__KEY_B64' });
+  expect(secret.message).toBe('Token needs key_b64 before its settings can be saved in Test. Enter it under Environment values, or tick to go ahead without it.');
+  expect(satisfied(secret, new Set(), new Set())).toBe(false);
+  expect(satisfied(secret, new Set(), new Set(['handler/TOKEN_V1__KEY_B64']))).toBe(true);
+  expect(satisfied(value, new Set(), new Set([`${H}#properties.client_id.value`]))).toBe(true);
+  expect(satisfied(value, new Set([value.id]), new Set())).toBe(true);
+});
+
 test('warnings read plainly; a missing attribute is taken care of by filling its value', () => {
   const p = plan({
     environmentValues: [ev('kapps/hr/kapp#attributes.Web Server Url', { label: 'Web Server Url', origin: 'attribute', to: null, required: true })],

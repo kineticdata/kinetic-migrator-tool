@@ -87,6 +87,10 @@ export function testRoutes(): Record<string, unknown> {
 
 export interface Call { env: string; method: string; path: string; body?: unknown; api: string }
 
+// A space's routes may carry a stateful handler for what no route matches
+// (for example the engine's fakeTaskHandlers().handle) under this key.
+export const FALLBACK = Symbol('fallback');
+
 // Environments named in `integratorDown` answer the Integrator sign-in with
 // 404, as Kinetic Platform 7.0.0-rc3 does.
 export function fakeFactory(spaces: Record<string, () => Record<string, unknown>>, calls: Call[], envs: EngineEnv[] = [], integratorDown: Set<string> = new Set()): ClientFactory {
@@ -100,8 +104,9 @@ export function fakeFactory(spaces: Record<string, () => Record<string, unknown>
     const routes = spaces[env.name];
     if (!routes) throw new Error(`no fake space for ${env.name}`);
     const recorded: Array<Omit<Call, 'env'>> = [];
+    const { [FALLBACK]: fallback, ...table } = routes() as Record<string | symbol, unknown>;
     const integratorAuth = integratorDown.has(env.name) ? integratorAuthUnavailable({ host: new URL(env.url).host }) : undefined;
-    const client = fakeClient(routes(), { mode, calls: recorded, integratorAuth });
+    const client = fakeClient(table, { mode, calls: recorded, fallback, integratorAuth });
     const push = recorded.push.bind(recorded);
     recorded.push = (...items: Array<Omit<Call, 'env'>>) => {
       for (const c of items) calls.push({ ...c, env: env.name });

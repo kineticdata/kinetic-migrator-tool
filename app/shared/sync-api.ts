@@ -294,13 +294,16 @@ export interface PlanRemovalOut {
   entry?: { item: string; itemLabel: string; collection: string; name: string };
 }
 
-export type AttentionKind = 'handler' | 'index' | 'data-workflows' | 'connection-secrets' | 'drift';
+export type AttentionKind = 'handler' | 'handler-settings' | 'index' | 'data-workflows' | 'connection-secrets' | 'drift';
 
 export interface NeedsAttention {
   id: string;
   kind: AttentionKind;
   key: string;
   message: string;
+  // What takes care of this entry once entered: a SecretNeeded id or an
+  // EnvironmentValue id (handler settings).
+  valueId?: string;
 }
 
 export interface EnvironmentValue {
@@ -329,6 +332,8 @@ export interface SecretNeeded {
   name: string;
   label: string;
   has: boolean;
+  // Said beside the input (a handler in the target: its value is not readable).
+  hint?: string;
 }
 
 export interface PlanResult {
@@ -372,6 +377,8 @@ export interface RunItemOutcome {
   key: string;
   status: 'done' | 'skipped' | 'failed' | 'running';
   message?: string;
+  // Done, but left needing attention (a handler without required settings).
+  attention?: boolean;
 }
 
 export interface RunRecord {

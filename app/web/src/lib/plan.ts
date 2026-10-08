@@ -65,7 +65,11 @@ export function attentionList(plan: PlanResult): AttentionEntry[] {
   const out: AttentionEntry[] = plan.needsAttention
     // A drifted item kept as it is in the target is not overwritten.
     .filter((n) => !(n.kind === 'drift' && kept.has(n.key)))
-    .map((n) => ({ id: n.id, kind: n.kind, key: n.key, message: n.message, send: true }));
+    .map((n) => ({
+      id: n.id, kind: n.kind, key: n.key, send: true,
+      message: n.kind === 'handler-settings' ? `${n.message} Enter it under Environment values, or tick to go ahead without it.` : n.message,
+      ...(n.valueId ? { valueId: n.valueId } : {}),
+    }));
   plan.warnings.forEach((w, i) => {
     if (!COVERED.some((re) => re.test(w))) out.push({ id: `warning:${i}`, kind: 'warning', send: false, ...plainWarning(w, plan) });
   });
@@ -236,6 +240,8 @@ export type StepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 export interface ItemProgress {
   status: StepStatus;
   message?: string;
+  // Done, but left needing attention (a handler without required settings).
+  attention?: boolean;
 }
 
 export interface ChecklistState {
@@ -256,9 +262,11 @@ export function checklistFrom(events: JobEventData[], carried: Record<string, It
     } else if (e.type === 'item' && typeof e.key === 'string' && typeof e.status === 'string' && STATUSES.has(e.status)) {
       // Done in an earlier run of this plan stays done when this run finds it up to date.
       if (e.status === 'skipped' && carried[e.key]?.status === 'done' && state.items[e.key]?.status === 'done') continue;
-      state.items[e.key] = typeof e.message === 'string' && e.message
-        ? { status: e.status as StepStatus, message: e.message }
-        : { status: e.status as StepStatus };
+      state.items[e.key] = {
+        status: e.status as StepStatus,
+        ...(typeof e.message === 'string' && e.message ? { message: e.message } : {}),
+        ...(e.attention === true ? { attention: true } : {}),
+      };
     }
   }
   return state;

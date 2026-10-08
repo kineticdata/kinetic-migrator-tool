@@ -9,6 +9,7 @@ import { cn } from './ui/cn';
 
 const KIND: Record<AttentionEntry['kind'], { label: string; icon: ReactNode }> = {
   handler: { label: 'Handler', icon: <Package size={15} aria-hidden /> },
+  'handler-settings': { label: 'Handler settings', icon: <KeyRound size={15} aria-hidden /> },
   index: { label: 'Index rebuild', icon: <ListRestart size={15} aria-hidden /> },
   'data-workflows': { label: 'Runs workflows', icon: <Workflow size={15} aria-hidden /> },
   'connection-secrets': { label: 'Credentials', icon: <KeyRound size={15} aria-hidden /> },
