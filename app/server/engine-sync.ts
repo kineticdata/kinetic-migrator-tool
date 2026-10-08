@@ -27,6 +27,8 @@ import * as overridesModule from '../../lib/sync/overrides.mjs';
 import * as stateModule from '../../lib/sync/state.mjs';
 // @ts-expect-error -- untyped engine module
 import * as layoutModule from '../../lib/sync/layout.mjs';
+// @ts-expect-error -- untyped engine module
+import * as removalsModule from '../../lib/sync/removals.mjs';
 import type { ClientFactory, EngineConfig, EngineEnv, EngineOverrides, EnvBoundAttributes } from './engine.ts';
 
 export interface Artifact { key: string; data: unknown; files?: Record<string, Uint8Array> }
@@ -48,9 +50,22 @@ export interface PlanItem {
   drift: boolean;
 }
 
+export interface EngineRemoval {
+  key: string;
+  type: string;
+  action: 'delete' | 'skip-drift' | 'gone';
+  existing: TargetArtifact | null;
+  children: Array<{ key: string; type: string; existing: TargetArtifact }>;
+  usedBy: Array<{ key: string; kind: string; reason: string; onlyTarget: boolean }>;
+  notes: string[];
+  restore: string | null;
+  hash: string | null;
+}
+
 export interface EnginePlan {
   items: PlanItem[];
   targetOnly: Array<{ key: string; type: string; existing: TargetArtifact; excluded?: boolean }>;
+  removals: EngineRemoval[];
   errors: string[];
   warnings: string[];
 }
@@ -74,9 +89,11 @@ interface RunCommon { projectDir: string; env: EngineEnv; onEvent?: OnEvent; sig
 export const runExport: (opts: RunCommon & { dest?: string }) => Promise<{ code: number; artifacts: number; counts: Record<string, number> }> = commandsModule.runExport;
 export const computePlan: (opts: RunCommon & {
   envName: string; from?: string; sourceName?: string; sourceDir?: string; sourceArtifacts?: Artifact[]; sourceUnresolved?: Map<string, string>; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
+  remove?: string[]; removeExpected?: Record<string, string>;
 }) => Promise<{ env: EngineEnv; config: EngineConfig; plan: EnginePlan; targetList: TargetArtifact[] }> = commandsModule.computePlan;
 export const runApply: (opts: RunCommon & {
   envName: string; from?: string; sourceName?: string; sourceDir?: string; yes: boolean; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
+  remove?: string[]; removeExpected?: Record<string, string>;
   onPlan?: (plan: EnginePlan) => void;
 }) => Promise<{ code: number; done: number; backupDir?: string }> = commandsModule.runApply;
 export const stamp: () => string = commandsModule.stamp;
@@ -118,3 +135,5 @@ export const isSecretProperty: (p: unknown) => boolean = secretsModule.isSecretP
 export const secretFieldKey: (field: string) => string = envModule.secretFieldKey;
 export const parsePath: (path: string) => string[] = overridesModule.parsePath;
 export const loadState: (projectDir: string, env: string) => Record<string, string> = stateModule.loadState;
+// Why a key can never be removed, or null (see lib/sync/removals.mjs).
+export const notRemovable: (key: string, mod: EngineModule | undefined) => string | null = removalsModule.notRemovable;

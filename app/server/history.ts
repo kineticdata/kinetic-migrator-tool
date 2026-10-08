@@ -25,6 +25,7 @@ export function typeOf(title: string): HistoryType {
   if (/^Backup of /.test(title)) return 'backup';
   if (/^(Saved|Updated|Deleted) changeset /.test(title)) return 'changeset';
   if (/^(Applied|Partly applied|Failed to apply|Cancelled applying) /.test(title)) return 'applied';
+  if (/^(Removed|Partly removed|Failed to remove|Cancelled removing) /.test(title)) return 'applied';
   if (/^(Restored|Partly restored|Failed to restore) /.test(title)) return 'restore';
   return 'project';
 }

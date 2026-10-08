@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type {
-  ApplyResult, AttentionKind, EnvironmentValue, NeedsAttention, PlanAction, PlanItemOut, PlanResult, Resolution,
+  ApplyResult, AttentionKind, EnvironmentValue, NeedsAttention, PlanAction, PlanItemOut, PlanRemovalOut, PlanResult, Resolution,
   RunItemOutcome, RunRecord, RunStatus, SecretNeeded,
 } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound, toApiError } from './errors.ts';
@@ -24,7 +24,7 @@ import { envBoundNamesFor, envKey, loadConfig, loadOverrides, stableStringify, t
 import {
   ENV_BOUND_FIELDS, computePlan, isSecretName, isSecretProperty, parsePath, readTree, runApply, segmentLabel, stamp, type EnginePlan, type PlanItem,
 } from './engine-sync.ts';
-import { currentKeys, readChangeset, recordApplied } from './changesets.ts';
+import { currentKeys, readChangeset, recordApplied, removeList } from './changesets.ts';
 import { hasEnvSecret, readEnvironmentFile, readOverrides, resolveEnv, setEnvSecret } from './environments.ts';
 import type { Emit } from './jobs.ts';
 import { materializeTree, resolveCommit } from './pinned.ts';
@@ -48,6 +48,10 @@ interface StoredPlan {
   sourceDir: string;
   sourcePath: string;
   resolutions: Record<string, Resolution>;
+  // Explicit removals, and each one's fingerprint as reviewed (an item
+  // changed since is not deleted).
+  remove: string[];
+  removeExpected: Record<string, string>;
 }
 
 const MAX_PLANS = 50;
@@ -190,7 +194,16 @@ function needsAttention(to: string, items: PlanItem[], warnings: string[], secre
   return out;
 }
 
-function buildResult(base: Omit<PlanResult, 'items' | 'counts' | 'needsAttention' | 'environmentValues' | 'secretsNeeded' | 'errors' | 'warnings'>, plan: EnginePlan, extra: {
+function removalsOut(plan: EnginePlan): PlanRemovalOut[] {
+  return (plan.removals ?? []).map((r) => ({
+    key: r.key, type: r.type, label: labelFor(r.key, r.existing?.data), action: r.action,
+    children: r.children.map((c) => ({ key: c.key, type: c.type, label: labelFor(c.key, c.existing?.data) })),
+    usedBy: r.usedBy.map((u) => ({ key: u.key, label: labelFor(u.key, undefined), reason: u.reason, onlyTarget: u.onlyTarget })),
+    notes: r.notes, restore: r.restore,
+  }));
+}
+
+function buildResult(base: Omit<PlanResult, 'items' | 'removals' | 'counts' | 'needsAttention' | 'environmentValues' | 'secretsNeeded' | 'errors' | 'warnings'>, plan: EnginePlan, extra: {
   environmentValues: EnvironmentValue[]; secretsNeeded: SecretNeeded[];
 }): PlanResult {
   const active = plan.items.filter((i) => i.action !== 'excluded');
@@ -199,18 +212,23 @@ function buildResult(base: Omit<PlanResult, 'items' | 'counts' | 'needsAttention
     counts[i.action as PlanAction]++;
     return { key: i.key, type: i.type, label: labelFor(i.key, i.desired), action: i.action as PlanAction, drift: i.drift, diff: i.diff };
   });
+  const removals = removalsOut(plan);
+  counts.delete = removals.filter((r) => r.action === 'delete').length;
   return {
-    ...base, items, counts,
+    ...base, items, removals, counts,
     needsAttention: needsAttention(base.to, active, plan.warnings, extra.secretsNeeded),
     environmentValues: extra.environmentValues, secretsNeeded: extra.secretsNeeded,
     errors: plan.errors, warnings: plan.warnings,
   };
 }
 
-const keyList = (v: unknown): string[] => {
-  if (!Array.isArray(v) || !v.length || !v.every((k) => typeof k === 'string')) throw badRequest('"selected" must be a non-empty list of item keys.');
+const keyList = (v: unknown, allowEmpty = false): string[] => {
+  if (v === undefined && allowEmpty) return [];
+  if (!Array.isArray(v) || (!v.length && !allowEmpty) || !v.every((k) => typeof k === 'string')) throw badRequest('"selected" must be a non-empty list of item keys.');
   return [...new Set(v as string[])].sort();
 };
+
+const items = (n: number) => `${n} item${n === 1 ? '' : 's'}`;
 
 function resolutionsOf(v: unknown): Record<string, Resolution> {
   if (v === undefined) return {};
@@ -221,10 +239,11 @@ function resolutionsOf(v: unknown): Record<string, Resolution> {
 async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Promise<string> {
   if (!isPlainObject(body)) throw badRequest('Expected a JSON object.');
   for (const k of Object.keys(body)) {
-    if (!['to', 'changesetId', 'from', 'selected', 'sourceCommit', 'restore', 'resolutions'].includes(k)) throw badRequest(`Unknown field "${k}".`);
+    if (!['to', 'changesetId', 'from', 'selected', 'remove', 'sourceCommit', 'restore', 'resolutions'].includes(k)) throw badRequest(`Unknown field "${k}".`);
   }
   const to = requireEnvironment(ref, body.to);
   const resolutions = resolutionsOf(body.resolutions);
+  let remove = removeList(body.remove);
   let from: string;
   let keys: string[];
   let commit: string | null;
@@ -237,16 +256,19 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     ({ from, sourceCommit: commit, name } = cs);
     // Keys of a changeset from before the file-name change follow its pinned tree.
     keys = await currentKeys(ref, cs);
+    remove = [...new Set([...(cs.remove ?? []), ...remove])].sort();
     changesetId = cs.id;
   } else {
     from = requireEnvironment(ref, body.from);
-    keys = keyList(body.selected);
+    keys = keyList(body.selected, remove.length > 0);
     if (body.sourceCommit !== undefined) {
       commit = typeof body.sourceCommit === 'string' ? await resolveCommit(ref.dir, body.sourceCommit) : null;
       if (!commit) throw badRequest('"sourceCommit" is not a commit of this project.');
     } else commit = await latestSnapshotCommit(ref, from);
     if (!commit) throw new ApiError(404, 'no_snapshot', `There is no snapshot of ${displayName(from)} yet: take one first.`);
-    name = kind === 'restore' ? `Restore of ${displayName(to)}` : `${keys.length} item${keys.length === 1 ? '' : 's'} from ${displayName(from)}`;
+    name = kind === 'restore' ? `Restore of ${displayName(to)}`
+      : !keys.length ? `Remove ${items(remove.length)} from ${displayName(to)}`
+        : `${items(keys.length)} from ${displayName(from)}${remove.length ? `, ${remove.length} to remove` : ''}`;
   }
   if (from === to && kind !== 'restore') throw badRequest('The source and target are the same environment.');
   await secretsId(ref);
@@ -266,18 +288,19 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     }
     const select = new Set(keys);
     const { plan } = await computePlan({
-      projectDir: ref.dir, envName: to, env, sourceDir, sourceName: from, select, resolutions, onEvent: forwardEvents(emit, [env.password, ...Object.values(env.vars)]),
+      projectDir: ref.dir, envName: to, env, sourceDir, sourceName: from, select, resolutions, remove, onEvent: forwardEvents(emit, [env.password, ...Object.values(env.vars)]),
       signal, clientFactory: ctx.clientFactory,
     });
+    const removeExpected = Object.fromEntries((plan.removals ?? []).filter((x) => x.hash).map((x) => [x.key, x.hash!]));
     const active = plan.items.filter((i) => i.action !== 'excluded');
     const missing = keys.filter((k) => !plan.items.some((i) => i.key === k));
     if (missing.length) plan.errors.push(...missing.map((k) => `${k}: not in the source snapshot`));
     const secrets = await secretsNeeded(ctx.secrets, ref, to, active);
-    const result = buildResult({ planId, name, to, from, changesetId, sourceCommit: pinned }, plan, {
+    const result = buildResult({ planId, name, to, from, changesetId, sourceCommit: pinned, selected: keys, remove }, plan, {
       environmentValues: environmentValues(ref.dir, to, active, readTree(sourceDir)), secretsNeeded: secrets,
     });
     const scrubbed = makeScrubber([env.password, ...Object.values(env.vars)])(result);
-    remember(planId, { projectDir: ref.dir, result: scrubbed, kind, select, sourceDir, sourcePath, resolutions });
+    remember(planId, { projectDir: ref.dir, result: scrubbed, kind, select, sourceDir, sourcePath, resolutions, remove, removeExpected });
     return scrubbed;
   }
 }
@@ -423,6 +446,18 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
       skipped.push(reviewed.key);
       onEvent({ type: 'item', key: reviewed.key, status: 'skipped', message });
     }
+    // Removals reviewed as deletes: one changed since review is kept (the
+    // run is then partial); one already gone is fine.
+    for (const reviewed of r.removals ?? []) {
+      if (reviewed.action !== 'delete') continue;
+      const now = (applyPlan.removals ?? []).find((x) => x.key === reviewed.key)?.action;
+      if (now === 'gone') {
+        onEvent({ type: 'item', key: reviewed.key, status: 'skipped', message: `Already gone from ${To}.` });
+      } else if (now !== 'delete') {
+        skipped.push(reviewed.key);
+        onEvent({ type: 'item', key: reviewed.key, status: 'skipped', message: `Changed in ${To} since you reviewed it — not removed.` });
+      }
+    }
   };
   step('apply', 'running');
   let status: RunStatus = 'applied';
@@ -431,6 +466,7 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   try {
     const res = await runApply({
       projectDir: ref.dir, envName: r.to, env, sourceDir: plan.sourceDir, sourceName: r.from ?? undefined, yes: true, select: plan.select, resolutions: input.resolutions,
+      remove: plan.remove, removeExpected: plan.removeExpected,
       onEvent, onPlan, signal, clientFactory: ctx.clientFactory, log: () => {},
     });
     done = res.done;
@@ -439,7 +475,7 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
       error = 'The plan has errors against the current target; nothing was applied. Plan again.';
     } else if (skipped.length) {
       status = 'partial';
-      error = `${skipped.length === 1 ? '1 item was' : `${skipped.length} items were`} not applied (see the list below). Plan again to review ${skipped.length === 1 ? 'it' : 'them'}.`;
+      error = `${skipped.length === 1 ? '1 item was' : `${skipped.length} items were`} not applied or removed (see the list below). Plan again to review ${skipped.length === 1 ? 'it' : 'them'}.`;
     }
   } catch (err) {
     const failed = [...outcomes.values()].find((o) => o.status === 'failed' || o.status === 'running');
@@ -464,7 +500,7 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
     id: runId, kind: plan.kind, name: r.name, planId: r.planId, changesetId: r.changesetId, from: r.from, to: r.to,
     source: { commit: r.sourceCommit, path: plan.sourcePath }, backupCommit,
     startedAt: started, finishedAt: new Date().toISOString(), status,
-    selection: [...plan.select].sort(), acknowledgements: input.acknowledgements, resolutions: input.resolutions,
+    selection: [...plan.select].sort(), ...(plan.remove.length ? { removals: plan.remove } : {}), acknowledgements: input.acknowledgements, resolutions: input.resolutions,
     values, secretsUsed: Object.keys(input.secrets).sort(),
     items: [...outcomes.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)), done, error,
   };
@@ -474,10 +510,7 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   if (r.changesetId && (status === 'applied' || status === 'partial') && existsSync(path.join(ref.dir, 'changesets', `${r.changesetId}.json`))) {
     recordApplied(ref, r.changesetId, { env: r.to, runId, at: safe.finishedAt });
   }
-  const verb = plan.kind === 'restore'
-    ? { applied: 'Restored', partial: 'Partly restored', failed: 'Failed to restore', cancelled: 'Partly restored' }[status]
-    : { applied: 'Applied', partial: 'Partly applied', failed: 'Failed to apply', cancelled: 'Cancelled applying' }[status];
-  const title = plan.kind === 'restore' ? `${verb} ${To} from a backup` : `${verb} '${r.name}' to ${To}`;
+  const title = runTitle(plan.kind, status, r.name, To, r.selected.length, (r.removals ?? []).filter((x) => x.action === 'delete').length);
   const commit = await commitChange(ref, commitMessage(title, { Environment: r.to, Run: runId, Changeset: r.changesetId, Plan: r.planId }));
 
   // 6. A fresh snapshot of the target once anything was written, so Compare,
@@ -502,6 +535,18 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   }
   // A cancelled apply still reports what it did (the job keeps this result).
   return scrub({ runId, status, commit, backupCommit, snapshotCommit, done, error });
+}
+
+// The commit title of a run (History reads it back, see history.ts typeOf).
+export function runTitle(kind: 'apply' | 'restore', status: RunStatus, name: string, To: string, promoted: number, removed: number): string {
+  if (kind === 'restore') {
+    return `${{ applied: 'Restored', partial: 'Partly restored', failed: 'Failed to restore', cancelled: 'Partly restored' }[status]} ${To} from a backup`;
+  }
+  if (!promoted && removed) {
+    return `${{ applied: 'Removed', partial: 'Partly removed', failed: 'Failed to remove', cancelled: 'Cancelled removing' }[status]} ${items(removed)} from ${To}`;
+  }
+  const verb = { applied: 'Applied', partial: 'Partly applied', failed: 'Failed to apply', cancelled: 'Cancelled applying' }[status];
+  return `${verb} '${name}' to ${To}${removed ? ` and removed ${items(removed)}` : ''}`;
 }
 
 function findPlan(ref: ProjectRef, id: string): StoredPlan {

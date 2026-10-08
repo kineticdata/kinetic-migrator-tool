@@ -87,9 +87,17 @@ test('fake Dev and Test: differences, a suggestion, an apply that sticks, a re-p
   const selected = [FORM, ...keys, 'handlers/mail_send_v1/handler', 'teams/Operations',
     'kapps/services/forms/leave/workflows/Submission Submitted/Manager Approval',
     'kapps/services/forms/it-request/workflows/Submission Submitted/Create Ticket'];
-  const plan = async () => job('POST', `${P}/plans`, { to: 'test', from: 'dev', selected });
+  // The Create Ticket workflow runs a routine Test does not have: suggested, and needed.
+  const wfSug = (await call('POST', `${P}/compare/${cmp.compareId}/suggestions`, { selected })).json;
+  assert.ok(wfSug.some((s: { key: string; reason: string }) => s.key === 'routines/Notify Requester' && /runs routine "Notify Requester"/.test(s.reason)), JSON.stringify(wfSug));
+  const missing = await job('POST', `${P}/plans`, { to: 'test', from: 'dev', selected });
+  assert.ok(missing.errors.some((e: string) => e.includes('routines/Notify Requester')), JSON.stringify(missing.errors));
+  selected.push('routines/Notify Requester');
+  const remove = ['teams/Contractors'];
+  const plan = async () => job('POST', `${P}/plans`, { to: 'test', from: 'dev', selected, remove });
   const p = await plan();
   assert.deepEqual(p.errors, []);
+  assert.equal(p.counts.delete, 1);
   assert.ok(p.counts.create >= 4 && p.counts.update >= 3, JSON.stringify(p.items.map((i: { key: string; action: string }) => [i.key, i.action])));
   const values: Record<string, Record<string, unknown>> = {};
   for (const v of p.environmentValues) (values[v.key] ??= {})[v.path] = v.to ?? v.from ?? 'x';
@@ -103,4 +111,8 @@ test('fake Dev and Test: differences, a suggestion, an apply that sticks, a re-p
 
   const again = await plan();
   assert.equal(again.counts.create + again.counts.update, 0, JSON.stringify(again.items.map((i: { key: string; action: string }) => [i.key, i.action])));
+  assert.deepEqual(again.removals.map((r: { key: string; action: string }) => [r.key, r.action]), [['teams/Contractors', 'gone']]);
+  assert.equal(again.counts.delete, 0);
+  const routine = again.items.find((i: { key: string }) => i.key === 'routines/Notify Requester');
+  assert.equal(routine.action, 'unchanged', 'the routine was created with its tree, inputs and outputs');
 });
