@@ -15,7 +15,7 @@ const USAGE = `Usage:
 
 --project defaults to the current directory.
 export writes snapshots/<name>/; plan and apply read snapshots/<from>/.
-Without --from they read a legacy export/ folder if one exists.
+Without --from they read a legacy export/ folder, only when there is no snapshots/ folder.
 --prune types: ${PRUNABLE.join(', ')}`;
 
 const OPTIONS = {
