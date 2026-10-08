@@ -18,7 +18,7 @@ import { registerProjectRoutes, upgradeWorkspace } from './projects.ts';
 import { registerSyncRoutes } from './sync-routes.ts';
 import { registerRepositoryRoutes } from './repository.ts';
 import { createDefaultStore, DeferredStore, type SecretStore } from './secrets.ts';
-import { defaultLogger, type Logger } from './log.ts';
+import { workspaceLogger, type Logger } from './log.ts';
 import { fakeMode } from './fake-mode.ts';
 
 export const VERSION: string = pkg.version;
@@ -55,6 +55,8 @@ export interface ServerHandle {
   fake: boolean;
   // Settles when the workspace's projects are on the current file layout.
   upgraded: Promise<void>;
+  // Today's log file (null when the injected logger writes none).
+  logFile: string | null;
   jobs: JobRegistry;
   router: Router;
   close(): Promise<void>;
@@ -68,8 +70,10 @@ export function buildRouter(ctx: Omit<ServerContext, 'router'>): Router {
     if (ready) await Promise.race([ready.call(ctx.secrets), new Promise((r) => { setTimeout(r, 3000).unref(); })]);
     // Still probing after that: say so rather than "no keychain".
     const checking = Boolean((ctx.secrets as { checking?: boolean }).checking);
+    const logFile = ctx.logger?.file?.() ?? null;
     const session: SessionInfo = {
       version: VERSION, workspace: ctx.workspace, keychain: { available: Boolean(ctx.secrets.persistent), ...(checking ? { checking: true } : {}) },
+      ...(logFile ? { logFile } : {}),
     };
     return { json: session };
   });
@@ -87,12 +91,16 @@ function defaultWebDir(): string | undefined {
 
 export async function startServer(opts: StartServerOptions): Promise<ServerHandle> {
   const key = generateKey();
-  const logger = opts.logger ?? defaultLogger;
-  const jobs = new JobRegistry({ logger });
   const workspace = path.resolve(opts.workspace);
+  // stderr plus <workspace>/.kinetic-migrate/logs/kinetic-migrate-<day>.log.
+  const logger = opts.logger ?? workspaceLogger(workspace);
+  const jobs = new JobRegistry({ logger });
   // Fake mode only fills in what the caller did not inject.
   const fake = opts.clientFactory || opts.secrets ? undefined : fakeMode(opts.fake ? { KINETIC_MIGRATE_FAKE: '1' } : process.env);
-  const note = (m: string) => { process.stderr.write(`[kinetic-migrate] ${m}\n`); };
+  const note = (m: string) => {
+    if (logger.info) logger.info(m);
+    else process.stderr.write(`[kinetic-migrate] ${m}\n`);
+  };
   // Chosen in the background: the server listens without waiting for the keychain probe.
   const secrets: SecretStore = opts.secrets ?? fake?.secrets ?? new DeferredStore(() => createDefaultStore(note), note);
   const clientFactory = opts.clientFactory ?? fake?.clientFactory;
@@ -109,11 +117,14 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
     });
   });
   port = (server.address() as AddressInfo).port;
+  // Never the address with its key: the key opens the session.
+  logger.info?.(`kinetic-migrate ${VERSION} started on port ${port}${fake ? ' (fake mode)' : ''}; workspace ${workspace}`, { quiet: true });
   const upgraded = upgradeWorkspace(workspace, (id, err) => logger.error(`Could not upgrade the file layout of project ${id}`, err));
   return {
     upgraded,
     url: `http://localhost:${port}/?key=${key}`,
     port,
+    logFile: logger.file?.() ?? null,
     fake: Boolean(fake),
     jobs,
     router,

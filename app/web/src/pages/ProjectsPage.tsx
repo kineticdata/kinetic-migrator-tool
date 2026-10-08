@@ -59,6 +59,11 @@ export function ProjectsPage() {
             Each project holds the environments of one Kinetic setup and everything promoted between them.
             {session.data && <> Stored in <span className="font-mono text-[13px] text-fg">{session.data.workspace}</span>.</>}
           </p>
+          {session.data?.logFile && (
+            <p className="mt-1 text-xs text-subtle">
+              Log file: <span className="font-mono break-all select-all">{session.data.logFile}</span>
+            </p>
+          )}
         </div>
         {/* An empty workspace offers the same actions in its empty state. */}
         {list.length > 0 && (

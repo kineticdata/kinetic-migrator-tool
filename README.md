@@ -35,6 +35,14 @@ snapshots, changesets and run records. Passwords go to the system keychain
 (macOS Keychain, Windows Credential Manager, Secret Service on Linux); without
 one they are kept in memory until the server stops. Press Ctrl+C to stop.
 
+The server also writes a log file in the workspace,
+`.kinetic-migrate/logs/kinetic-migrate-<YYYY-MM-DD>.log` (one per day, the
+last 14 kept), with the same lines it prints to the terminal: unexpected
+errors and failed jobs (with the platform's error message and the names of
+the fields it complained about). Passwords, tokens and other secrets are
+never written to it. `ui` prints its path on start; the Projects page and
+Settings show it too.
+
 To try it without a Kinetic server, start it in fake mode:
 
 ```

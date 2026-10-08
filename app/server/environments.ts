@@ -13,6 +13,7 @@ import {
   commitChange, displayName, isPlainObject, readJsonFile, readMeta, secretsId, withProjectLock, withSecretsLock, writeMeta,
   type ProjectRef,
 } from './project-meta.ts';
+import { rememberSecrets } from './log.ts';
 import { accountFor, type SecretStore } from './secrets.ts';
 
 export interface EnvironmentFile {
@@ -157,6 +158,8 @@ async function writeIndex(store: SecretStore, sid: string, env: string, names: s
 }
 
 export async function setEnvSecret(store: SecretStore, ref: ProjectRef, env: string, scope: SecretScope, name: string, value: string): Promise<void> {
+  // Masked in every log line from now on.
+  rememberSecrets([value]);
   const sid = await secretsId(ref);
   await withSecretsLock(ref, async () => {
     // Index first: a value that fails to store leaves at most an index entry
@@ -238,6 +241,8 @@ export async function resolveEnv(ref: ProjectRef, env: string, store: SecretStor
     const value = await store.get(accountFor(sid, env, scope, name));
     if (value) vars[`KINETIC_${k}_${VAR_SCOPES[scope]}_${name}`] = value;
   }
+  // Masked in every log line from now on (run-only secrets included).
+  rememberSecrets([password, ...Object.values(vars), ...Object.values(extraVars)]);
   return { name: env, url: def.url, readOnly: def.readOnly, username, password, vars: { ...vars, ...extraVars } };
 }
 

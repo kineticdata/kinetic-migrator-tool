@@ -132,7 +132,7 @@ export interface Harness {
   writes: (env?: string) => string[];
 }
 
-export async function harness(t: { after: (fn: () => Promise<void> | void) => void }, envs = { dev: true, test: false, prod: true }, opts: { workspace?: string } = {}): Promise<Harness> {
+export async function harness(t: { after: (fn: () => Promise<void> | void) => void }, envs = { dev: true, test: false, prod: true }, opts: { workspace?: string; logger?: Logger } = {}): Promise<Harness> {
   const store = new MemoryStore();
   const calls: Call[] = [];
   const spaces: Record<string, () => Record<string, unknown>> = { dev: devRoutes, test: testRoutes, prod: testRoutes };

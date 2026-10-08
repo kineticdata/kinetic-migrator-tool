@@ -542,6 +542,8 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
     } else {
       status = done ? 'partial' : 'failed';
       error = failed ? `${failed.key}: ${failed.message ?? toApiError(err).message}` : toApiError(err).message;
+      // The job itself succeeds (its result records the failure): log it here.
+      ctx.logger?.error(`apply ${r.planId} to ${r.to} failed${failed ? ` at ${failed.key}` : ''}`, scrubError(err, known));
     }
   }
   step('apply', status === 'applied' ? 'done' : 'failed');

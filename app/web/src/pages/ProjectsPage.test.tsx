@@ -61,3 +61,12 @@ test('while the server is still checking the keychain, the page says so instead 
   await waitFor(() => expect(screen.queryByText('Checking the system keychain…')).not.toBeInTheDocument(), { timeout: 5000 });
   expect(screen.queryByText(/No system keychain was found/)).not.toBeInTheDocument();
 });
+
+test('shows the server log file', async () => {
+  mockApi({
+    'GET /api/session': { version: '0.1.0', workspace: '/workspace', keychain: { available: true }, logFile: '/workspace/.kinetic-migrate/logs/kinetic-migrate-2026-10-08.log' },
+    'GET /api/projects': [{ id: 'acme-demo', name: 'Demo migration', path: '/workspace/acme-demo' }],
+  });
+  renderWithApp(<AppRoutes />, { route: '/' });
+  expect(await screen.findByText('/workspace/.kinetic-migrate/logs/kinetic-migrate-2026-10-08.log')).toBeInTheDocument();
+});

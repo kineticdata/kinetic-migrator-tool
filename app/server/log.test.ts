@@ -1,11 +1,19 @@
 // Logger: unexpected errors reach stderr (redacted); clients get a generic body.
 import { test, after, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { createLogger, formatError } from './log.ts';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import type { PlanResult } from '../shared/sync-api.ts';
+import { createLogger, formatError, logDir, upstreamSummary, workspaceLogger } from './log.ts';
+import { PLANTED as PLANTED_PASSWORD, PLANTED_RUN, devRoutes, harness, testRoutes } from './sync-fixtures.ts';
 import { JobRegistry } from './jobs.ts';
 import { startTestServer, type TestServer } from './test-helpers.ts';
 
 const PLANTED = 'sEcReT-planted-123';
+const P = '/api/projects/sync-test';
+const HANDLER = 'handlers/mail_send_v1/handler';
+const TOKEN = 'Planted-Token-z8Kd20';
 
 test('formatError includes name, message and stack, with secrets redacted', () => {
   const err = new TypeError(`Bearer ${PLANTED} rejected; body {"password":"${PLANTED}"}`);
@@ -56,4 +64,76 @@ test('every failed job is logged, redacted', async () => {
   assert.equal(out.length, 1);
   assert.match(out[0], /apply/);
   assert.ok(!out[0].includes(PLANTED), out[0]);
+});
+
+// ---- The workspace log file ----------------------------------------------
+
+test('the log file is per day, time-stamped, rotates at midnight and keeps the newest 14 days', () => {
+  const ws = mkdtempSync(path.join(tmpdir(), 'km-log-'));
+  const dir = logDir(ws);
+  mkdirSync(dir, { recursive: true });
+  for (let d = 1; d <= 20; d++) writeFileSync(path.join(dir, `kinetic-migrate-2026-09-${String(d).padStart(2, '0')}.log`), 'old\n');
+  writeFileSync(path.join(dir, 'notes.txt'), 'kept');
+  let now = new Date(2026, 9, 7, 23, 59, 30);
+  const errOut: string[] = [];
+  const logger = workspaceLogger(ws, { now: () => now, stderr: (t) => errOut.push(t) });
+  logger.error('first', new Error('one'));
+  assert.equal(logger.file!(), path.join(dir, 'kinetic-migrate-2026-10-07.log'));
+  now = new Date(2026, 9, 8, 0, 0, 5);
+  logger.error('second', new Error('two'));
+  logger.info!('quiet one', { quiet: true });
+  const files = readdirSync(dir).sort();
+  assert.ok(files.includes('notes.txt'));
+  const logs = files.filter((f) => f.endsWith('.log'));
+  assert.equal(logs.length, 14);
+  assert.equal(logs.at(-1), 'kinetic-migrate-2026-10-08.log');
+  assert.equal(logs[0], 'kinetic-migrate-2026-09-09.log'); // 12 old days, plus Oct 7 and Oct 8
+  const today = readFileSync(path.join(dir, 'kinetic-migrate-2026-10-08.log'), 'utf8');
+  assert.match(today, /^\d{4}-\d{2}-\d{2}T\S+Z \[kinetic-migrate\] second: Error: two$/m);
+  assert.match(today, /quiet one/);
+  // stderr gets the same lines, without the time stamp, and not the quiet one.
+  assert.equal(errOut.length, 2);
+  assert.ok(errOut[1].startsWith('[kinetic-migrate] second: Error: two'));
+  assert.ok(today.includes(errOut[1].split('\n')[0]));
+});
+
+test('failed jobs log the upstream message and the names of its errors, never their values', () => {
+  const body = JSON.stringify({ message: 'Invalid handler', errors: [{ field: 'Password', value: PLANTED }, { name: 'Server' }], validationErrors: [{ path: '/config/auth/token', error: 'Missing field' }] });
+  const err = Object.assign(new Error(`POST /handlers failed with 400: ${body}`), { name: 'HttpError', status: 400, body });
+  assert.equal(upstreamSummary(err), 'upstream 400: message: "Invalid handler"; errors: Password, Server, /config/auth/token');
+  assert.equal(upstreamSummary(new Error('x')), null);
+});
+
+test('secrets given to the server (password, handler secret for one run, tokens) never reach the log file', async (t) => {
+  const ws = mkdtempSync(path.join(tmpdir(), 'km-log-ws-'));
+  const logger = workspaceLogger(ws, { stderr: () => {} });
+  const h = await harness(t, { dev: true, test: false, prod: true }, { workspace: ws, logger });
+  // The test space refuses the handler, echoing what it was sent.
+  const echo = () => {
+    const body = JSON.stringify({ message: 'Handler rejected', errors: [{ field: 'Password', value: PLANTED_RUN }], hint: `Bearer ${TOKEN}` });
+    throw Object.assign(new Error(`POST /handlers failed with 400: ${body} password=${PLANTED_PASSWORD} secret=${PLANTED_RUN}`), { name: 'HttpError', status: 400, body });
+  };
+  h.spaces.test = () => ({ ...testRoutes(), 'POST task/handlers': echo });
+  assert.equal((await h.job('POST', `${P}/snapshots`, { env: 'dev' })).status, 'succeeded');
+  const planned = await h.job('POST', `${P}/plans`, { to: 'test', from: 'dev', selected: [HANDLER] });
+  assert.equal(planned.status, 'succeeded', JSON.stringify(planned.error));
+  const p = planned.result as PlanResult;
+  const applied = await h.job('POST', `${P}/plans/${p.planId}/apply`, {
+    acknowledgements: p.needsAttention.map((n) => n.id), secrets: Object.fromEntries(p.secretsNeeded.map((s) => [s.id, PLANTED_RUN])), confirm: 'test',
+  });
+  assert.equal(applied.result?.status, 'failed', JSON.stringify(applied.result ?? applied.error));
+  // A failing snapshot job and a throwing route log too.
+  h.spaces.dev = () => ({ ...devRoutes(), 'GET core/teams': () => { throw Object.assign(new Error(`teams failed: Basic ${TOKEN} ${PLANTED_PASSWORD}`), { name: 'HttpError', status: 500, body: '{}' }); } });
+  assert.equal((await h.job('POST', `${P}/snapshots`, { env: 'dev' })).status, 'failed');
+  h.server.router.get('/api/test-log-boom', () => { throw new Error(`boom ${PLANTED_PASSWORD} ${PLANTED_RUN}`); });
+  assert.equal((await h.call('GET', '/api/test-log-boom')).status, 500);
+
+  const text = readdirSync(logDir(ws)).map((f) => readFileSync(path.join(logDir(ws), f), 'utf8')).join('');
+  assert.match(text, /apply .* to test failed at handlers\/mail_send_v1\/handler/);
+  assert.match(text, /upstream 400: message: "Handler rejected"; errors: Password/);
+  assert.match(text, /job snapshot .* failed/);
+  assert.match(text, /GET \/api\/test-log-boom: Error: boom/);
+  for (const secret of [PLANTED_PASSWORD, PLANTED_RUN, TOKEN]) assert.ok(!text.includes(secret), `${secret} reached the log file:\n${text}`);
+  const session = (await h.call('GET', '/api/session')).json;
+  assert.equal(session.logFile, logger.file!());
 });

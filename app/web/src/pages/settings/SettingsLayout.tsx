@@ -1,12 +1,15 @@
-// Settings: a side navigation (Environments, Data & values, Repository) and
-// the section.
+// Settings: a side navigation (Environments, Data & values, Repository), the
+// path of the server's log file below it, and the section.
 import { Link, Outlet, useLocation } from 'react-router';
-import { Database, GitBranch, Server } from 'lucide-react';
+import { Database, FileText, GitBranch, Server } from 'lucide-react';
+import { useSession } from '../../api/queries';
 import { cn } from '../../components/ui/cn';
 import { useProjectContext } from '../../lib/project';
 
 export function SettingsLayout() {
   const ctx = useProjectContext();
+  const session = useSession();
+  const logFile = session.data?.logFile;
   const { pathname } = useLocation();
   const base = `/p/${ctx.project.id}/settings`;
   const sections = [
@@ -31,6 +34,12 @@ export function SettingsLayout() {
             </Link>
           );
         })}
+        {logFile && (
+          <div className="mt-4 hidden rounded-lg px-3 py-2 text-xs text-muted md:block">
+            <p className="flex items-center gap-1.5 font-medium text-fg"><FileText size={13} aria-hidden /> Log file</p>
+            <p className="mt-1 font-mono text-[11px] break-all select-all" title="Server log for today (secrets are never written); the last 14 days are kept.">{logFile}</p>
+          </div>
+        )}
       </nav>
       <div className="min-w-0 flex-1">
         <Outlet context={ctx} />
