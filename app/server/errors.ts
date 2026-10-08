@@ -1,7 +1,10 @@
 // API errors and the mapping from thrown errors to `{ error: { code, message } }`.
 // Unknown errors never expose their message or stack; engine HttpErrors are
-// reduced to their status (bodies and URLs stay server-side).
+// reduced to their status plus the platform's own message and error list
+// when its body has them (names, not values; redacted and capped). URLs and
+// the rest of the body stay server-side.
 import type { ApiErrorBody } from '../shared/api.ts';
+import { describePlatformError } from './engine-sync.ts';
 
 export class ApiError extends Error {
   status: number;
@@ -26,14 +29,14 @@ export interface MappedError {
 
 export function toApiError(err: unknown): ApiError {
   if (err instanceof ApiError) return err;
-  const e = err as { name?: string; status?: number } | null;
+  const e = err as { name?: string; status?: number; method?: string; body?: unknown } | null;
   switch (e?.name) {
     case 'CancelledError':
       return new ApiError(409, 'cancelled', 'The job was cancelled.');
     case 'ReadOnlyError':
       return new ApiError(403, 'read_only', 'This environment is read-only.');
     case 'HttpError':
-      return new ApiError(502, 'upstream_error', `The Kinetic Platform returned an error (${e.status ?? 'unknown'}).`);
+      return new ApiError(502, 'upstream_error', describePlatformError({ status: e.status, method: e.method, body: e.body }));
     default:
       return new ApiError(500, 'internal_error', 'Something went wrong on the server.');
   }

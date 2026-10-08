@@ -49,6 +49,21 @@ test('a fake read-only environment refuses a write client', () => {
   assert.equal(clientFactory({ env, mode: 'read' }).mode, 'read');
 });
 
+test('the fake Task API refuses a handler settings write while a required property would be empty, saving nothing', async () => {
+  const { clientFactory } = fakeMode({ KINETIC_MIGRATE_FAKE: '1' })!;
+  const env = { name: 'dev', url: 'https://dev.example.com', readOnly: false, username: 'a', password: 'b', vars: {} };
+  const client = clientFactory({ env, mode: 'write' });
+  const err = await client.request('task', 'PUT', '/handlers/mail_send_v1', { body: { properties: { Server: '', Password: 'x' } } }).catch((e: unknown) => e) as { name: string; status: number; body: string };
+  assert.equal(err.name, 'HttpError');
+  assert.equal(err.status, 400);
+  assert.deepEqual(JSON.parse(err.body), { message: 'Unable to save task handler', errors: ['Server may not be empty'] });
+  const read = await client.get('task', '/handlers/mail_send_v1') as { handler: { properties: Array<{ name: string; value?: unknown }> } };
+  assert.equal(read.handler.properties.find((p) => p.name === 'Server')?.value, 'smtp.dev.example.com', 'nothing saved');
+  await client.request('task', 'PUT', '/handlers/mail_send_v1', { body: { properties: { Password: 'kept-not-shown' } } });
+  const after = await client.get('task', '/handlers/mail_send_v1') as { handler: unknown };
+  assert.ok(!JSON.stringify(after).includes('kept-not-shown'), 'encrypted values are never read back');
+});
+
 test('fake Dev and Test: differences, a suggestion, an apply that sticks, a re-plan with nothing to do', async (t) => {
   const fake = fakeMode({ KINETIC_MIGRATE_FAKE: '1' })!;
   const server = await startTestServer({ ...fake });

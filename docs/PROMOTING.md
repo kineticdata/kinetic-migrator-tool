@@ -255,19 +255,61 @@ Use the object form. A plain string (`"properties.server": "smtp..."`)
 follows the attribute convention and sets `values`, which handlers ignore.
 `compare --raw` still shows every value difference.
 
-### Typical environment-specific settings
+A property with no value (`null` in the export) is never sent: the target
+keeps whatever it has.
 
-These came up in a real dev-to-prod round trip:
+### Required handler settings
 
-- List the space attribute `Web Server Url` in `envBoundAttributes.space`, so
-  each environment keeps its own.
-- Keep the space `displayType`/`displayValue` (the portal bundle URL) per
-  environment (they are in the default `envBoundSpaceFields`); for a space
-  that has none yet, set them once with an override or under Environment
-  values.
-- Add a `replace` rule from the source space host to the target host, for
-  example `{ "from": "dev-space.kinops.io", "to": "your-space.kinops.io" }`,
-  so self-referencing connection base URLs follow the environment.
+The Task API saves none of a handler's settings while any **required**
+property is empty: every settings write (`PUT /handlers/<definitionId>`) is
+refused with `400` and one error per empty required property
+(`"<name> may not be empty"`), even a write that changes some other
+property. So:
+
+- **The plan asks for them.** For a handler being installed (or re-installed
+  because its package changed), and for one already in the target whose
+  required settings are empty there, each required property that would still
+  be empty after the apply is listed under Needs attention: "<handler> needs
+  <name> before its settings can be saved in <target>". A plaintext one is an
+  environment value (the target's own value is kept when it has one).
+  Entering it takes care of the entry; ticking it installs the handler
+  without it.
+- **Secrets are always offered.** Secret properties (encrypted type or
+  secret-looking name) are asked for under Secrets needed, write-only: every
+  one for an install or re-install, and every required one for a handler
+  already in the target, whose value the platform never shows ("not readable
+  in <target>: leave blank to keep <target>'s value"). A value you enter is
+  kept in the keychain under the target's handler secrets when you choose to
+  remember it, and is sent with the next settings write, even when nothing
+  else changed. Once the target accepts that write it is not sent again until
+  you enter a new one.
+- **Apply never sends the write that is bound to fail.** When a required
+  setting is still empty, apply installs the package, skips the settings
+  write and reports the handler as done with a note: "Installed; set <names>
+  in <target>'s Task console (or enter them here and apply again)". A secret
+  you entered for it is named as not saved yet; a kept one stays in the
+  keychain and is sent on the next apply. The run carries on with the other
+  items and finishes as partly applied. A settings write the platform refuses
+  only because required properties are empty (for example an encrypted one,
+  whose value is never read back) is reported the same way, and the app
+  remembers those names (in `plans/`, names only), so the next plan asks for
+  them. A remembered name never skips the write: if you set the value in the
+  Task console instead, the next apply still writes, the platform accepts
+  it and the name is forgotten. A write refused for any other reason stops
+  the run as before.
+- **Applying again finishes the job.** While a required property is empty in
+  the target, or a secret was entered and not yet accepted, the next plan
+  shows the handler as an update (its settings only). Enter what is missing
+  and apply again, or use Resume, which asks for the handler's secrets. On the
+  command line, supply secrets as `KINETIC_<ENV>_HANDLER_<DEFINITION_ID>__<PROPERTY>`
+  and other settings as overrides, then apply again.
+- A handler you leave unconfigured on purpose keeps showing as an update,
+  and every run that includes it is partly applied. Leave it out of the
+  selection instead.
+
+Which required properties the target has empty is read from its plaintext
+values; an empty encrypted property is only found out when the platform
+refuses a write.
 
 ## 5. Connection credentials
 
@@ -322,12 +364,18 @@ KINETIC_PROD_HANDLER_SMTP_EMAIL_SEND_V1__PASSWORD=...
 KINETIC_PROD_HANDLER_SMTP_EMAIL_SEND_V1__PROD_PRIVATE_KEY_B64=...
 ```
 
-Each secret property with no variable is left unset, and the run prints a
-warning; set it in the target console. Updates never send secret values, so
-the target keeps its own. The one exception is a package re-install (the
-package changed): apply then re-sends each secret that has a variable set,
-and warns for each one without a variable so you can check it in the
-console.
+Each optional secret property with no variable is left unset, and the run
+prints a warning; set it in the target console. A required one with no value
+holds back the handler's settings (see Required handler settings above).
+Updates do not send secret values, so the target keeps its own, with three
+exceptions:
+- After a package re-install (the package changed), apply re-sends each
+  secret that has a variable set, and warns for each one without a variable
+  so you can check it in the console.
+- A required secret the target has empty (or the platform last named empty)
+  is sent when a value is at hand.
+- In the app, a secret entered since the target last accepted a settings
+  write is sent.
 
 Existing connections are never written, because sending a connection back
 to the platform can wipe its stored credentials. If one differs, the plan
@@ -455,7 +503,10 @@ notes, status, inputs, outputs and tree); a changed one is a `PUT
 For handlers, apply installs a new one (upload, then its settings and any
 supplied secret values), re-uploads the package with `force` when its
 `packageSha256` changed (then re-sends the plaintext settings), and
-otherwise sends only the plaintext settings that differ. Other differences
+otherwise sends only the plaintext settings that differ, plus any required
+setting the target has empty. When a required setting would still be empty,
+the settings write is skipped and the handler is reported as needing
+attention (see Required handler settings). Other differences
 (name, status) come from the package or the console; apply warns and leaves
 them for you. A handler's categories are promoted as workflow categories (below),
 so they are never a difference of the handler itself, nor part of its drift
@@ -652,3 +703,9 @@ contain reference-data values, so `compares/` is git-ignored.
   the id forms and workflows expect) can be created.
 - **Plan shows changes right after an apply**: the platform added defaults
   on write. Report it; the tool's normalizer should ignore that field.
+- **`The Kinetic Platform rejected the change (400): …`** (in the app): the
+  platform refused a write. The text after the status is the platform's own
+  message and error list, which name fields, not values (it is still
+  redacted and shortened). For `"<name> may not be empty"` on a handler, see
+  Required handler settings. With nothing usable in the response, the app
+  shows only `The Kinetic Platform returned an error (<status>).`

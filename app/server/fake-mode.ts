@@ -5,6 +5,8 @@
 // Never enabled unless the variable is set to exactly "1".
 // @ts-expect-error -- untyped engine module
 import { fakeClient, fakeTaskCategories } from '../../lib/sync/fake-client.mjs';
+// @ts-expect-error -- untyped engine module
+import { HttpError } from '../../lib/sync/http.mjs';
 import type { ClientFactory, EngineClient } from './engine.ts';
 import { MemoryStore } from './secrets.ts';
 
@@ -28,7 +30,8 @@ interface FakeSpace {
   kapps: Obj[];
   workflows: Workflow[];
   connections: Obj[];
-  handlers: Array<{ handler: Obj; zip: Buffer }>;
+  // `secrets`: encrypted values, stored but never read back.
+  handlers: Array<{ handler: Obj; zip: Buffer; secrets?: Obj }>;
   // Global routines (Task trees), keyed by title (= name).
   routines: Obj[];
   // workflow categories (the engine's stateful fake of the endpoint).
@@ -117,7 +120,7 @@ function devSpace(): FakeSpace {
       handler: {
         definitionId: 'mail_send_v1', definitionName: 'mail_send', definitionVersion: '1', name: 'Mail Send', description: 'Sends email',
         status: 'Active', deferrable: false, visible: true, categories: [{ name: 'Notifications' }],
-        properties: [{ name: 'Server', type: 'Plaintext', value: 'smtp.dev.example.com' }, { name: 'Password', type: 'Encrypted' }],
+        properties: [{ name: 'Server', type: 'Plaintext', required: true, value: 'smtp.dev.example.com' }, { name: 'Password', type: 'Encrypted', required: false }],
       },
     }],
     routines: [routine('Notify Requester', 'routine_notify_requester_v1', ['Start', 'Find Requester', 'Send Email'])],
@@ -320,7 +323,7 @@ function write(s: FakeSpace, catalog: FakeSpace, api: string, method: string, pa
       const source = catalog.handlers.find((h) => h.handler.definitionId === id);
       if (source) {
         const installed = clone(source.handler);
-        installed.properties = installed.properties.map((p: Obj) => ({ name: p.name, type: p.type }));
+        installed.properties = installed.properties.map((p: Obj) => ({ name: p.name, type: p.type, required: p.required }));
         upsert(s.handlers as unknown as Obj[], (h) => h.handler.definitionId === id, { handler: installed, zip: source.zip });
       }
       return {};
@@ -329,10 +332,20 @@ function write(s: FakeSpace, catalog: FakeSpace, api: string, method: string, pa
       const id = dec(m[1]);
       const h = s.handlers.find((x) => x.handler.definitionId === id);
       if (method === 'PUT' && h) {
-        for (const [name, value] of Object.entries(body?.properties ?? {})) {
+        const given: Obj = body?.properties ?? {};
+        // As the Task API: nothing is saved while a required property would
+        // be empty, even one this PUT does not name.
+        const blank = (v: unknown) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+        const after = (p: Obj) => (p.name in given ? given[p.name] : p.type === 'Encrypted' ? h.secrets?.[p.name] : p.value);
+        const errors = h.handler.properties.filter((p: Obj) => p.required && blank(after(p))).map((p: Obj) => `${p.name} may not be empty`);
+        if (errors.length) {
+          throw new HttpError({ method, url: `/app/components/task/app/api/v2${path}`, status: 400, body: JSON.stringify({ message: 'Unable to save task handler', errors }) });
+        }
+        for (const [name, value] of Object.entries(given)) {
           const p = h.handler.properties.find((x: Obj) => x.name === name);
           // Encrypted values are stored but never read back.
           if (p && p.type !== 'Encrypted') p.value = value;
+          else if (p) h.secrets = { ...h.secrets, [name]: value };
         }
       }
       if (method === 'DELETE') s.handlers = s.handlers.filter((x) => x !== h);
