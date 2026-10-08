@@ -126,11 +126,42 @@ are not handled by a target's overrides. Fix those before promoting.
 
 ## 4. Per-environment values
 
-Some values must differ per environment. There are three mechanisms.
+Some values must differ per environment. There are four mechanisms.
 
 **Environment-bound fields** are never copied: the space name and slug, its
 platform component locations (UI location, task server URL), bundle paths,
 and each kapp's bundle path. The target keeps its own values.
+
+**Space settings kept per environment** are listed in
+`kinetic-sync.config.json` as `envBoundSpaceFields`. Each environment keeps
+its own value of a listed setting; promoting never overwrites it. When the
+target has no value yet (empty, `null` or an empty list; `false` and `0` are
+values), the source value is used, so a space that was never set up starts
+from the exported one. Left out, the list is:
+
+```json
+"envBoundSpaceFields": ["displayType", "displayValue", "trustedFrameDomains", "trustedResourceDomains", "allowedIps", "allowedIpsEnabled"]
+```
+
+You can also add `loginPage`, `resetPasswordPage`, `afterLogoutPath`,
+`defaultLocale`, `defaultTimezone` and `sessionInactiveLimitInSeconds`, or
+remove names to promote those settings like any other; `[]` keeps none.
+Other names are not allowed: the app refuses to save them, and a
+hand-edited file with one still loads, with the name ignored and reported
+(as a plan warning and on the settings page). In the app, Settings → Data &
+values → "Space settings kept per environment" edits the list. The fields
+above (name, slug, platform components, bundle paths) are always kept,
+whatever the list says. Kapp settings are not affected.
+
+An override in `overrides/<env>.json` for a listed setting still applies and
+wins over the target's value. When a listed setting is empty in the target
+and the source has a value, the plan warns that the source value will be
+used and the app's "Environment values" step offers it to change; set an
+override (or enter a value there) to use another.
+
+Changing the list never makes the space show as drifted: each recorded state
+entry for the space names the settings it was recorded with, and drift is
+checked the same way (see [Drift](#drift)).
 
 **Environment-bound attributes** are listed in `kinetic-sync.config.json` and
 treated the same way. Each level (`space`, `kapp`, `form`, `team`,
@@ -212,7 +243,9 @@ These came up in a real dev-to-prod round trip:
 
 - List the space attribute `Web Server Url` in `envBoundAttributes.space`, so
   each environment keeps its own.
-- Override the space `displayValue` (the portal bundle URL) per environment.
+- Keep the space `displayValue` (the portal bundle URL) per environment (it
+  is in the default `envBoundSpaceFields`); for a space that has none yet,
+  override it so it does not start from the source's URL.
 - Add a `replace` rule from the source space host to the target host, for
   example `{ "from": "dev-space.kinops.io", "to": "your-space.kinops.io" }`,
   so self-referencing connection base URLs follow the environment.
@@ -396,6 +429,13 @@ like. If someone later changes one directly in that environment, the next
 plan reports it as drift and apply leaves it alone. Bring the change back
 into the source space and re-export, or pass `--overwrite-drift` to replace
 it. Commit `state/`.
+
+Environment-bound fields, attributes and handler settings are left out of the
+recorded state, so a change to them in the target is not drift. The space's
+entry also records which space settings were kept per environment at the
+time (`<hash>;space-fields=…`); drift is checked with that list, so changing
+`envBoundSpaceFields` (or upgrading from a version without it) does not
+report drift. The next apply records the current list.
 
 ## Comparing two environments
 
