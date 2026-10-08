@@ -110,6 +110,8 @@ export const buildPlan: (opts: {
   overrides?: EngineOverrides; vars?: Record<string, string>; config: EngineConfig; sourceName?: string; targetName?: string;
 }) => EnginePlan = planModule.buildPlan;
 export const diffValues: (from: unknown, to: unknown) => DiffEntry[] = planModule.diffValues;
+// diffValues for one item of a module (some fields differ as whole lists).
+export const diffItem: (mod: EngineModule | undefined, from: unknown, to: unknown) => DiffEntry[] = planModule.diffItem;
 // A tree read in any layout (older ones re-keyed from content, see layout.mjs).
 export type LoadedTree = Map<string, unknown> & { layout?: number; rekeyed?: Map<string, string>; unresolved?: Map<string, string> };
 export const readTree: (dir: string) => LoadedTree = layoutModule.loadTree;

@@ -458,7 +458,9 @@ supplied secret values), re-uploads the package with `force` when its
 otherwise sends only the plaintext settings that differ. Other differences
 (name, status) come from the package or the console; apply warns and leaves
 them for you. A handler's categories are promoted as Task categories (below),
-so they are never a difference of the handler itself.
+so they are never a difference of the handler itself, nor part of its drift
+check (a state entry recorded by an earlier version still matches as long as
+the handler is unchanged).
 
 ### Task categories
 
@@ -471,7 +473,13 @@ information only).
 
 - Only **Stored** categories are exported and promoted. **Integrated**
   categories are built into the platform: never exported, changed or
-  removed. A Stored and an Integrated category may share a name.
+  removed. A Stored and an Integrated category may share a name (a space
+  may have a Stored "System Controls" beside the built-in one). Every Task
+  API call addresses a category by name, so a Stored category whose name a
+  built-in category also has, in the source or the target, is never written
+  by name: the plan shows it as **manual** with the warning "`<name>: the
+  target also has a built-in category with this name; set its members in
+  <target> by hand`", and removing it or one of its members is refused.
 - Membership is additive. Handlers and routines that only the target's copy
   of a category holds are kept and are no difference. A member is added only
   when it is in the target once the run's creates are done (built-in

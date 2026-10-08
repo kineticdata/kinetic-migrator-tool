@@ -152,8 +152,8 @@ test('fake Dev and Test: Task categories compare, are suggested for a handler, p
   assert.deepEqual(kids.map((k) => [k.key, k.status, k.kind]), [
     ['task-categories/Legacy Tools', 'only-target', 'task-category'],
     [NOTIFY, 'changed', 'task-category'],
-    ['task-categories/System Controls', 'new', 'task-category'],
-  ], 'only Stored categories; the built-in System Controls of Test is not listed');
+    ['task-categories/System Controls', 'manual', 'task-category'],
+  ], 'only Stored categories; Dev\'s Stored System Controls shares its name with the built-in one, so it is set by hand');
   const item = (await call('GET', `${P}/compare/${cmp.compareId}/item?key=${encodeURIComponent(NOTIFY)}`)).json;
   // Members as whole lists; Test's own member is kept (and removable).
   assert.deepEqual(item.diff, [

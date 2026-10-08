@@ -359,7 +359,7 @@ test('a Task category and a category member only in the target are removed, with
   const devCats = fakeTaskCategories([seed('Notifications', ['utilities_echo_v1'])]);
   const testCats = fakeTaskCategories([
     seed('Notifications', ['utilities_echo_v1', 'utilities_old_v1']), seed('Legacy', ['utilities_echo_v1']),
-    { ...seed('Legacy', ['system_join_v1']), type: 'Integrated' },
+    { ...seed('Built In', ['system_join_v1']), type: 'Integrated' },
   ]);
   type Store = { handle: (api: string, method: string, path: string, opts?: { body?: unknown }) => unknown };
   // Routes for every Task categories call, answered by the stateful fake.
@@ -394,7 +394,7 @@ test('a Task category and a category member only in the target are removed, with
   assert.deepEqual(h.writes('test').slice(-2), ['DELETE /categories/Legacy', 'DELETE /categories/Notifications/handlers/utilities_old_v1']);
   const names = () => (testCats as { categories: Array<{ name: string; type: string; handlers: Array<{ definitionId: string }> }> }).categories
     .map((c) => [c.name, c.type, c.handlers.map((x) => x.definitionId)]);
-  assert.deepEqual(names(), [['Notifications', 'Stored', ['utilities_echo_v1']], ['Legacy', 'Integrated', ['system_join_v1']]], 'the built-in Legacy stays');
+  assert.deepEqual(names(), [['Notifications', 'Stored', ['utilities_echo_v1']], ['Built In', 'Integrated', ['system_join_v1']]], 'the built-in category stays');
   assert.deepEqual((await h.job('POST', `${P}/snapshots`, { env: 'test' })).result.drifted, [], 'removing a member is not drift');
 
   const rr = (await h.job('POST', `${P}/restore`, { commit: done.backupCommit })).result as CompareResult;
@@ -403,7 +403,7 @@ test('a Task category and a category member only in the target are removed, with
   const restored = (await h.job('POST', `${P}/plans/${rp.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result as ApplyResult;
   assert.equal(restored.status, 'applied', String(restored.error));
   assert.deepEqual(names(), [
-    ['Notifications', 'Stored', ['utilities_echo_v1', 'utilities_old_v1']], ['Legacy', 'Integrated', ['system_join_v1']], ['Legacy', 'Stored', ['utilities_echo_v1']],
+    ['Notifications', 'Stored', ['utilities_echo_v1', 'utilities_old_v1']], ['Built In', 'Integrated', ['system_join_v1']], ['Legacy', 'Stored', ['utilities_echo_v1']],
   ]);
   assert.deepEqual((await h.job('POST', `${P}/snapshots`, { env: 'test' })).result.drifted, [], 'a restore is not drift');
 });

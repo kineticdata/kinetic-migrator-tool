@@ -13,7 +13,7 @@ import { resolveCommit } from './pinned.ts';
 import { readTreeAt } from './repo.ts';
 import { loadConfig, loadOverrides, type ClientFactory, type EngineEnv } from './engine.ts';
 import {
-  MODULES, buildPlan, buildRelationships, collectionWord, compareArtifacts, computePlan, diffValues, loadState, moduleFor, suggest, targetOnlyEntries, unresolvedErrors,
+  MODULES, buildPlan, buildRelationships, collectionWord, compareArtifacts, computePlan, diffItem, loadState, moduleFor, suggest, targetOnlyEntries, unresolvedErrors,
   type EnginePlan, type LoadedTree, type Relationships, type TargetOnlyEntry,
 } from './engine-sync.ts';
 import { readEnvironmentFile, resolveEnv } from './environments.ts';
@@ -266,7 +266,7 @@ export function registerCompareRoutes(router: Router, ctx: SyncContext): void {
       const last = await lastPromoted(ref, c.result.to, key);
       item.threeWay = {
         lastPromoted: last?.data ?? null, lastPromotedAt: last?.at ?? null, target: i.current, incoming: i.incoming,
-        targetChanges: last ? diffValues(last.data, i.current) : [],
+        targetChanges: last ? diffItem(moduleFor(key), last.data, i.current) : [],
       };
     }
     return { json: c.scrub(item) };
