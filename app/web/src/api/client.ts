@@ -70,6 +70,8 @@ export const projectPath = (projectId: string, ...rest: string[]): string =>
 export interface SseEvent {
   type: string;
   data: unknown;
+  // The frame's `id:` (the job event's seq), when present.
+  id?: string;
 }
 
 // Parses complete SSE frames from a buffer; returns the unparsed remainder.
@@ -80,9 +82,11 @@ export function parseSse(buffer: string): { events: SseEvent[]; rest: string } {
   const rest = frames.pop() ?? '';
   for (const frame of frames) {
     let type = 'message';
+    let id: string | undefined;
     const data: string[] = [];
     for (const line of frame.split('\n')) {
       if (line.startsWith('event:')) type = line.slice(6).trim();
+      else if (line.startsWith('id:')) id = line.slice(3).trim();
       else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
     }
     if (!data.length) continue;
@@ -92,20 +96,23 @@ export function parseSse(buffer: string): { events: SseEvent[]; rest: string } {
     } catch {
       // Keep the raw text.
     }
-    events.push({ type, data: parsed });
+    events.push(id === undefined ? { type, data: parsed } : { type, data: parsed, id });
   }
   return { events, rest };
 }
 
 // Streams a job's events (replayed, then live) until `end`. Resolves with the
-// end event, or null when the stream closed without one.
+// end event, or null when the stream closed without one. `lastEventId` asks
+// the server to replay only later events (after a reconnect).
 export async function streamJobEvents(
   jobId: string,
-  onEvent: (event: JobEventData) => void,
+  onEvent: (event: JobEventData, id?: number) => void,
   signal?: AbortSignal,
+  lastEventId?: number,
 ): Promise<JobEndEvent | null> {
+  const extra: Record<string, string> = lastEventId ? { 'last-event-id': String(lastEventId) } : {};
   const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/events`, {
-    headers: { ...headers(false), accept: 'text/event-stream' },
+    headers: { ...headers(false), accept: 'text/event-stream', ...extra },
     credentials: 'same-origin',
     signal,
   });
@@ -125,7 +132,8 @@ export async function streamJobEvents(
         return e.data as JobEndEvent;
       }
       const data = (e.data && typeof e.data === 'object' ? e.data : { message: e.data }) as Record<string, unknown>;
-      onEvent({ ...data, type: typeof data.type === 'string' ? data.type : e.type });
+      const seq = e.id !== undefined && /^\d+$/.test(e.id) ? Number(e.id) : undefined;
+      onEvent({ ...data, type: typeof data.type === 'string' ? data.type : e.type }, seq);
     }
     if (done) return null;
   }

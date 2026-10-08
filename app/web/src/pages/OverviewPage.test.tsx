@@ -40,6 +40,8 @@ test('shows a lane per environment with counts, drift and the latest run', async
   expect(await within(test1).findByText('15 items')).toBeInTheDocument();
   expect(within(test1).getByText('2 drifted')).toBeInTheDocument();
   expect(within(test1).getByText("Applied 'Q4 forms' to Test")).toBeInTheDocument();
+  // Dev has a snapshot but no snapshot event in history: drift is unknown.
+  expect(within(await lane('Dev')).getByText('Not known yet')).toBeInTheDocument();
   const prod = await lane('Prod');
   expect(within(prod).getByText('No snapshot yet')).toBeInTheDocument();
   expect(within(prod).getByRole('button', { name: 'Take snapshot' })).toBeInTheDocument();
@@ -65,4 +67,15 @@ test('refreshing a snapshot reloads the project when the job ends', async () => 
   await user.click(within(dev).getByRole('button', { name: 'Refresh snapshot' }));
   expect(m.callsTo('POST', '/api/projects/acme-demo/snapshots')[0].body).toEqual({ env: 'dev' });
   await waitFor(() => expect(projectCalls()).toBeGreaterThan(before));
+});
+
+test('a history failure is shown instead of silently hiding activity', async () => {
+  mockApi({
+    'GET /api/projects/:p': project(),
+    'GET /api/projects/:p/history': { status: 500, json: { error: { code: 'internal', message: 'History is unavailable.' } } },
+    'GET /api/projects/:p/explore/:env/tree': [],
+    'POST /api/projects/:p/compare': { status: 500, json: { error: { code: 'internal', message: 'x' } } },
+  });
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/overview' });
+  expect(await screen.findByText(/Could not load the project history/)).toBeInTheDocument();
 });

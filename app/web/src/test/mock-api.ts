@@ -68,6 +68,7 @@ export function mockApi(routes: Record<string, MockHandler | unknown>) {
       if (!m) continue;
       const params = Object.fromEntries(r.names.map((n, i) => [n, decodeURIComponent(m[i + 1])]));
       const out = await r.handler(call, params);
+      if (out instanceof Response) return out;
       const reply: MockReply = isReply(out) ? out : { json: out };
       if ('sse' in reply) {
         return new Response(reply.sse, { status: reply.status ?? 200, headers: { 'content-type': 'text/event-stream' } });

@@ -1,7 +1,7 @@
 // First-run wizard: project name → first environment (tested before Next is
 // allowed) → first snapshot with live progress → Overview.
 import { useMemo, useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { Camera, Check } from 'lucide-react';
 import type { ConnectionTestResult, CredentialsStatus, ProjectDetail } from '../../../shared/api';
@@ -40,6 +40,16 @@ function Stepper({ step }: { step: number }) {
         </li>
       ))}
     </ol>
+  );
+}
+
+// Once the project exists it is kept even if setup stops here.
+function SavedNote({ overview }: { overview: string }) {
+  return (
+    <p role="note" className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-2 text-xs text-muted">
+      <span>Your project was saved. You can finish setup any time from Settings.</span>
+      <Link to={overview} className="font-medium text-accent hover:underline">Finish later</Link>
+    </p>
   );
 }
 
@@ -89,11 +99,11 @@ export function NewProjectWizard() {
       if (draft.password) creds.password = draft.password;
       let next = draft;
       if (Object.keys(creds).length) {
-        setCredentials(await api.put<CredentialsStatus>(projectPath(p.id, 'environments', draft.name, 'credentials'), creds));
-        setSaved((s) => ({ url: s?.url ?? url, readOnly: s?.readOnly ?? draft.readOnly, username: draft.username }));
-        // The password is sent; never keep it in the page.
+        // The password lives only in this request: clear the field first.
         next = { ...draft, password: '' };
         setDraft(next);
+        setCredentials(await api.put<CredentialsStatus>(projectPath(p.id, 'environments', draft.name, 'credentials'), creds));
+        setSaved((s) => ({ url: s?.url ?? url, readOnly: s?.readOnly ?? draft.readOnly, username: draft.username }));
       }
       const result = await testConnection(p.id, draft.name);
       setTested({ sig: signature(next), result });
@@ -164,15 +174,26 @@ export function NewProjectWizard() {
               <Button variant="ghost" onClick={() => setStep(0)} disabled={Boolean(project)}>Back</Button>
               <div className="flex gap-2">
                 <Button onClick={runTest} loading={testing}>Test connection</Button>
-                <Button variant="primary" disabled={!passed || testing} onClick={() => setStep(2)}>Next</Button>
+                <Button
+                  variant="primary"
+                  disabled={!passed || testing}
+                  aria-describedby={passed ? undefined : 'wizard-next-hint'}
+                  onClick={() => setStep(2)}
+                >
+                  Next
+                </Button>
               </div>
             </div>
-            {!passed && !testing && (
-              <p className="mt-3 text-right text-xs text-muted">Test the connection to continue.</p>
+            {!passed && (
+              <p id="wizard-next-hint" className="mt-3 text-right text-xs text-muted">
+                {tested && !tested.result.ok ? 'Fix the connection and test again to continue.' : 'Test the connection to continue.'}
+              </p>
             )}
+            {project && <SavedNote overview={overview} />}
           </Card>
         )}
 
+        {step === 2 && project && job.status !== 'succeeded' && <div className="mb-4"><SavedNote overview={overview} /></div>}
         {step === 2 && project && (
           <Card className="p-6">
             <div className="flex items-start gap-4">

@@ -49,10 +49,13 @@ test('Next stays disabled until a connection test succeeds', async () => {
 
   const next = screen.getByRole('button', { name: 'Next' });
   expect(next).toBeDisabled();
+  expect(next).toHaveAccessibleDescription('Test the connection to continue.');
 
   await user.click(screen.getByRole('button', { name: 'Test connection' }));
   expect(await screen.findByText('The username or password was not accepted.')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+  // The project now exists and is kept even if setup stops here.
+  expect(screen.getByText(/Your project was saved/)).toBeInTheDocument();
 
   await user.click(screen.getByRole('button', { name: 'Test connection' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());

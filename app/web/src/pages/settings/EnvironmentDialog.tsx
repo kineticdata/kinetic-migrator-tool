@@ -3,7 +3,8 @@
 // stored).
 import { useState } from 'react';
 import type { ConnectionTestResult, CredentialsStatus, EnvironmentInfo } from '../../../../shared/api';
-import { testConnection, usePutCredentials, usePutEnvironment } from '../../api/queries';
+import { useQueryClient } from '@tanstack/react-query';
+import { putCredentials, qk, testConnection, usePutEnvironment } from '../../api/queries';
 import { ConnectionTestSteps } from '../../components/ConnectionTest';
 import { EnvironmentFields, draftErrors, emptyDraft, type EnvironmentDraft } from '../../components/EnvironmentFields';
 import { Button } from '../../components/ui/Button';
@@ -28,7 +29,7 @@ export function EnvironmentDialog({ projectId, environment, onClose }: {
   const [error, setError] = useState<unknown>(null);
   const [result, setResult] = useState<ConnectionTestResult | null>(null);
   const putEnv = usePutEnvironment(projectId);
-  const putCreds = usePutCredentials(projectId);
+  const qc = useQueryClient();
   const toast = useToast();
 
   // Saves the environment and any typed credentials; clears the password.
@@ -42,8 +43,10 @@ export function EnvironmentDialog({ projectId, environment, onClose }: {
     if (draft.username) creds.username = draft.username;
     if (draft.password) creds.password = draft.password;
     if (Object.keys(creds).length) {
-      setCredentials(await putCreds.mutateAsync({ env: draft.name, ...creds }));
+      // Clear the fields first: the typed values live only in this request.
       setDraft((d) => ({ ...d, username: '', password: '' }));
+      setCredentials(await putCredentials(projectId, draft.name, creds));
+      void qc.invalidateQueries({ queryKey: qk.project(projectId) });
     }
     return true;
   };

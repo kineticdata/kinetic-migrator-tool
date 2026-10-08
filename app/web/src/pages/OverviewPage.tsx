@@ -114,7 +114,11 @@ function Lane({ projectId, env, next, drift, run }: {
             <div>
               <p className="text-[11px] font-medium tracking-wide text-subtle uppercase">Drift</p>
               <div className="mt-1">
-                {drift ? <Badge tone="drift">{plural(drift, 'drifted', 'drifted')}</Badge> : <span className="text-sm text-muted">No changes since the last promotion</span>}
+                {drift === undefined
+                  ? <span className="text-sm text-muted">Not known yet</span>
+                  : drift > 0
+                    ? <Badge tone="drift">{plural(drift, 'drifted', 'drifted')}</Badge>
+                    : <span className="text-sm text-muted">{run ? 'No changes since the last promotion' : 'No promotions yet'}</span>}
               </div>
             </div>
           )}

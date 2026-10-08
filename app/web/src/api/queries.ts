@@ -90,6 +90,8 @@ export const useRawDifferences = (p: string, from: string, to: string, fromCommi
   queryKey: qk.rawDiff(p, from, to, fromCommit ?? '', toCommit ?? ''),
   enabled: Boolean(fromCommit && toCommit),
   staleTime: Infinity,
+  // Each attempt starts a compare job on the server: never retry silently.
+  retry: false,
   queryFn: async ({ signal }) => {
     const { jobId } = await api.post<JobStarted>(projectPath(p, 'compare'), { from, to, mode: 'raw' });
     const job = await waitForJob<CompareResult>(jobId, signal);
@@ -143,9 +145,12 @@ export function useDeleteEnvironment(p: string) {
   return useProjectMutation(p, (env: string) => api.del<ProjectDetail>(projectPath(p, 'environments', env)), (d) => qc.setQueryData(qk.project(p), d));
 }
 
-export const usePutCredentials = (p: string) => useProjectMutation(p, ({ env, ...body }: PutCredentialsRequest & { env: string }) => (
+// Credentials are sent with a plain request, never through useMutation or a
+// query: TanStack keeps mutation variables in its cache, and a secret must
+// not outlive the request that carries it.
+export const putCredentials = (p: string, env: string, body: PutCredentialsRequest) => (
   api.put<CredentialsStatus>(projectPath(p, 'environments', env, 'credentials'), body)
-));
+);
 
 export const testConnection = (p: string, env: string) => api.post<ConnectionTestResult>(projectPath(p, 'environments', env, 'test'));
 

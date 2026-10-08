@@ -45,3 +45,49 @@ test('reports a failed job with its plain message', async () => {
   await waitFor(() => expect(result.current.status).toBe('failed'));
   expect(result.current.error).toBe('Could not sign in.');
 });
+
+test('a dropped stream reconnects from the last event and the job still finishes', async () => {
+  let opened = 0;
+  const m = mockApi({
+    'GET /api/jobs/:id/events': () => {
+      opened += 1;
+      if (opened === 1) {
+        const enc = new TextEncoder();
+        const body = new ReadableStream<Uint8Array>({
+          start(ctl) {
+            ctl.enqueue(enc.encode(`id: 1\nevent: progress\ndata: ${JSON.stringify({ type: 'progress', done: 1, total: 2 })}\n\n`));
+            setTimeout(() => ctl.error(new TypeError('network error')), 5);
+          },
+        });
+        return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+      }
+      return { sse: `id: 2\nevent: progress\ndata: ${JSON.stringify({ type: 'progress', done: 2, total: 2 })}\n\nevent: end\ndata: {"status":"succeeded"}\n\n` };
+    },
+    'GET /api/jobs/:id': { id: 'j3', kind: 'snapshot', status: 'succeeded', createdAt: 'x', result: { total: 2 } },
+  });
+  const client = testQueryClient();
+  const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  const { result } = renderHook(() => useJob('j3'), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('succeeded'), { timeout: 4000 });
+  expect(result.current.error).toBeNull();
+  expect(result.current.events.map((e) => e.done)).toEqual([1, 2]);
+  const streams = m.callsTo('GET', '/api/jobs/j3/events');
+  expect(streams).toHaveLength(2);
+  expect(streams[1].headers['last-event-id']).toBe('1');
+});
+
+test('when the stream cannot be reopened, polling decides the outcome', async () => {
+  let polls = 0;
+  mockApi({
+    'GET /api/jobs/:id/events': () => { throw new TypeError('network error'); },
+    'GET /api/jobs/:id': () => {
+      polls += 1;
+      return { id: 'j4', kind: 'snapshot', status: polls < 2 ? 'running' : 'succeeded', createdAt: 'x', result: { total: 1 } };
+    },
+  });
+  const client = testQueryClient();
+  const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  const { result } = renderHook(() => useJob('j4'), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('succeeded'), { timeout: 8000 });
+  expect(result.current.result).toEqual({ total: 1 });
+}, 10000);

@@ -30,6 +30,14 @@ export function lastProject(): string | null {
   }
 }
 
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 // The active environment: Explore's path segment, else `?env=`, else the
 // first environment in the pipeline.
 export function useActiveEnv(project: ProjectDetail | undefined): string | null {
@@ -37,8 +45,9 @@ export function useActiveEnv(project: ProjectDetail | undefined): string | null 
   const { pathname } = useLocation();
   const [search] = useSearchParams();
   const names = project?.environments.map((e) => e.name) ?? [];
-  const explore = projectId ? pathname.match(new RegExp(`^/p/${projectId}/explore/([^/]+)`)) : null;
-  const wanted = explore ? decodeURIComponent(explore[1]) : search.get('env');
+  const prefix = projectId ? `/p/${projectId}/explore/` : null;
+  const segment = prefix && pathname.startsWith(prefix) ? pathname.slice(prefix.length).split('/')[0] : '';
+  const wanted = segment ? safeDecode(segment) : search.get('env');
   if (wanted && names.includes(wanted)) return wanted;
   return names[0] ?? null;
 }

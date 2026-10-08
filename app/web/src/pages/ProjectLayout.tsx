@@ -2,12 +2,12 @@
 // works out the active environment and hands both to the screens.
 import { useEffect, useMemo } from 'react';
 import { Outlet, useParams } from 'react-router';
-import { FolderX } from 'lucide-react';
+import { AlertTriangle, FolderX } from 'lucide-react';
 import { useHistory, useProject } from '../api/queries';
 import { AppFrame } from '../components/AppFrame';
 import { PlainFrame } from '../components/Brand';
 import { EmptyState, ErrorState, LoadingState } from '../components/ui/EmptyState';
-import { LinkButton } from '../components/ui/Button';
+import { Button, LinkButton } from '../components/ui/Button';
 import { ApiError } from '../api/client';
 import { driftByEnv, rememberProject, useActiveEnv, type ProjectContext } from '../lib/project';
 
@@ -38,6 +38,13 @@ export function ProjectLayout() {
   const ctx: ProjectContext = { project: project.data, history: events, activeEnv };
   return (
     <AppFrame project={project.data} activeEnv={activeEnv} drift={drift}>
+      {history.isError && (
+        <div role="alert" className="flex items-center gap-3 border-b border-border bg-danger-soft px-6 py-2 text-sm text-danger">
+          <AlertTriangle size={16} aria-hidden className="shrink-0" />
+          <span className="min-w-0 flex-1">Could not load the project history, so drift and recent activity are missing. {history.error instanceof Error ? history.error.message : ''}</span>
+          <Button size="sm" onClick={() => history.refetch()}>Try again</Button>
+        </div>
+      )}
       <Outlet context={ctx} />
     </AppFrame>
   );
