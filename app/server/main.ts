@@ -43,6 +43,7 @@ export interface ServerContext {
   clientFactory?: ClientFactory;
   jobs: JobRegistry;
   router: Router;
+  logger?: Logger;
 }
 
 export interface ServerHandle {
@@ -84,7 +85,7 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
   const clientFactory = opts.clientFactory ?? fake?.clientFactory;
   // Built bundle: dist/server.mjs serves dist/web next to itself.
   const webDir = opts.webDir ?? defaultWebDir();
-  const router = buildRouter({ workspace, secrets, clientFactory, jobs });
+  const router = buildRouter({ workspace, secrets, clientFactory, jobs, logger });
   let port = 0;
   const server = http.createServer(createRequestHandler({ key, port: () => port, router, webDir, logger }));
   await new Promise<void>((resolve, reject) => {

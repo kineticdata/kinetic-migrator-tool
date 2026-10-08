@@ -321,6 +321,9 @@ export interface ApplyResult {
   status: RunStatus;
   commit: string | null;
   backupCommit: string | null;
+  // The target's snapshot taken after the apply (null when nothing was
+  // written or it could not be taken).
+  snapshotCommit?: string | null;
   done: number;
   error: string | null;
 }

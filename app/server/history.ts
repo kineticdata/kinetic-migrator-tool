@@ -41,7 +41,7 @@ export function eventsFor(ref: ProjectRef, entry: LogEntry): HistoryEvent[] {
   };
   const out = [base];
   if (type === 'snapshot' && drifted.length) {
-    out.push({ ...base, id: `${entry.oid}:drift`, type: 'drift', title: `Drift detected in ${title.slice('Snapshot of '.length)}: ${drifted.length} item(s) changed since the last promotion` });
+    out.push({ ...base, id: `${entry.oid}:drift`, type: 'drift', title: `Drift detected in ${title.slice('Snapshot of '.length).replace(/ after .*$/, '')}: ${drifted.length} item(s) changed since the last promotion` });
   }
   return out;
 }

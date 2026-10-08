@@ -388,8 +388,11 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
 
   // 4. Apply the selection.
   const outcomes = new Map<string, RunItemOutcome>();
+  // Whether the apply started writing to the target (a row went running).
+  let wrote = false;
   const onEvent = forwardEvents(emit, known, (e) => {
     if (e.type !== 'item') return e;
+    if (e.status === 'running') wrote = true;
     const out: RunItemOutcome = { key: String(e.key), status: e.status as RunItemOutcome['status'] };
     if (e.status === 'failed') out.message = plainFailure(e.message);
     else if (typeof e.message === 'string' && e.message) out.message = e.message;
@@ -473,8 +476,29 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
     : { applied: 'Applied', partial: 'Partly applied', failed: 'Failed to apply', cancelled: 'Cancelled applying' }[status];
   const title = plan.kind === 'restore' ? `${verb} ${To} from a backup` : `${verb} '${r.name}' to ${To}`;
   const commit = await commitChange(ref, commitMessage(title, { Environment: r.to, Run: runId, Changeset: r.changesetId, Plan: r.planId }));
+
+  // 6. A fresh snapshot of the target once anything was written, so Compare,
+  // Explore and the Overview see the target as the apply left it (not the
+  // pre-apply backup). Not cancellable, and never changes the outcome.
+  let snapshotCommit: string | null = null;
+  if (wrote) {
+    step('snapshot', 'running');
+    try {
+      const after = plan.kind === 'restore' ? 'restoring from a backup' : `applying '${r.name}'`;
+      const snap = await takeSnapshot({
+        ref, env, title: `Snapshot of ${To} after ${after}`, trailers: { Plan: r.planId },
+        onEvent: forwardEvents(emit, known, (e) => (e.type === 'progress' ? { ...e, phase: 'snapshot' } : e)), clientFactory: ctx.clientFactory,
+      });
+      snapshotCommit = snap.commit ?? await latestSnapshotCommit(ref, r.to);
+      step('snapshot', 'done');
+    } catch (err) {
+      ctx.logger?.error('snapshot after apply', scrubError(err, known));
+      step('snapshot', 'failed');
+      emit({ type: 'warning', message: `The apply finished, but kinetic-migrate could not take a new snapshot of ${To}. Take one before comparing.` });
+    }
+  }
   // A cancelled apply still reports what it did (the job keeps this result).
-  return scrub({ runId, status, commit, backupCommit, done, error });
+  return scrub({ runId, status, commit, backupCommit, snapshotCommit, done, error });
 }
 
 function findPlan(ref: ProjectRef, id: string): StoredPlan {

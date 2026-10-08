@@ -228,3 +228,78 @@ test('an item changed in the target after review is reported as skipped with a r
   assert.doesNotMatch(kept.events, /"status":"skipped"/);
   assertNoSecret(h, [job.events, kept.events]);
 });
+
+// Test is served from a store that keeps what the apply writes to its team.
+function persistingTeam(h: Harness, opts: { failSecondReadAfterWrite?: boolean } = {}): void {
+  let team: Record<string, unknown> = { name: 'Ops', slug: 'ops', description: 'Operations' };
+  let readsAfterWrite = -1;
+  const original = h.spaces.test;
+  h.spaces.test = () => {
+    const routes = original();
+    const space = routes['GET core/space'];
+    return {
+      ...routes,
+      'GET core/space': () => {
+        if (readsAfterWrite >= 0 && ++readsAfterWrite >= 2 && opts.failSecondReadAfterWrite) throw Object.assign(new Error('GET https://test.example.com/x failed with 503'), { status: 503 });
+        return structuredClone(space);
+      },
+      'GET core/teams': () => ({ teams: [structuredClone(team)] }),
+      'PUT core/teams/ops': ({ body }: { body: Record<string, unknown> }) => {
+        team = { ...team, ...body };
+        readsAfterWrite = 0;
+        return { team };
+      },
+    };
+  };
+}
+
+test('after an apply the target is snapshotted again, so a snapshot compare shows the promoted item as same, not drifted', async (t) => {
+  const h = await harness(t);
+  persistingTeam(h);
+  for (const env of ['dev', 'test']) await h.job('POST', `${P}/snapshots`, { env });
+  const before = (await h.job('POST', `${P}/compare`, { from: 'dev', to: 'test', mode: 'preview', useSnapshots: true })).result;
+  const itemStatus = async (compareId: string) => (await h.call('GET', `${P}/compare/${compareId}/item?key=${encodeURIComponent('teams/Ops')}`)).json.status;
+  assert.equal(await itemStatus(before.compareId), 'changed');
+
+  const p = await plan(h, { to: 'test', from: 'dev', selected: ['teams/Ops'] });
+  const job = await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [], confirm: 'test' });
+  assert.equal(job.result.status, 'applied', job.result.error);
+  assert.match(job.events, /"step":"snapshot","status":"done"/);
+
+  // The newest commit is the post-apply snapshot: a snapshot event in History,
+  // and the environment's last snapshot.
+  const [newest] = await log(h.dir, { limit: 1 });
+  assert.equal(newest.message.split('\n')[0], "Snapshot of Test after applying '1 item from Dev'");
+  const history = (await h.call('GET', `${P}/history?type=snapshot&env=test`)).json as Array<{ commit: string; title: string }>;
+  assert.equal(history[0].commit, newest.oid);
+  const project = (await h.call('GET', P)).json;
+  assert.equal(project.environments.find((e: any) => e.name === 'test').lastSnapshot.commit, newest.oid);
+  assert.equal(job.result.snapshotCommit, newest.oid);
+  assert.deepEqual((await readTreeAt(h.dir, newest.oid, 'snapshots/test')).get('teams/Ops'), { name: 'Ops', description: 'Operations (dev)' });
+
+  const after = (await h.job('POST', `${P}/compare`, { from: 'dev', to: 'test', mode: 'preview', useSnapshots: true })).result;
+  assert.equal(await itemStatus(after.compareId), 'same');
+
+  // Applying again finds the team already up to date: reported, still applied.
+  const again = await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [], confirm: 'test' });
+  assert.equal(again.result.status, 'applied', again.result.error);
+  assert.match(again.events, /"key":"teams\/Ops","status":"skipped","message":"Already up to date in Test."/);
+  assertNoSecret(h, [job.events, again.events]);
+});
+
+test('a failed post-apply snapshot is a warning: the apply still reports its real outcome', async (t) => {
+  const h = await harness(t);
+  persistingTeam(h, { failSecondReadAfterWrite: true });
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  const p = await plan(h, { to: 'test', from: 'dev', selected: ['teams/Ops'] });
+  const job = await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [], confirm: 'test' });
+  assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
+  assert.equal(job.result.status, 'applied', job.result.error);
+  assert.equal(job.result.snapshotCommit, null);
+  assert.match(job.events, /"step":"snapshot","status":"failed"/);
+  assert.match(job.events, /could not take a new snapshot of Test/);
+  assert.match((await log(h.dir, { limit: 1 }))[0].message, /^Applied '1 item from Dev' to Test/);
+  assert.ok(h.logged.some((l) => l.includes('snapshot after apply')));
+  assert.ok(!readdirSync(path.join(h.dir, 'plans')).some((n) => n.startsWith('snap-')), 'no half export left behind');
+  assertNoSecret(h, [job.events]);
+});

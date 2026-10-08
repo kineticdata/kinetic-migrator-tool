@@ -6,13 +6,14 @@ import type { ClientFactory } from './engine.ts';
 import { registerExploreRoutes } from './explore.ts';
 import { registerHistoryRoutes } from './history.ts';
 import type { JobRegistry } from './jobs.ts';
+import type { Logger } from './log.ts';
 import { findProject, listProjects } from './projects.ts';
 import type { Router } from './router.ts';
 import { registerRunRoutes, removeStaleWorkFolders } from './runs.ts';
 import type { SecretStore } from './secrets.ts';
 import { registerSnapshotRoutes, type SyncContext } from './snapshots.ts';
 
-export function registerSyncRoutes(router: Router, opts: { workspace: string; secrets: SecretStore; clientFactory?: ClientFactory; jobs: JobRegistry }): void {
+export function registerSyncRoutes(router: Router, opts: { workspace: string; secrets: SecretStore; clientFactory?: ClientFactory; jobs: JobRegistry; logger?: Logger }): void {
   const ctx: SyncContext = { ...opts, find: (id) => findProject(opts.workspace, id) };
   // Nothing is running yet: leftover work folders from an earlier run go.
   try {

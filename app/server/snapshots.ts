@@ -146,6 +146,7 @@ export interface SyncContext {
   clientFactory?: ClientFactory;
   jobs: import('./jobs.ts').JobRegistry;
   find: (id: string) => ProjectRef;
+  logger?: import('./log.ts').Logger;
 }
 
 export function registerSnapshotRoutes(router: import('./router.ts').Router, ctx: SyncContext): void {
