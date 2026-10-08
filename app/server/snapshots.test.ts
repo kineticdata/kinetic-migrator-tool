@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs, { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { swapInto } from './snapshots.ts';
+import { retryingRename, swapInto } from './snapshots.ts';
 
 function layout(t: { after: (fn: () => void) => void }) {
   const dir = mkdtempSync(path.join(tmpdir(), 'km-swap-'));
@@ -66,4 +66,31 @@ test('an old folder that cannot be deleted stays aside in plans/, never in snaps
   swapInto(temp, final, aside, { rm });
   assert.equal(readFileSync(path.join(final, 'space.json'), 'utf8'), '"new"');
   assert.equal(readFileSync(path.join(aside, 'space.json'), 'utf8'), '"old"');
+});
+
+test('on Windows a rename blocked for a moment (antivirus, indexer) is retried', (t) => {
+  const { temp, final, aside } = layout(t);
+  let failures = 2;
+  const slept: number[] = [];
+  const rename = (from: string, to: string) => {
+    if (from === temp && failures-- > 0) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+    fs.renameSync(from, to);
+  };
+  swapInto(temp, final, aside, { rename, platform: 'win32', sleep: (ms) => slept.push(ms) });
+  assert.equal(readFileSync(path.join(final, 'space.json'), 'utf8'), '"new"');
+  assert.deepEqual(slept, [50, 100]);
+});
+
+test('retries give up after a bounded time and only for transient codes', () => {
+  let calls = 0;
+  const busy = () => { calls++; throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' }); };
+  assert.throws(() => retryingRename(busy, { platform: 'win32', sleep: () => {} })('a', 'b'), /EBUSY/);
+  assert.equal(calls, 8);
+  calls = 0;
+  const missing = () => { calls++; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
+  assert.throws(() => retryingRename(missing, { platform: 'win32', sleep: () => {} })('a', 'b'), /ENOENT/);
+  assert.equal(calls, 1);
+  calls = 0;
+  assert.throws(() => retryingRename(busy, { platform: 'darwin', sleep: () => {} })('a', 'b'), /EBUSY/);
+  assert.equal(calls, 1, 'no retries where the error is not transient');
 });

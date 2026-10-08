@@ -49,12 +49,36 @@ export function driftedKeys(projectDir: string, env: string, artifacts: Map<stri
 // indexer handles on Windows) never leaves the snapshot missing, which the
 // next commit would record as a deletion. An old folder that cannot be
 // deleted afterwards stays in plans/ until the next start.
+// On Windows a rename fails with EPERM/EACCES/EBUSY while another process
+// (antivirus, the search indexer, an editor or Explorer preview) briefly holds
+// a file inside; retry for about two seconds before giving up.
+const TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+export function retryingRename(rename: (from: string, to: string) => void, opts: {
+  platform?: string; sleep?: (ms: number) => void; attempts?: number;
+} = {}): (from: string, to: string) => void {
+  if ((opts.platform ?? process.platform) !== 'win32') return rename;
+  const sleep = opts.sleep ?? sleepSync;
+  const attempts = opts.attempts ?? 8;
+  return (from, to) => {
+    for (let i = 1; ; i++) {
+      try {
+        return rename(from, to);
+      } catch (err) {
+        if (i >= attempts || !TRANSIENT.has(String((err as NodeJS.ErrnoException).code))) throw err;
+        sleep(Math.min(50 * 2 ** (i - 1), 500));
+      }
+    }
+  };
+}
+
 export function swapInto(temp: string, final: string, aside: string, ops: {
-  rename?: (from: string, to: string) => void; rm?: (p: string) => void;
+  rename?: (from: string, to: string) => void; rm?: (p: string) => void; platform?: string; sleep?: (ms: number) => void;
 } = {}): void {
-  const rename = ops.rename ?? fs.renameSync;
-  const rm = ops.rm ?? ((p: string) => fs.rmSync(p, { recursive: true, force: true }));
-  const removeTemp = () => fs.rmSync(temp, { recursive: true, force: true });
+  const rename = retryingRename(ops.rename ?? fs.renameSync, { platform: ops.platform, sleep: ops.sleep });
+  const rm = ops.rm ?? ((p: string) => fs.rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const removeTemp = () => fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(path.dirname(final), { recursive: true });
   const hadOld = fs.existsSync(final);
   if (hadOld) {

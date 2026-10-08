@@ -32,7 +32,7 @@ export function checkEnvName(env: string): void {
   try {
     validateEnvName(env);
   } catch {
-    throw badRequest('Environment names use letters, digits, - and _, and start with a letter or digit.');
+    throw badRequest('Environment names use letters, digits, - and _, start with a letter or digit, and are not a name Windows reserves (such as con, nul or com1).');
   }
 }
 

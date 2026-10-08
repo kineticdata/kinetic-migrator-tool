@@ -25,6 +25,14 @@ export async function resolveCommit(dir: string, ref: string): Promise<string | 
   }
 }
 
+// A tree entry name that is one plain file name on every OS: no separator of
+// any platform (a `\\` is a separator on Windows), no drive or stream colon,
+// not `.`/`..`. Entries the app never writes are skipped, so history from
+// elsewhere cannot write outside `dest`.
+export const isSafeEntryName = (name: string): boolean => (
+  name !== '' && name !== '.' && name !== '..' && !/[/\\:\x00]/.test(name)
+);
+
 // Writes every file under `subdir` at `commit` into `dest` (emptied first).
 // Returns false when the commit has no such folder.
 export async function materializeTree(dir: string, commit: string, subdir: string, dest: string): Promise<boolean> {
@@ -34,12 +42,12 @@ export async function materializeTree(dir: string, commit: string, subdir: strin
   } catch {
     return false;
   }
-  fs.rmSync(dest, { recursive: true, force: true });
+  fs.rmSync(dest, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   const walk = async (oid: string, base: string): Promise<void> => {
     fs.mkdirSync(base, { recursive: true });
     const { tree } = await git.readTree({ fs, dir, oid });
     for (const entry of tree) {
-      if (entry.path.includes('/') || entry.path === '..' || entry.path === '.') continue;
+      if (!isSafeEntryName(entry.path)) continue;
       const target = path.join(base, entry.path);
       if (entry.type === 'tree') await walk(entry.oid, target);
       else if (entry.type === 'blob') fs.writeFileSync(target, (await git.readBlob({ fs, dir, oid: entry.oid })).blob);

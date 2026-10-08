@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { ProjectConfig, ProjectDetail, ProjectSummary } from '../shared/api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
 import { createClient, loadConfig, runInit, stableStringify, type ClientFactory } from './engine.ts';
+import { isReservedDeviceName } from './engine-sync.ts';
 import {
   checkEnvName, credentialsStatus, deleteEnvironment, environmentExists, pipelineOrder, putEnvironment, putOverrides,
   readEnvironmentFile, readOverrides, setCredentials, testConnection, validateNewEnvironment, writeEnvironment,
@@ -24,7 +25,17 @@ const WORKSPACE_FILE = '.kinetic-migrate-workspace.json';
 const CONFIG_FILE = 'kinetic-sync.config.json';
 
 export function slugify(name: string): string {
-  return name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+  // Accents are dropped, not turned into dashes: "José Núñez" → "jose-nunez".
+  const slug = name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+  // A folder named con, aux, nul, com1… cannot exist on Windows.
+  return slug && isReservedDeviceName(slug) ? `${slug}-project` : slug;
+}
+
+// Two paths name the same folder: Windows compares without case.
+export function samePath(a: string, b: string, platform: string = process.platform): boolean {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const [x, y] = [p.resolve(a), p.resolve(b)];
+  return platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
 function isDir(p: string): boolean {
@@ -131,20 +142,21 @@ export async function openProject(workspace: string, body: unknown): Promise<Pro
     throw badRequest('Give the full path of a project folder.');
   }
   if (!isDir(body.path)) throw badRequest('That folder does not exist.');
-  const dir = realpathSync(body.path);
+  // The native call gives Windows' own spelling (letter case, 8.3 names expanded).
+  const dir = realpathSync.native(body.path);
   if (!isProjectDir(dir)) throw badRequest('That folder is not a Kinetic project (no kinetic-sync.config.json or environment files in environments/).');
   // Commits only ever go to main: never into a repository checked out elsewhere.
   const branch = await currentBranch(dir);
   if (branch !== undefined && branch !== 'main') {
     throw badRequest(`This folder is a git repository on ${branch === null ? 'a detached commit' : `branch ${branch}`}; kinetic-migrate manages projects on main.`);
   }
-  const ws = isDir(workspace) ? realpathSync(workspace) : path.resolve(workspace);
+  const ws = isDir(workspace) ? realpathSync.native(workspace) : path.resolve(workspace);
   let id: string;
-  if (path.dirname(dir) === ws && ID.test(path.basename(dir))) {
+  if (samePath(path.dirname(dir), ws) && ID.test(path.basename(dir))) {
     id = path.basename(dir);
   } else {
     const opened = readOpened(workspace);
-    const known = Object.entries(opened).find(([, p]) => p === dir);
+    const known = Object.entries(opened).find(([, p]) => samePath(p, dir));
     if (known) id = known[0];
     else {
       const base = slugify(path.basename(dir)) || 'project';
