@@ -87,6 +87,10 @@ export function testRoutes(): Record<string, unknown> {
 
 export interface Call { env: string; method: string; path: string; body?: unknown; api: string }
 
+// A space's routes may carry a stateful handler for what no route matches
+// (for example the engine's fakeTaskHandlers().handle) under this key.
+export const FALLBACK = Symbol('fallback');
+
 export function fakeFactory(spaces: Record<string, () => Record<string, unknown>>, calls: Call[], envs: EngineEnv[] = []): ClientFactory {
   return ({ env, mode }) => {
     envs.push(env);
@@ -98,7 +102,8 @@ export function fakeFactory(spaces: Record<string, () => Record<string, unknown>
     const routes = spaces[env.name];
     if (!routes) throw new Error(`no fake space for ${env.name}`);
     const recorded: Array<Omit<Call, 'env'>> = [];
-    const client = fakeClient(routes(), { mode, calls: recorded });
+    const { [FALLBACK]: fallback, ...table } = routes() as Record<string | symbol, unknown>;
+    const client = fakeClient(table, { mode, calls: recorded, fallback });
     const push = recorded.push.bind(recorded);
     recorded.push = (...items: Array<Omit<Call, 'env'>>) => {
       for (const c of items) calls.push({ ...c, env: env.name });

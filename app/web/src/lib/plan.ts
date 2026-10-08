@@ -65,7 +65,11 @@ export function attentionList(plan: PlanResult): AttentionEntry[] {
   const out: AttentionEntry[] = plan.needsAttention
     // A drifted item kept as it is in the target is not overwritten.
     .filter((n) => !(n.kind === 'drift' && kept.has(n.key)))
-    .map((n) => ({ id: n.id, kind: n.kind, key: n.key, message: n.message, send: true }));
+    .map((n) => ({
+      id: n.id, kind: n.kind, key: n.key, send: true,
+      message: n.kind === 'handler-settings' ? `${n.message} Enter it under Environment values, or tick to go ahead without it.` : n.message,
+      ...(n.valueId ? { valueId: n.valueId } : {}),
+    }));
   plan.warnings.forEach((w, i) => {
     if (!COVERED.some((re) => re.test(w))) out.push({ id: `warning:${i}`, kind: 'warning', send: false, ...plainWarning(w, plan) });
   });

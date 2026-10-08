@@ -591,3 +591,50 @@ test('values: a kept space setting is not copied unless the offered value is tak
     space: { displayType: 'Custom', displayValue: 'https://dev.example.com/app' },
   });
 });
+
+test('a handler installed without a required secret: the run is partly applied, and Resume asks for the secret and sends it once', async () => {
+  const SID = 'handler/SMTP_SEND_V1__API_TOKEN';
+  const message = "Installed; set api_token in Test's Task console (or enter them here and apply again)";
+  const first = sse([
+    { type: 'step', data: { type: 'step', step: 'backup', status: 'done' } },
+    { type: 'item', data: { type: 'item', key: HANDLER, status: 'done', message } },
+  ]);
+  const second = sse([{ type: 'item', data: { type: 'item', key: HANDLER, status: 'done' } }]);
+  const m = setup(simple({
+    items: [{ key: HANDLER, type: 'handlers', label: 'SMTP Send', action: 'create', drift: false, diff: [] }],
+    counts: { create: 1, update: 0, unchanged: 0, manual: 0, 'skip-drift': 0, delete: 0 },
+    needsAttention: [{ id: `handler-settings:${HANDLER}#api_token`, kind: 'handler-settings', key: HANDLER, valueId: SID, message: 'SMTP Send needs api_token before its settings can be saved in Test.' }],
+    secretsNeeded: [{ id: SID, key: HANDLER, scope: 'handler', name: 'SMTP_SEND_V1__API_TOKEN', label: 'SMTP Send › api_token', has: false }],
+  }), {
+    applyJobs: [
+      { id: 'a1', events: first, result: { runId: 'r1', status: 'partial', commit: 'c-run', backupCommit: 'c-backup', done: 1, error: '1 handler is installed without required settings (see the list below).' } },
+      { id: 'a2', events: second, result: { runId: 'r2', status: 'applied', commit: 'c-run2', backupCommit: 'c-backup2', done: 1, error: null } },
+    ],
+  });
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  await screen.findByRole('heading', { name: /from Dev/ });
+  const attention = screen.getByRole('region', { name: 'Needs attention' });
+  expect(attention).toHaveTextContent('SMTP Send needs api_token before its settings can be saved in Test. Enter it under Environment values, or tick to go ahead without it.');
+  expect(attention).toHaveTextContent('Handler settings');
+  await user.click(within(attention).getByRole('checkbox'));
+  await user.click(next());
+  await user.click(next());
+  await user.type(screen.getByLabelText(/Type test to confirm/), 'test');
+  await user.click(screen.getByRole('button', { name: 'Apply to Test' }));
+
+  expect(await screen.findByRole('heading', { name: 'Partly applied to Test' })).toBeInTheDocument();
+  const progress = screen.getByRole('region', { name: 'Progress' });
+  expect(within(progress).getByRole('listitem', { name: /SMTP Send: Done/ })).toHaveTextContent(message);
+  const alert = screen.getByRole('alert');
+  expect(alert).toHaveTextContent('installed without required settings');
+  const input = within(alert).getByLabelText(/SMTP Send › api_token/);
+  expect(within(alert).getByText(/Not set yet; enter it so the handler’s settings can be saved/)).toBeInTheDocument();
+  await user.type(input, SECRET);
+  await user.click(screen.getByRole('button', { name: 'Resume' }));
+  await waitFor(() => expect(m.callsTo('POST', '/api/projects/acme-demo/plans/pl1/apply')).toHaveLength(2));
+  const sent = m.callsTo('POST', '/api/projects/acme-demo/plans/pl1/apply')[1].body as { secrets?: Record<string, string> };
+  expect(sent.secrets).toEqual({ [SID]: SECRET });
+  expect(await screen.findByRole('heading', { name: 'Applied to Test' })).toBeInTheDocument();
+  expect(document.body.innerHTML).not.toContain(SECRET);
+});

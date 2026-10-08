@@ -285,13 +285,16 @@ export interface PlanRemovalOut {
   entry?: { item: string; itemLabel: string; collection: string; name: string };
 }
 
-export type AttentionKind = 'handler' | 'index' | 'data-workflows' | 'connection-secrets' | 'drift';
+export type AttentionKind = 'handler' | 'handler-settings' | 'index' | 'data-workflows' | 'connection-secrets' | 'drift';
 
 export interface NeedsAttention {
   id: string;
   kind: AttentionKind;
   key: string;
   message: string;
+  // What takes care of this entry once entered: a SecretNeeded id or an
+  // EnvironmentValue id (handler settings).
+  valueId?: string;
 }
 
 export interface EnvironmentValue {

@@ -22,7 +22,7 @@ import type {
 import { ApiError, badRequest, notFound, toApiError } from './errors.ts';
 import { envBoundNamesFor, envKey, loadConfig, spaceFieldPair, loadOverrides, stableStringify, type EngineEnv } from './engine.ts';
 import {
-  MODULES, collectionWord, computePlan, removalInSource, envBoundFields, isEmptyValue, isSecretName, isSecretProperty, parseEntryKey, parsePath, readTree, runApply, segmentLabel, stamp,
+  MODULES, collectionWord, computePlan, describeFailureMessage, removalInSource, envBoundFields, isEmptyValue, isSecretName, isSecretProperty, missingRequired, parseEntryKey, parsePath, readTree, runApply, segmentLabel, stamp,
   type EngineRemoval, type EnginePlan, type PlanItem,
 } from './engine-sync.ts';
 import { currentKeys, readChangeset, recordApplied, removeList } from './changesets.ts';
@@ -158,12 +158,23 @@ function environmentValues(projectDir: string, to: string, items: PlanItem[], ex
   return out;
 }
 
+// Secret properties of a handler the apply may send: every one for an
+// install or a package re-install; otherwise those that are required and
+// empty in the target (a settings write is then still needed).
+function handlerSecretsSent(i: PlanItem): string[] {
+  const all = handlerSecretProperties(i.desired);
+  if (i.action === 'create') return all;
+  if (i.action !== 'update' || !i.existing) return [];
+  if (obj(i.desired).packageSha256 !== obj(i.existing.data).packageSha256) return all;
+  const unset = new Set<string>(obj(i.existing.meta).unsetRequired ?? []);
+  return all.filter((p) => unset.has(p));
+}
+
 async function secretsNeeded(store: SecretStore, ref: ProjectRef, to: string, items: PlanItem[]): Promise<SecretNeeded[]> {
   const out: SecretNeeded[] = [];
   for (const i of items) {
-    if (i.action !== 'create') continue;
     const d = obj(i.desired);
-    if (i.type === 'connections') {
+    if (i.type === 'connections' && i.action === 'create') {
       const conn = String(d.name ?? segmentLabel(i.key.split('/')[1]));
       for (const f of connectionSecretFields(d)) {
         const name = connectionSecretName(conn, f);
@@ -172,13 +183,29 @@ async function secretsNeeded(store: SecretStore, ref: ProjectRef, to: string, it
     }
     if (i.type === 'handlers') {
       const id = String(d.definitionId ?? segmentLabel(i.key.split('/')[1]));
-      for (const p of handlerSecretProperties(d)) {
+      for (const p of handlerSecretsSent(i)) {
         const name = handlerSecretName(id, p);
         out.push({ id: `handler/${name}`, key: i.key, scope: 'handler', name, label: `${d.name ?? id} › ${p}`, has: await hasEnvSecret(store, ref, to, 'handler', name) });
       }
     }
   }
   return out;
+}
+
+// Required handler settings that would still be empty after the apply (see
+// missingRequired), each with what fills it: a secret (by its id) or an
+// environment value (by its id).
+function handlerSettingsNeeded(i: PlanItem, secrets: SecretNeeded[]): Array<{ name: string; valueId: string }> {
+  if (i.type !== 'handlers' || (i.action !== 'create' && i.action !== 'update')) return [];
+  const d = obj(i.desired);
+  const id = String(d.definitionId ?? segmentLabel(i.key.split('/')[1]));
+  const secretId = (p: string) => `handler/${handlerSecretName(id, p)}`;
+  const props: Obj[] = d.properties ?? [];
+  const has = (p: string) => secrets.some((s) => s.id === secretId(p) && s.has);
+  return missingRequired(d, i.existing, has).map((name) => ({
+    name,
+    valueId: isSecretProperty(props.find((p) => p?.name === name)) ? secretId(name) : `${i.key}#properties.${escapeSeg(name)}.value`,
+  }));
 }
 
 const DATA_WORKFLOWS = /^(.+?): creating\/updating rows will run these workflows in the target: (.+)$/;
@@ -198,6 +225,15 @@ function needsAttention(to: string, items: PlanItem[], warnings: string[], secre
     if (i.drift) add('drift', i.key, `${name} was changed in ${To} since it was last promoted; overwriting replaces those changes.`);
     if (i.type === 'connections' && i.action === 'create' && secrets.some((s) => s.key === i.key && !s.has)) {
       add('connection-secrets', i.key, `Connection ${name} will be created without credentials unless you enter them.`);
+    }
+    // The Task API saves none of a handler's settings while a required one is
+    // empty: each is filled in under Environment values (a secret or a
+    // setting), or ticked to install without it.
+    for (const n of handlerSettingsNeeded(i, secrets)) {
+      out.push({
+        id: `handler-settings:${i.key}#${n.name}`, kind: 'handler-settings', key: i.key, valueId: n.valueId,
+        message: `${name} needs ${n.name} before its settings can be saved in ${To}.`,
+      });
     }
   }
   for (const w of warnings) {
@@ -400,6 +436,12 @@ function validateApply(plan: StoredPlan, body: unknown, readOnly: boolean): Appl
   const required = r.needsAttention.filter((n) => {
     if (n.kind === 'drift') return resolutions[n.key] === 'overwrite';
     if (n.kind === 'connection-secrets') return r.secretsNeeded.some((s) => s.key === n.key && !s.has && !(s.id in secrets));
+    // Taken care of by entering what it needs: the secret, or the value.
+    if (n.kind === 'handler-settings' && n.valueId) {
+      if (n.valueId in secrets) return false;
+      const [key, ...rest] = n.valueId.split('#');
+      return !given(key, rest.join('#'));
+    }
     return true;
   });
   const missingAcks = required.map((n) => n.id).filter((id) => !acks.includes(id));
@@ -409,8 +451,12 @@ function validateApply(plan: StoredPlan, body: unknown, readOnly: boolean): Appl
   return { acknowledgements: acks as string[], values: values as ApplyInput['values'], secrets: secrets as Record<string, string>, remember: body.remember === true, resolutions };
 }
 
+// A platform failure as the platform's own message and error list (names,
+// redacted and capped), or its status alone; any other failure as it is.
 const HTTP_FAILURE = /failed with (\d{3})/;
 const plainFailure = (message: unknown) => {
+  const described = describeFailureMessage(message);
+  if (described) return described;
   const m = HTTP_FAILURE.exec(String(message ?? ''));
   return m ? `The Kinetic Platform returned an error (${m[1]}).` : String(message ?? 'This item failed.');
 };
@@ -515,9 +561,11 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
       projectDir: ref.dir, envName: r.to, env, sourceDir: plan.sourceDir, sourceName: r.from ?? undefined, yes: true, select: plan.select, resolutions: input.resolutions,
       remove: plan.remove, removeExpected: plan.removeExpected,
       onEvent, onPlan, signal, clientFactory: ctx.clientFactory, log: () => {},
+      targetLabel: To, settingsHint: 'or enter them here and apply again',
     });
     done = res.done;
     const leftOver = res.failed ?? [];
+    const attention = res.attention ?? [];
     if (res.code !== 0) {
       status = 'failed';
       error = 'The plan has errors against the current target; nothing was applied. Plan again.';
@@ -527,6 +575,9 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
     } else if (skipped.length) {
       status = 'partial';
       error = `${skipped.length === 1 ? '1 item was' : `${skipped.length} items were`} not applied or removed (see the list below). Plan again to review ${skipped.length === 1 ? 'it' : 'them'}.`;
+    } else if (attention.length) {
+      status = 'partial';
+      error = `${attention.length === 1 ? '1 handler is' : `${attention.length} handlers are`} installed without required settings (see the list below). Enter them and apply again, or set them in ${To}'s Task console.`;
     }
   } catch (err) {
     const failed = [...outcomes.values()].find((o) => o.status === 'failed' || o.status === 'running');

@@ -84,6 +84,8 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
   const [submitError, setSubmitError] = useState<unknown>(null);
   // Ids of secrets given for one run only (never their values): Resume asks again.
   const [oneRun, setOneRun] = useState<string[]>([]);
+  // Ids of secrets kept in the keychain by an apply from this page.
+  const [kept, setKept] = useState<string[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
   const [carried, setCarried] = useState<Record<string, ItemProgress>>({});
 
@@ -102,7 +104,8 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
   const finished = job.status !== 'idle' && job.status !== 'running';
   const outcome = useMemo(() => (finished ? applyOutcome(job, live) : null), [finished, job, live]);
   const checklist = useMemo(() => settleChecklist(live, outcome?.status ?? null, settleRows), [live, outcome, settleRows]);
-  const filled = useMemo(() => new Set(values.filled), [values.filled]);
+  // Values filled in, and secrets entered (each takes care of a handler setting).
+  const filled = useMemo(() => new Set([...values.filled, ...Object.keys(secrets).filter((id) => secrets[id])]), [values.filled, secrets]);
   const blank = useMemo(() => new Set(values.blank), [values.blank]);
 
   const reviewOk = plan.errors.length === 0 && attention.every((a) => satisfied(a, ticked, filled));
@@ -124,6 +127,7 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
     try {
       const { jobId: id } = await startApply(projectId, plan.planId, body);
       if (!remember) setOneRun((cur) => [...new Set([...cur, ...ids])]);
+      else setKept((cur) => [...new Set([...cur, ...ids])]);
       setJobId(id);
       setStep(3);
     } catch (err) {
@@ -262,7 +266,7 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
 
       {step === 3 && (
         <ApplyStep
-          projectId={projectId} plan={plan} groups={groups} checklist={checklist} job={job} outcome={outcome} oneRun={oneRun}
+          projectId={projectId} plan={plan} groups={groups} checklist={checklist} job={job} outcome={outcome} oneRun={oneRun} kept={kept}
           onResume={resume} resuming={submitting} resumeError={submitError}
         />
       )}
@@ -563,7 +567,7 @@ function ConfirmSummary({ plan, changedValues, secrets, remember, acknowledged }
 
 // ---- Apply -------------------------------------------------------------------
 
-function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, onResume, resuming, resumeError }: {
+function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, kept, onResume, resuming, resumeError }: {
   projectId: string;
   plan: PlanResult;
   groups: ApplyChecklistProps['groups'];
@@ -571,6 +575,7 @@ function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, o
   job: JobState<ApplyResult>;
   outcome: ApplyOutcome | null;
   oneRun: string[];
+  kept: string[];
   onResume: (secrets: Record<string, string>) => Promise<void>;
   resuming: boolean;
   resumeError: unknown;
@@ -581,7 +586,11 @@ function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, o
   const failed = Boolean(outcome && !success);
   const backup = outcome?.backupCommit ?? null;
   const [again, setAgain] = useState<Record<string, string>>({});
-  const resumeSecrets = plan.secretsNeeded.filter((s) => oneRun.includes(s.id));
+  // Secrets given for the last run only, and those a handler's settings still
+  // need (not entered yet): Resume can send them.
+  const settingsIds = new Set(plan.needsAttention.filter((n) => n.kind === 'handler-settings').map((n) => n.valueId));
+  const unset = (id: string) => settingsIds.has(id) && !oneRun.includes(id) && !kept.includes(id);
+  const resumeSecrets = plan.secretsNeeded.filter((s) => oneRun.includes(s.id) || (!s.has && unset(s.id)));
 
   const heading = !outcome ? `Applying to ${To}…` : {
     applied: `Applied to ${To}`, partial: `Partly applied to ${To}`, failed: `Failed to apply to ${To}`, cancelled: `Cancelled applying to ${To}`,
@@ -632,7 +641,7 @@ function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, o
           {resumeSecrets.length > 0 && (
             <div className="mt-3 grid gap-3 pl-6 sm:grid-cols-2">
               {resumeSecrets.map((s) => (
-                <SecretInput key={s.id} label={s.label} isSet={false} value={again[s.id] ?? ''} onChange={(v) => setAgain((cur) => ({ ...cur, [s.id]: v }))} hint="Not kept after the last apply; enter it again to use it." />
+                <SecretInput key={s.id} label={s.label} isSet={false} value={again[s.id] ?? ''} onChange={(v) => setAgain((cur) => ({ ...cur, [s.id]: v }))} hint={unset(s.id) ? 'Not set yet; enter it so the handler’s settings can be saved.' : 'Not kept after the last apply; enter it again to use it.'} />
               ))}
             </div>
           )}
