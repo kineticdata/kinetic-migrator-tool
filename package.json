@@ -19,12 +19,15 @@
     "node": ">=20.6"
   },
   "scripts": {
-    "test": "node --test lib/sync/*.test.mjs lib/sync/artifacts/*.test.mjs",
-    "test:app": "vitest run && node --import tsx --test \"app/server/**/*.test.ts\"",
+    "test": "node scripts/run-tests.mjs lib/sync .test.mjs",
+    "test:app": "vitest run && node scripts/run-tests.mjs --import tsx app/server .test.ts",
     "test:e2e": "npm run build && playwright test",
     "dev": "vite --config app/web/vite.config.ts",
     "dev:server": "tsx watch app/server/main.ts --dev",
-    "build": "vite build --config app/web/vite.config.ts && esbuild app/server/main.ts --bundle --platform=node --format=esm --target=node20 --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\" --outfile=dist/server.mjs",
+    "build": "vite build --config app/web/vite.config.ts && node scripts/build-server.mjs",
+    "start": "node kinetic-migrate.mjs ui",
+    "start:fake": "node kinetic-migrate.mjs ui --fake",
+    "smoke": "node scripts/smoke.mjs",
     "typecheck": "tsc -b"
   },
   "devDependencies": {

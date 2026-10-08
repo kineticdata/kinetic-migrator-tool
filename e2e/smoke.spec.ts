@@ -59,7 +59,7 @@ test.beforeAll(async () => {
 test.afterAll(() => {
   server?.removeAllListeners('exit');
   server?.kill();
-  if (workspace) rmSync(workspace, { recursive: true, force: true });
+  if (workspace) rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
 test('create a project, compare dev with test, promote a form and its dependencies, see it in history', async ({ page }) => {
