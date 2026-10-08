@@ -264,7 +264,7 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     }
     const select = new Set(keys);
     const { plan } = await computePlan({
-      projectDir: ref.dir, envName: to, env, sourceDir, select, resolutions, onEvent: forwardEvents(emit, [env.password, ...Object.values(env.vars)]),
+      projectDir: ref.dir, envName: to, env, sourceDir, sourceName: from, select, resolutions, onEvent: forwardEvents(emit, [env.password, ...Object.values(env.vars)]),
       signal, clientFactory: ctx.clientFactory,
     });
     const active = plan.items.filter((i) => i.action !== 'excluded');
@@ -428,7 +428,7 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   let done = 0;
   try {
     const res = await runApply({
-      projectDir: ref.dir, envName: r.to, env, sourceDir: plan.sourceDir, yes: true, select: plan.select, resolutions: input.resolutions,
+      projectDir: ref.dir, envName: r.to, env, sourceDir: plan.sourceDir, sourceName: r.from ?? undefined, yes: true, select: plan.select, resolutions: input.resolutions,
       onEvent, onPlan, signal, clientFactory: ctx.clientFactory, log: () => {},
     });
     done = res.done;

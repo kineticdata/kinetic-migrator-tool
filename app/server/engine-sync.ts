@@ -71,10 +71,10 @@ interface RunCommon { projectDir: string; env: EngineEnv; onEvent?: OnEvent; sig
 
 export const runExport: (opts: RunCommon & { dest?: string }) => Promise<{ code: number; artifacts: number; counts: Record<string, number> }> = commandsModule.runExport;
 export const computePlan: (opts: RunCommon & {
-  envName: string; from?: string; sourceDir?: string; sourceArtifacts?: Artifact[]; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
+  envName: string; from?: string; sourceName?: string; sourceDir?: string; sourceArtifacts?: Artifact[]; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
 }) => Promise<{ env: EngineEnv; config: EngineConfig; plan: EnginePlan; targetList: TargetArtifact[] }> = commandsModule.computePlan;
 export const runApply: (opts: RunCommon & {
-  envName: string; from?: string; sourceDir?: string; yes: boolean; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
+  envName: string; from?: string; sourceName?: string; sourceDir?: string; yes: boolean; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
   onPlan?: (plan: EnginePlan) => void;
 }) => Promise<{ code: number; done: number; backupDir?: string }> = commandsModule.runApply;
 export const stamp: () => string = commandsModule.stamp;
@@ -84,7 +84,7 @@ export const compareArtifacts: (opts: { modules: EngineModule[]; left: Map<strin
 } = compareModule.compareArtifacts;
 export const buildPlan: (opts: {
   modules: EngineModule[]; exported: Map<string, unknown>; target: Map<string, TargetArtifact>; state?: Record<string, string>;
-  overrides?: EngineOverrides; vars?: Record<string, string>; config: EngineConfig;
+  overrides?: EngineOverrides; vars?: Record<string, string>; config: EngineConfig; sourceName?: string; targetName?: string;
 }) => EnginePlan = planModule.buildPlan;
 export const diffValues: (from: unknown, to: unknown) => DiffEntry[] = planModule.diffValues;
 export const readTree: (dir: string) => Map<string, unknown> = storeModule.readTree;

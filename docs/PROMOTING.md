@@ -116,7 +116,7 @@ level; an object names the attribute and where it applies:
 | `kapp` | `kapp` (kapp slug) |
 | `form` | `kapp` (kapp slug), `form` (form slug) |
 | `team` | `team` (team name) |
-| `category` | `kapp` (kapp slug), `category` (category slug or name) |
+| `category` | `kapp` (kapp slug), `category` (category slug) |
 
 A where-part that is left out matches any item, so `{ "name": "Owner" }` is
 the same as `"Owner"`. Category attributes live inside the kapp, so a
@@ -125,6 +125,12 @@ plan's "empty in the target" warning and drift detection use the same
 rules. In the app, Settings → Data & values edits these rules and lists
 kapps, forms, categories, teams and attribute names from the latest snapshot
 (take one first to pick from lists; otherwise type the names).
+
+When the project is loaded, a rule the tool cannot use (an unknown level such
+as `"forms"`, a rule without a `name`, a where-part that level does not have)
+is ignored and reported: as a plan warning and on the settings page. Saving
+the rules from the settings page replaces them; the app refuses to save such
+a rule.
 
 **Overrides** in `overrides/<env>.json` set values for one target:
 
@@ -259,6 +265,10 @@ matches when it contains the value). The filter is applied to the records
 read from each environment, not as a search query, so no index is needed.
 Records outside the filter are ignored on both sides: in the target they are
 never compared, updated or deleted. With no filter, every record is promoted.
+With match fields, a target record outside the filter that has the same key
+as a source record is not seen either, so the source record is created
+alongside it (and fails if the form has a unique index on the key); keep the
+filter on fields that agree between environments.
 
 **With match fields** (`key`), records are matched by those fields in every
 environment: a record the target lacks is created, a changed one is updated
@@ -277,6 +287,17 @@ edited in the source is therefore created as a new record in the target
 (the plan warns about this), and `--prune data` deletes nothing for that
 form (apply warns that it is ignored). Records the target already has show
 as unchanged in plans and comparisons, whatever extra fields they carry.
+Because nothing is ever overwritten, these forms are not subject to drift
+protection.
+
+**Changing the settings.** A snapshot records the match fields and filter it
+was taken with. If an entry's match fields (including their order) or filter
+change, or the entry is removed, a plan from an older snapshot stops with
+`<kapp>/<form>: reference-data settings changed since the snapshot of <env>
+was taken — take a new snapshot` (or `no longer in the reference-data
+settings`), instead of matching records read in two different ways. Take a
+new snapshot of the source, and of the target if you compare snapshots. An
+entry added since the snapshot simply has nothing to promote yet.
 
 Creating or updating records runs the target form's submission workflows;
 the plan names them.

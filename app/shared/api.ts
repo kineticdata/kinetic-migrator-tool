@@ -152,6 +152,8 @@ export interface ProjectConfig {
   data: DataEntry[];
   exclude: { kapps: string[]; forms: string[] };
   envBoundAttributes: Partial<Record<EnvBoundLevel, EnvBoundRule[]>>;
+  // Parts of the file that could not be used and are ignored (read-only).
+  warnings?: string[];
 }
 
 // What the latest snapshot of an environment holds, for the settings pickers.

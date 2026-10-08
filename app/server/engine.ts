@@ -48,6 +48,7 @@ export interface EngineConfig {
   data: EngineDataEntry[];
   exclude: { kapps: string[]; forms: string[]; [k: string]: unknown };
   envBoundAttributes: EnvBoundAttributes;
+  warnings?: string[];
 }
 
 export interface EngineOverrides {

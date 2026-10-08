@@ -193,6 +193,15 @@ test('environments: add, order, credentials, delete — one commit per mutation,
   await rejects({ envBoundAttributes: { widget: ['x'] } }, /unknown level "widget"/);
   await rejects({ data: [{ kapp: 'services', form: 'lookups', filter: [{ field: 'Type', value: '' }] }] }, /filter condition 1 needs a field and a value/);
   await rejects({ data: [{ kapp: 'services', form: 'lookups', key: 'Code' }] }, /"key" must be a list/);
+  // A hand-edited file with an unknown level still loads; the level is reported and ignored.
+  const cfgFile = path.join(dir, 'kinetic-sync.config.json');
+  const saved = readFileSync(cfgFile, 'utf8');
+  writeFileSync(cfgFile, JSON.stringify({ envBoundAttributes: { forms: ['X'], kapp: ['Logo'] } }));
+  const tolerant = await call('GET', '/api/projects/pipeline/config');
+  assert.equal(tolerant.status, 200);
+  assert.deepEqual(tolerant.json.envBoundAttributes, { kapp: ['Logo'] });
+  assert.match(tolerant.json.warnings[0], /unknown level "forms"/);
+  writeFileSync(cfgFile, saved);
   // Nothing was written by the rejected requests.
   assert.deepEqual((await call('GET', '/api/projects/pipeline/config')).json.envBoundAttributes, scoped.envBoundAttributes);
   const putOv = await call('PUT', '/api/projects/pipeline/overrides/test', { artifacts: { 'space/space': { name: 'Test space' } }, replace: [{ from: 'dev.example.com', to: 'test.example.com' }] });
