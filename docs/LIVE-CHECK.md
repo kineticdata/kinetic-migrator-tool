@@ -79,3 +79,13 @@ and type `Stored` creates a category; `POST /categories/{name}/handlers` and
 `/routines` with `{definitionId}` add members; `PUT /categories/{name}` with
 only name and description keeps the members, but a `trees` list in a PUT
 clears the category's routines, so the app never sends one.
+
+## Platform 6.x and 7.x (2026-10-08)
+
+| Space | Detected | Test connection | Snapshot |
+|------|----------|-----------------|----------|
+| a 6.x source | 6.1.7 (from the Integrator's open `/version`) | Core and Integrator sign-in ok (implicit grant) | complete, including 13 connections and 316 operations |
+| a 7.x space | 7.0.0-rc3 | Core and Integrator sign-in ok (authorization code with PKCE after a `login.do` session) | complete, including 2 connections and 31 operations |
+
+No password, session cookie, authorization code, verifier or token appeared in
+any API response or in the workspace log file.
