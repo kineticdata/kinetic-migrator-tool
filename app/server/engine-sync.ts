@@ -99,6 +99,7 @@ export const hashOf: (value: unknown) => string = normalizeModule.hashOf;
 export const withoutEnvBound: (scope: string | null, data: unknown, eba?: Record<string, string[]>) => unknown = normalizeModule.withoutEnvBound;
 export const ENV_BOUND_FIELDS: Record<string, string[]> = normalizeModule.ENV_BOUND_FIELDS;
 export const isSecretName: (name: string) => boolean = secretsModule.isSecretName;
+export const AUTH_SECRET_FIELDS: Readonly<Record<string, readonly string[]>> = secretsModule.AUTH_SECRET_FIELDS;
 export const isSecretProperty: (p: unknown) => boolean = secretsModule.isSecretProperty;
 export const secretFieldKey: (field: string) => string = envModule.secretFieldKey;
 export const parsePath: (path: string) => string[] = overridesModule.parsePath;
