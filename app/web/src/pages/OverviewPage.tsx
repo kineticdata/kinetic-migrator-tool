@@ -11,6 +11,7 @@ import type { HistoryEvent, HistoryType, SnapshotResult, TreeNode } from '../../
 import { qk, startSnapshot, useRawDifferences, useTreeChildren, useTreeRoot } from '../api/queries';
 import { useJob } from '../api/useJob';
 import { JobProgress } from '../components/JobProgress';
+import { Notes } from '../components/Notes';
 import { Badge, StatusChip } from '../components/ui/Badge';
 import { Button, LinkButton } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
@@ -92,7 +93,10 @@ function Lane({ projectId, env, next, drift, run }: {
     onDone: (j) => {
       if (j.status === 'succeeded') {
         const r = j.result;
-        toast.show({ tone: 'success', title: `Snapshot of ${label} taken`, description: r ? (r.commit ? plural(r.total, 'item') : 'Nothing changed since the last snapshot.') : undefined });
+        const counted = r ? (r.commit ? plural(r.total, 'item') : 'Nothing changed since the last snapshot.') : undefined;
+        toast.show(r?.warnings?.length
+          ? { tone: 'info', title: `Snapshot of ${label} taken, with notes`, description: r.warnings.join(' ') }
+          : { tone: 'success', title: `Snapshot of ${label} taken`, description: counted });
       }
     },
   });
@@ -151,6 +155,7 @@ function Lane({ projectId, env, next, drift, run }: {
             </p>
           )}
           {running && <JobProgress job={job} label={`Snapshot of ${label}`} />}
+          {job.status === 'succeeded' && <Notes notes={job.result?.warnings} label={`Snapshot of ${label}: notes`} />}
           {(job.status === 'failed' || job.status === 'cancelled') && <InlineError error={job.error ?? 'The snapshot was cancelled.'} />}
           <InlineError error={startError} />
         </div>

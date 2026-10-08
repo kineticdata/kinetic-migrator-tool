@@ -15,6 +15,7 @@ import { PlainFrame } from '../components/Brand';
 import { ConnectionTestSteps } from '../components/ConnectionTest';
 import { EnvironmentFields, draftErrors, emptyDraft, type EnvironmentDraft } from '../components/EnvironmentFields';
 import { JobProgress } from '../components/JobProgress';
+import { Notes } from '../components/Notes';
 import { Button, LinkButton } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { InlineError } from '../components/ui/EmptyState';
@@ -242,6 +243,7 @@ export function NewProjectWizard() {
                   Snapshot taken{job.result ? `: ${plural(job.result.total, 'item')}` : ''}.
                 </p>
               )}
+              {job.status === 'succeeded' && <Notes notes={job.result?.warnings} label="Snapshot notes" />}
               {(job.status === 'failed' || job.status === 'cancelled') && <InlineError error={job.error ?? 'The snapshot was cancelled.'} />}
               <InlineError error={error} />
             </div>

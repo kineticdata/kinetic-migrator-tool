@@ -25,6 +25,7 @@ import {
   MODULES, collectionWord, computePlan, removalInSource, envBoundFields, isEmptyValue, isSecretName, isSecretProperty, parseEntryKey, parsePath, readTree, runApply, segmentLabel, stamp,
   type EngineRemoval, type EnginePlan, type PlanItem,
 } from './engine-sync.ts';
+import { isOmittedKey, moduleFor } from './engine-sync.ts';
 import { currentKeys, readChangeset, recordApplied, removeList } from './changesets.ts';
 import { hasEnvSecret, readEnvironmentFile, readOverrides, resolveEnv, setEnvSecret } from './environments.ts';
 import type { Emit } from './jobs.ts';
@@ -340,7 +341,10 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     const deletes = (plan.removals ?? []).filter((x) => x.action === 'delete' && x.hash);
     const removeExpected = Object.fromEntries(deletes.map((x) => [x.key, x.hash!]));
     const active = plan.items.filter((i) => i.action !== 'excluded');
-    const missing = keys.filter((k) => !plan.items.some((i) => i.key === k));
+    // Keys of a type left out of the plan (connections when either side has
+    // none recorded) are skipped with the plan's note, not refused.
+    const leftOut = new Set(plan.omitted ?? []);
+    const missing = keys.filter((k) => !plan.items.some((i) => i.key === k) && !isOmittedKey(k, leftOut, (x) => moduleFor(x)?.type));
     if (missing.length) plan.errors.push(...missing.map((k) => `${k}: not in the source snapshot`));
     const secrets = await secretsNeeded(ctx.secrets, ref, to, active);
     const result = buildResult({ planId, name, to, from, changesetId, sourceCommit: pinned, selected: keys, remove }, plan, {

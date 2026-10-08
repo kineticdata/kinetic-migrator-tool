@@ -1,6 +1,7 @@
 // SuggestionsList: dependencies of the selection that are new or changed in
 // the source and not selected yet, each with its plain reason and Add. They
-// are never added silently.
+// are never added silently. One the comparison could not check (`unchecked`:
+// connections left out of it) shows its reason and no Add.
 import { Lightbulb, Plus } from 'lucide-react';
 import type { SuggestionOut } from '../../../shared/sync-api';
 import { kindOfKey } from '../lib/tree-layout';
@@ -30,7 +31,7 @@ export function SuggestionsList({ suggestions, onAdd, onAddAll, title = 'Suggest
           <Lightbulb size={14} aria-hidden className="text-drift" />
           {title} <span className="font-normal text-muted tabular-nums">({list.length})</span>
         </h3>
-        {onAddAll && list.length > 1 && <Button size="sm" variant="ghost" className="h-7 px-2" onClick={onAddAll}>Add all</Button>}
+        {onAddAll && list.filter((s) => !s.unchecked).length > 1 && <Button size="sm" variant="ghost" className="h-7 px-2" onClick={onAddAll}>Add all</Button>}
       </div>
       <ul className="space-y-1 px-1.5 pb-1.5">
         {list.map((s) => (
@@ -40,9 +41,13 @@ export function SuggestionsList({ suggestions, onAdd, onAddAll, title = 'Suggest
               <p className="truncate text-[13px] font-medium text-fg" title={s.label}>{s.label}</p>
               <p className="text-xs text-muted">{s.reason}</p>
             </div>
-            <Button size="sm" variant="secondary" className="h-7 px-2" aria-label={`Add ${s.label}`} icon={<Plus size={13} aria-hidden />} onClick={() => onAdd(s)}>
-              Add
-            </Button>
+            {s.unchecked ? (
+              <span className="shrink-0 pt-1 text-xs text-subtle">Not checked</span>
+            ) : (
+              <Button size="sm" variant="secondary" className="h-7 px-2" aria-label={`Add ${s.label}`} icon={<Plus size={13} aria-hidden />} onClick={() => onAdd(s)}>
+                Add
+              </Button>
+            )}
           </li>
         ))}
       </ul>

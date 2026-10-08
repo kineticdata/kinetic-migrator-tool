@@ -10,7 +10,7 @@ import type { SnapshotResult } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
 import { loadConfig, snapshotDir, type ClientFactory, type EngineEnv } from './engine.ts';
 import {
-  buildRelationships, driftedFrom, loadState, moduleFor, readTree, runExport, type OnEvent, type Relationships,
+  buildRelationships, driftedFrom, loadState, moduleFor, readTree, runExport, type LoadedTree, type OnEvent, type Relationships,
 } from './engine-sync.ts';
 import { environmentExists, resolveEnv } from './environments.ts';
 import type { Emit } from './jobs.ts';
@@ -127,14 +127,19 @@ export async function takeSnapshot(opts: {
   const final = snapshotDir(ref.dir, env.name);
   await swapInto(temp, final, path.join(ref.dir, 'plans', `old-${randomUUID()}`));
   const drifted = driftedKeys(ref.dir, env.name, readTree(snapshotDir(ref.dir, env.name)));
-  const body = drifted.length ? `Drifted: ${drifted.length} item(s) changed since the last promotion.\n${drifted.join('\n')}` : undefined;
+  const warnings = r.warnings ?? [];
+  const parts = [
+    ...warnings,
+    ...(drifted.length ? [`Drifted: ${drifted.length} item(s) changed since the last promotion.\n${drifted.join('\n')}`] : []),
+  ];
+  const body = parts.length ? parts.join('\n\n') : undefined;
   const message = commitMessage(opts.title, { Environment: env.name, ...opts.trailers }, body);
   let commit = await commitChange(ref, message);
   if (!commit && opts.always) {
     const author = readMeta(ref.dir).author ?? DEFAULT_AUTHOR;
     commit = await git.commit({ fs, dir: ref.dir, message, author: { ...author, timestamp: Math.floor(Date.now() / 1000) } });
   }
-  return { env: env.name, commit, total: r.artifacts, counts: r.counts, drifted };
+  return { env: env.name, commit, total: r.artifacts, counts: r.counts, drifted, ...(warnings.length ? { warnings } : {}) };
 }
 
 // ---- Snapshot cache --------------------------------------------------------
@@ -143,7 +148,8 @@ export interface Snapshot {
   env: string;
   commit: string;
   dir: string;
-  artifacts: Map<string, unknown>;
+  // `omitted`: what the snapshot's export left out (see lib/sync/omitted.mjs).
+  artifacts: LoadedTree;
   index: TreeIndex;
   relationships: () => Relationships;
 }
@@ -151,7 +157,7 @@ export interface Snapshot {
 const CACHE_SIZE = 8;
 const cache = new Map<string, Snapshot>();
 
-export function snapshotFrom(env: string, commit: string, dir: string, artifacts: Map<string, unknown>): Snapshot {
+export function snapshotFrom(env: string, commit: string, dir: string, artifacts: LoadedTree): Snapshot {
   let rel: Relationships | undefined;
   return {
     env, commit, dir, artifacts,

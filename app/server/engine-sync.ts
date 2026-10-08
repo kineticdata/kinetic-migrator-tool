@@ -31,6 +31,8 @@ import * as layoutModule from '../../lib/sync/layout.mjs';
 import * as removalsModule from '../../lib/sync/removals.mjs';
 // @ts-expect-error -- untyped engine module
 import * as entriesModule from '../../lib/sync/entries.mjs';
+// @ts-expect-error -- untyped engine module
+import * as omittedModule from '../../lib/sync/omitted.mjs';
 import type { ClientFactory, EngineConfig, EngineEnv, EngineOverrides, EnvBoundAttributes } from './engine.ts';
 
 export interface Artifact { key: string; data: unknown; files?: Record<string, Uint8Array> }
@@ -72,6 +74,8 @@ export interface EnginePlan {
   removals: EngineRemoval[];
   errors: string[];
   warnings: string[];
+  // Types left out of the plan because either side's export left them out.
+  omitted?: string[];
 }
 
 export interface EngineModule {
@@ -90,11 +94,11 @@ export interface Summary { title: string; subtitle: string; sections: SummarySec
 
 interface RunCommon { projectDir: string; env: EngineEnv; onEvent?: OnEvent; signal?: AbortSignal; clientFactory?: ClientFactory; log?: (line: string) => void }
 
-export const runExport: (opts: RunCommon & { dest?: string }) => Promise<{ code: number; artifacts: number; counts: Record<string, number> }> = commandsModule.runExport;
+export const runExport: (opts: RunCommon & { dest?: string }) => Promise<{ code: number; artifacts: number; counts: Record<string, number>; omitted: Omission[]; warnings: string[] }> = commandsModule.runExport;
 export const computePlan: (opts: RunCommon & {
-  envName: string; from?: string; sourceName?: string; sourceDir?: string; sourceArtifacts?: Artifact[]; sourceUnresolved?: Map<string, string>; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
+  envName: string; from?: string; sourceName?: string; sourceDir?: string; sourceArtifacts?: Artifact[]; sourceUnresolved?: Map<string, string>; sourceOmitted?: Omission[]; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
   remove?: string[]; removeExpected?: Record<string, string>;
-}) => Promise<{ env: EngineEnv; config: EngineConfig; plan: EnginePlan; targetList: TargetArtifact[] }> = commandsModule.computePlan;
+}) => Promise<{ env: EngineEnv; config: EngineConfig; plan: EnginePlan; targetList: TargetArtifact[] & { omitted?: Omission[] } }> = commandsModule.computePlan;
 export const runApply: (opts: RunCommon & {
   envName: string; from?: string; sourceName?: string; sourceDir?: string; yes: boolean; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
   remove?: string[]; removeExpected?: Record<string, string>;
@@ -113,9 +117,16 @@ export const diffValues: (from: unknown, to: unknown) => DiffEntry[] = planModul
 // diffValues for one item of a module (some fields differ as whole lists).
 export const diffItem: (mod: EngineModule | undefined, from: unknown, to: unknown) => DiffEntry[] = planModule.diffItem;
 // A tree read in any layout (older ones re-keyed from content, see layout.mjs).
-export type LoadedTree = Map<string, unknown> & { layout?: number; rekeyed?: Map<string, string>; unresolved?: Map<string, string> };
+export type LoadedTree = Map<string, unknown> & { layout?: number; rekeyed?: Map<string, string>; unresolved?: Map<string, string>; omitted?: Omission[] };
 export const readTree: (dir: string) => LoadedTree = layoutModule.loadTree;
-export const rekeyTree: (raw: Map<string, unknown>, layout: number) => LoadedTree = layoutModule.rekeyTree;
+export const rekeyTree: (raw: Map<string, unknown>, layout: number, omitted?: Omission[]) => LoadedTree = layoutModule.rekeyTree;
+// What an export left out and why (see lib/sync/omitted.mjs).
+export interface Omission { types: string[]; reason: string; status: number | null; version: string | null; message: string }
+export const markerOmitted: (text: string | undefined) => Omission[] = omittedModule.markerOmitted;
+export const omittedBetween: (sides: Array<{ name?: string; omitted?: Omission[] }>) => { types: Set<string>; notes: string[] } = omittedModule.omittedBetween;
+export const withoutOmitted: <M extends Map<string, any>>(map: M, types: Set<string>, typeOf?: (key: string) => string | undefined) => M = omittedModule.withoutOmitted;
+export const isOmittedKey: (key: string, types: Set<string>, typeOf?: (key: string) => string | undefined) => boolean = omittedModule.isOmittedKey;
+export const omissionWarning: (o: Omission) => string = omittedModule.omissionWarning;
 export const markerLayout: (text: string | undefined) => number = storeModule.markerLayout;
 export const MARKER: string = storeModule.MARKER;
 export const LAYOUT_VERSION: number = storeModule.LAYOUT_VERSION;

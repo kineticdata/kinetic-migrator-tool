@@ -244,7 +244,9 @@ export async function resolveEnv(ref: ProjectRef, env: string, store: SecretStor
 // ---- Test connection -----------------------------------------------------
 
 function stepMessage(err: unknown): string {
-  const e = err as { name?: string; status?: number } | null;
+  const e = err as { name?: string; status?: number; message?: string } | null;
+  // Built by the engine from the host, the status and the platform version only.
+  if (e?.name === 'IntegratorAuthUnavailable') return `${e.message} Snapshots will leave connections and operations out.`;
   if (e?.name === 'HttpError') {
     if (e.status === 401 || e.status === 403) return `The username or password was not accepted (${e.status}).`;
     return `The server returned an error (${e.status ?? 'unknown'}).`;

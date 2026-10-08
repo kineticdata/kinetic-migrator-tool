@@ -59,7 +59,9 @@ function useSnapshotJob(projectId: string, env: string) {
     onDone: (j) => {
       if (j.status !== 'succeeded') return;
       const r = j.result;
-      toast.show({ tone: 'success', title: `Snapshot of ${label} taken`, description: r ? (r.commit ? plural(r.total, 'item') : 'Nothing changed since the last snapshot.') : undefined });
+      toast.show(r?.warnings?.length
+        ? { tone: 'info', title: `Snapshot of ${label} taken, with notes`, description: r.warnings.join(' ') }
+        : { tone: 'success', title: `Snapshot of ${label} taken`, description: r ? (r.commit ? plural(r.total, 'item') : 'Nothing changed since the last snapshot.') : undefined });
     },
   });
   const start = async () => {
