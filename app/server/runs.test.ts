@@ -1,0 +1,165 @@
+// Plans and guided apply, end to end against fake Dev/Test spaces:
+// snapshot → compare → suggestions → plan with a selection → apply writes only
+// the selected keys, with a backup, a run record, commits and no secret leaks.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import type { ApplyResult, Changeset, PlanResult, RunRecord } from '../shared/sync-api.ts';
+import { log, readTreeAt } from './repo.ts';
+import { PLANTED, PLANTED_RUN, assertNoSecret, harness, type Harness } from './sync-fixtures.ts';
+
+const P = '/api/projects/sync-test';
+const FORM = 'kapps/services/forms/it-request/form';
+const OP = 'connections/Ticketing/operations/Create Ticket';
+const CONN = 'connections/Ticketing/connection';
+const SECRET_ID = 'secret/TICKETING__PASSWORD';
+
+async function plan(h: Harness, body: unknown): Promise<PlanResult> {
+  const job = await h.job('POST', `${P}/plans`, body);
+  assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
+  return job.result as PlanResult;
+}
+
+async function repoText(h: Harness): Promise<string> {
+  const head = (await log(h.dir, { limit: 1 }))[0];
+  const tree = await readTreeAt(h.dir, head.oid, '');
+  return JSON.stringify([...tree]) + (await log(h.dir, { limit: 1000 })).map((e) => e.message).join('\n');
+}
+
+test('guided apply writes only the selected keys, backs up first, records the run and never leaks a secret', async (t) => {
+  const h = await harness(t);
+  await h.call('PUT', `${P}/config`, { envBoundAttributes: { form: ['Owner'] } });
+  for (const env of ['dev', 'test']) assert.equal((await h.job('POST', `${P}/snapshots`, { env })).status, 'succeeded');
+  const cmp = (await h.job('POST', `${P}/compare`, { from: 'dev', to: 'test', mode: 'preview' })).result;
+  const sug = (await h.call('POST', `${P}/compare/${cmp.compareId}/suggestions`, { selected: [FORM] })).json;
+  assert.deepEqual(sug.map((s: any) => s.key), [CONN, OP]);
+
+  // Without the suggested dependencies the plan has an error and cannot be applied.
+  const partial = await plan(h, { to: 'test', from: 'dev', selected: [FORM] });
+  assert.ok(partial.errors.some((e) => e.includes('Create Ticket') || e.includes('o-1')), JSON.stringify(partial.errors));
+  const refused = await h.call('POST', `${P}/plans/${partial.planId}/apply`, { acknowledgements: [], confirm: 'test' });
+  assert.equal(refused.status, 409);
+
+  const p = await plan(h, { to: 'test', from: 'dev', selected: [FORM, ...sug.map((s: any) => s.key)] });
+  assert.deepEqual(p.errors, []);
+  assert.deepEqual(p.items.map((i) => [i.key, i.action]), [[CONN, 'create'], [OP, 'create'], [FORM, 'update']]);
+  assert.equal(p.counts.create, 2);
+  assert.equal(p.counts.update, 1);
+  assert.deepEqual(p.needsAttention.map((n) => n.id).sort(), [`connection-secrets:${CONN}`, `index:${FORM}`]);
+  assert.deepEqual(p.secretsNeeded.map((s) => [s.id, s.has]), [[SECRET_ID, false]]);
+  const owner = p.environmentValues.find((v) => v.label === 'Owner')!;
+  assert.deepEqual([owner.key, owner.path, owner.required], [FORM, 'attributes.Owner', true]);
+  assert.equal((await h.call('GET', `${P}/plans/${p.planId}`)).json.planId, p.planId);
+
+  const apply = (body: unknown) => h.call('POST', `${P}/plans/${p.planId}/apply`, body);
+  const values = { [FORM]: { 'attributes.Owner': ['IT'] } };
+  const secrets = { [SECRET_ID]: PLANTED_RUN };
+  // Refusals: confirmation, acknowledgements, required values, unknown secrets.
+  assert.equal((await apply({ acknowledgements: [`index:${FORM}`], values, secrets, confirm: 'Test' })).json.error.code, 'confirmation_required');
+  const noAck = await apply({ acknowledgements: [], values, confirm: 'test' });
+  assert.equal(noAck.status, 400);
+  assert.equal(noAck.json.error.code, 'acknowledgement_required');
+  assert.deepEqual(noAck.json.error.detail.missing.sort(), [`connection-secrets:${CONN}`, `index:${FORM}`]);
+  const noValues = await apply({ acknowledgements: [`index:${FORM}`], secrets, confirm: 'test' });
+  assert.equal(noValues.json.error.code, 'values_required');
+  assert.equal((await apply({ acknowledgements: [`index:${FORM}`], values, secrets: { 'secret/OTHER': 'x' }, confirm: 'test' })).status, 400);
+  assert.deepEqual(h.writes('test'), [], 'nothing written by refused applies');
+  const commitsBefore = (await log(h.dir, { limit: 1000 })).length;
+
+  // Secrets given for this run stand in for the connection acknowledgement.
+  const started = await apply({ acknowledgements: [`index:${FORM}`], values, secrets, confirm: 'test' });
+  assert.equal(started.status, 202, started.body);
+  await h.server.jobs.wait(started.json.jobId);
+  const info = (await h.call('GET', `/api/jobs/${started.json.jobId}`)).json;
+  const events = (await h.call('GET', `/api/jobs/${started.json.jobId}/events`)).body;
+  assert.equal(info.status, 'succeeded', JSON.stringify(info.error));
+  const result = info.result as ApplyResult;
+  assert.equal(result.status, 'applied', String(result.error));
+  assert.match(events, /"step":"backup"/);
+  assert.match(events, /event: item/);
+
+  // Only the selected keys were written (the changed team was not).
+  assert.deepEqual(h.writes('test'), [
+    'POST /import/connections', 'POST /import/connections/c-1/operations',
+    'PUT /kapps/services/forms/it-request', 'POST /kapps/services/forms/it-request/backgroundJobs',
+  ]);
+  assert.deepEqual(h.writes('dev'), []);
+  const connWrite = h.calls.find((c) => c.path === '/import/connections')!;
+  assert.equal((connWrite.body as any).config.auth.password, PLANTED_RUN, 'the run secret reached the target');
+  const formWrite = h.calls.find((c) => c.method === 'PUT' && c.path === '/kapps/services/forms/it-request')!;
+  assert.deepEqual((formWrite.body as any).attributes, [{ name: 'Owner', values: ['IT'] }]);
+  const sid = JSON.parse(readFileSync(path.join(h.dir, 'kinetic-migrate.json'), 'utf8')).secretsId;
+  assert.equal(await h.store.has(`${sid}/test/secret/TICKETING__PASSWORD`), false, 'not remembered');
+
+  // Values saved, backup and run committed, run record written.
+  assert.deepEqual(JSON.parse(readFileSync(path.join(h.dir, 'overrides', 'test.json'), 'utf8')).artifacts[FORM], { 'attributes.Owner': ['IT'] });
+  const messages = (await log(h.dir, { limit: 1000 })).slice(0, -commitsBefore).map((e) => e.message.split('\n')[0]);
+  assert.deepEqual(messages, ["Applied '3 items from Dev' to Test", "Backup of Test before applying '3 items from Dev'", 'Updated environment values for Test']);
+  assert.ok(result.backupCommit);
+  const runFile = readdirSync(path.join(h.dir, 'runs'));
+  assert.equal(runFile.length, 1);
+  const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', runFile[0]), 'utf8')) as RunRecord;
+  assert.equal(run.id, result.runId);
+  assert.deepEqual([run.status, run.to, run.from, run.backupCommit], ['applied', 'test', 'dev', result.backupCommit]);
+  assert.deepEqual(run.selection, [CONN, OP, FORM].sort());
+  assert.deepEqual(run.secretsUsed, [SECRET_ID]);
+  assert.deepEqual(run.items.map((i) => [i.key, i.status]), [[CONN, 'done'], [OP, 'done'], [FORM, 'done']]);
+  assert.equal(run.source.commit, p.sourceCommit);
+  assert.ok(existsSync(path.join(h.dir, 'state', 'test.json')));
+
+  assertNoSecret(h, [events]);
+  const repo = await repoText(h);
+  assert.ok(!repo.includes(PLANTED) && !repo.includes(PLANTED_RUN), 'no secret in the repository');
+});
+
+test('remembered secrets go to the store; a readOnly target is refused; a changeset records where it was applied', async (t) => {
+  const h = await harness(t);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+
+  // Protected (read-only) target: planning works, applying is refused.
+  const toProd = await plan(h, { to: 'prod', from: 'dev', selected: ['teams/Ops'] });
+  const ro = await h.call('POST', `${P}/plans/${toProd.planId}/apply`, { acknowledgements: [], confirm: 'prod' });
+  assert.equal(ro.status, 403);
+  assert.equal(ro.json.error.code, 'read_only');
+  assert.deepEqual(h.writes(), []);
+
+  const cs = (await h.call('POST', `${P}/changesets`, { name: 'Team text', from: 'dev', keys: ['teams/Ops', CONN] })).json as Changeset;
+  const p = await plan(h, { to: 'test', changesetId: cs.id });
+  assert.equal(p.name, 'Team text');
+  assert.equal(p.changesetId, cs.id);
+  assert.equal(p.sourceCommit, cs.sourceCommit);
+  const job = await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [], secrets: { [SECRET_ID]: PLANTED_RUN }, remember: true, confirm: 'test' });
+  assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
+  assert.equal(job.result.status, 'applied', job.result.error);
+  assert.deepEqual(h.writes('test'), ['PUT /teams/ops', 'POST /import/connections']);
+  assert.equal(await h.store.has(`${JSON.parse(readFileSync(path.join(h.dir, 'kinetic-migrate.json'), 'utf8')).secretsId}/test/secret/TICKETING__PASSWORD`), true);
+  const saved = (await h.call('GET', `${P}/changesets/${cs.id}`)).json as Changeset;
+  assert.deepEqual(saved.appliedTo.map((a) => [a.env, a.runId]), [['test', job.result.runId]]);
+  assert.match((await log(h.dir, { limit: 1 }))[0].message, /^Applied 'Team text' to Test\n\nEnvironment: test\nRun: .+\nChangeset: /);
+  assert.equal((await h.call('POST', `${P}/plans/nope/apply`, { confirm: 'test' })).status, 404);
+  assertNoSecret(h, [job.events]);
+});
+
+test('a failed item stops the apply: partial run record, plain error, then resume re-plans and continues', async (t) => {
+  const h = await harness(t);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  const p = await plan(h, { to: 'test', from: 'dev', selected: ['teams/Ops', FORM, CONN, OP] });
+  const original = h.spaces.test;
+  h.spaces.test = () => ({ ...original(), 'PUT core/kapps/services/forms/it-request': () => { const e = new Error(`PUT https://test.example.com/x failed with 500: ${PLANTED}`); throw Object.assign(e, { name: 'HttpError', status: 500 }); } });
+  const body = { acknowledgements: [`index:${FORM}`, `connection-secrets:${CONN}`], values: {}, confirm: 'test' };
+  const first = await h.job('POST', `${P}/plans/${p.planId}/apply`, body);
+  // Required env values: none configured here.
+  assert.equal(first.status, 'succeeded', JSON.stringify(first.error));
+  assert.equal(first.result.status, 'partial');
+  assert.equal(first.result.error, `${FORM}: The Kinetic Platform returned an error (500).`);
+  assert.match((await log(h.dir, { limit: 1 }))[0].message, /^Partly applied/);
+  const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${first.result.runId}.json`), 'utf8')) as RunRecord;
+  assert.equal(run.status, 'partial');
+  assert.equal(run.items.find((i) => i.key === FORM)!.status, 'failed');
+
+  h.spaces.test = original;
+  const resumed = await h.job('POST', `${P}/plans/${p.planId}/apply`, body);
+  assert.equal(resumed.result.status, 'applied', resumed.result.error);
+  assertNoSecret(h, [first.events, resumed.events]);
+});

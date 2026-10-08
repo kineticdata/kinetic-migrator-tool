@@ -2,7 +2,8 @@
 // as "Snapshot of <Env>" (with the items that drifted since their last
 // promotion), and the in-memory snapshot cache that Explore and Compare read:
 // artifacts, tree index and relationships, keyed by the snapshot commit.
-import { statSync } from 'node:fs';
+import fs, { statSync } from 'node:fs';
+import git from 'isomorphic-git';
 import path from 'node:path';
 import type { SnapshotResult } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
@@ -12,7 +13,9 @@ import {
 } from './engine-sync.ts';
 import { environmentExists, resolveEnv } from './environments.ts';
 import type { Emit } from './jobs.ts';
-import { commitChange, displayName, isPlainObject, secretsId, withProjectLock, type ProjectRef } from './project-meta.ts';
+import {
+  DEFAULT_AUTHOR, commitChange, displayName, isPlainObject, readMeta, secretsId, withProjectLock, type ProjectRef,
+} from './project-meta.ts';
 import { log } from './repo.ts';
 import { makeScrubber } from './scrub.ts';
 import { buildTreeIndex, type TreeIndex } from './tree-index.ts';
@@ -43,12 +46,20 @@ export function driftedKeys(projectDir: string, env: string, artifacts: Map<stri
 export async function takeSnapshot(opts: {
   ref: ProjectRef; env: EngineEnv; title: string; trailers?: Record<string, string>;
   onEvent?: OnEvent; signal?: AbortSignal; clientFactory?: ClientFactory;
+  // Record the commit even when the export matches the previous snapshot
+  // (backups, so History shows one per apply).
+  always?: boolean;
 }): Promise<SnapshotResult> {
   const { ref, env } = opts;
   const r = await runExport({ projectDir: ref.dir, env, onEvent: opts.onEvent, signal: opts.signal, clientFactory: opts.clientFactory, log: () => {} });
   const drifted = driftedKeys(ref.dir, env.name, readTree(snapshotDir(ref.dir, env.name)));
   const body = drifted.length ? `Drifted: ${drifted.length} item(s) changed since the last promotion.\n${drifted.join('\n')}` : undefined;
-  const commit = await commitChange(ref, commitMessage(opts.title, { Environment: env.name, ...opts.trailers }, body));
+  const message = commitMessage(opts.title, { Environment: env.name, ...opts.trailers }, body);
+  let commit = await commitChange(ref, message);
+  if (!commit && opts.always) {
+    const author = readMeta(ref.dir).author ?? DEFAULT_AUTHOR;
+    commit = await git.commit({ fs, dir: ref.dir, message, author: { ...author, timestamp: Math.floor(Date.now() / 1000) } });
+  }
   return { env: env.name, commit, total: r.artifacts, counts: r.counts, drifted };
 }
 

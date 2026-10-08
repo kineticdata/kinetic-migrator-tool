@@ -105,6 +105,8 @@ export interface Harness {
   server: TestServer;
   store: MemoryStore;
   calls: Call[];
+  // The fake spaces by environment; tests may swap one to simulate changes.
+  spaces: Record<string, () => Record<string, unknown>>;
   bodies: string[];
   dir: string;
   call: (method: string, pathname: string, body?: unknown) => Promise<RawResponse & { json: any }>;
@@ -117,7 +119,8 @@ export interface Harness {
 export async function harness(t: { after: (fn: () => Promise<void> | void) => void }, envs = { dev: true, test: false, prod: true }): Promise<Harness> {
   const store = new MemoryStore();
   const calls: Call[] = [];
-  const server = await startTestServer({ secrets: store, clientFactory: fakeFactory({ dev: devRoutes, test: testRoutes, prod: testRoutes }, calls) });
+  const spaces: Record<string, () => Record<string, unknown>> = { dev: devRoutes, test: testRoutes, prod: testRoutes };
+  const server = await startTestServer({ secrets: store, clientFactory: fakeFactory(spaces, calls) });
   t.after(() => server.cleanup());
   const bodies: string[] = [];
   const call = async (method: string, pathname: string, body?: unknown) => {
@@ -147,7 +150,7 @@ export async function harness(t: { after: (fn: () => Promise<void> | void) => vo
     await call('PUT', `/api/projects/sync-test/environments/${name}/credentials`, { username: 'admin', password: PLANTED });
   }
   const writes = (env?: string) => calls.filter((c) => c.method !== 'GET' && (!env || c.env === env)).map((c) => `${c.method} ${c.path}`);
-  return { server, store, calls, bodies, dir, call, job, writes };
+  return { server, store, calls, spaces, bodies, dir, call, job, writes };
 }
 
 export function assertNoSecret(h: Harness, extra: string[] = []): void {
