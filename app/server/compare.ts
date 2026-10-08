@@ -13,7 +13,7 @@ import { resolveCommit } from './pinned.ts';
 import { readTreeAt } from './repo.ts';
 import { loadConfig, loadOverrides, type ClientFactory, type EngineEnv } from './engine.ts';
 import {
-  MODULES, buildPlan, buildRelationships, collectionWord, compareArtifacts, computePlan, diffValues, loadState, moduleFor, suggest, targetOnlyEntries, unresolvedErrors,
+  MODULES, buildPlan, buildRelationships, collectionWord, compareArtifacts, computePlan, diffItem, loadState, moduleFor, suggest, targetOnlyEntries, unresolvedErrors,
   type EnginePlan, type LoadedTree, type Relationships, type TargetOnlyEntry,
 } from './engine-sync.ts';
 import { readEnvironmentFile, resolveEnv } from './environments.ts';
@@ -266,7 +266,7 @@ export function registerCompareRoutes(router: Router, ctx: SyncContext): void {
       const last = await lastPromoted(ref, c.result.to, key);
       item.threeWay = {
         lastPromoted: last?.data ?? null, lastPromotedAt: last?.at ?? null, target: i.current, incoming: i.incoming,
-        targetChanges: last ? diffValues(last.data, i.current) : [],
+        targetChanges: last ? diffItem(moduleFor(key), last.data, i.current) : [],
       };
     }
     return { json: c.scrub(item) };
@@ -278,7 +278,10 @@ export function registerCompareRoutes(router: Router, ctx: SyncContext): void {
     if (!Array.isArray(selected) || !selected.every((k) => typeof k === 'string')) throw badRequest('"selected" is a list of item keys.');
     const changed = new Set([...c.items.values()].filter((i) => ['new', 'changed', 'drifted'].includes(i.status)).map((i) => i.key));
     c.relationships ??= buildRelationships([...c.source].map(([key, data]) => ({ key, data })));
-    const list = suggest({ selected: new Set(selected as string[]), relationships: c.relationships, changedKeys: changed });
+    const list = suggest({
+      selected: new Set(selected as string[]), relationships: c.relationships, changedKeys: changed,
+      targetOf: (key) => c.items.get(key)?.current ?? undefined,
+    });
     const out: SuggestionOut[] = list.map((s) => {
       const status = c.items.get(s.key)!.status;
       const why = status === 'new' ? `which is new in ${c.result.fromName}` : `which changed in ${c.result.fromName}`;

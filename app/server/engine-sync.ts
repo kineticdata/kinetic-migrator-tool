@@ -110,6 +110,8 @@ export const buildPlan: (opts: {
   overrides?: EngineOverrides; vars?: Record<string, string>; config: EngineConfig; sourceName?: string; targetName?: string;
 }) => EnginePlan = planModule.buildPlan;
 export const diffValues: (from: unknown, to: unknown) => DiffEntry[] = planModule.diffValues;
+// diffValues for one item of a module (some fields differ as whole lists).
+export const diffItem: (mod: EngineModule | undefined, from: unknown, to: unknown) => DiffEntry[] = planModule.diffItem;
 // A tree read in any layout (older ones re-keyed from content, see layout.mjs).
 export type LoadedTree = Map<string, unknown> & { layout?: number; rekeyed?: Map<string, string>; unresolved?: Map<string, string> };
 export const readTree: (dir: string) => LoadedTree = layoutModule.loadTree;
@@ -127,7 +129,7 @@ export const removeTree: (dir: string) => void = storeModule.removeTree;
 export const MODULES: EngineModule[] = indexModule.MODULES;
 export const moduleFor: (key: string) => EngineModule | undefined = indexModule.moduleFor;
 export const buildRelationships: (artifacts: Array<{ key: string; data: unknown }>) => Relationships = relationshipsModule.buildRelationships;
-export const suggest: (opts: { selected: Set<string>; relationships: Relationships; changedKeys: Set<string> }) => Suggestion[] = relationshipsModule.suggest;
+export const suggest: (opts: { selected: Set<string>; relationships: Relationships; changedKeys: Set<string>; targetOf?: (key: string) => any }) => Suggestion[] = relationshipsModule.suggest;
 export const summarize: (key: string, data: unknown, type: string, extra?: Record<string, unknown>) => Summary = summariesModule.summarize;
 export const compareText: (a: string, b: string) => number = normalizeModule.compareText;
 // No hashOf/withoutEnvBound here on purpose: compare a target with its

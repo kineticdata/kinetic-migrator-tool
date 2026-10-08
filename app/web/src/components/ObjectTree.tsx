@@ -8,7 +8,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
-  Box, Check, ChevronRight, Database, FileText, Folder, Globe, KeyRound, Layers, Minus, Package, Plug, Puzzle, Repeat, Settings2, Users, Workflow,
+  Box, Check, ChevronRight, Database, FileText, Folder, Globe, KeyRound, Layers, Minus, Package, Plug, Puzzle, Repeat, Settings2, Tags, Users, Workflow,
 } from 'lucide-react';
 import type { NodeKind, TreeNode } from '../../../shared/sync-api';
 import { Spinner } from './ui/Spinner';
@@ -60,6 +60,7 @@ const kindIcon: Record<NodeKind, typeof Folder> = {
   model: Layers,
   'file-resource': Package,
   routine: KeyRound,
+  'task-category': Tags,
   other: FileText,
 };
 

@@ -34,6 +34,7 @@ const LEAVE = 'kapps/hr/forms/leave/form';
 const TRAVEL = 'kapps/hr/forms/travel/form';
 const APPROVAL = 'kapps/hr/forms/approval/form';
 const CREATE_OP = 'connections/tickets/operations/create';
+const CATEGORY = 'task-categories/Notifications';
 
 function tree(withLeave: boolean): Record<string, CompareTreeNode[]> {
   const formCounts = { ...(withLeave ? { new: 1 } : {}), changed: 1, drifted: 1, same: 1 };
@@ -44,6 +45,7 @@ function tree(withLeave: boolean): Record<string, CompareTreeNode[]> {
       group('group:handlers', 'Handlers', { drifted: 1 }),
       group('group:teams', 'Teams', { 'only-target': 1 }),
       group('group:models', 'Models', { same: 1 }),
+      group('group:task-categories', 'Task categories', { changed: 1 }),
     ],
     'group:kapps': [n('kapps/hr/kapp', 'HR', { kind: 'kapp', status: 'same', hasChildren: true, counts: formCounts })],
     'kapps/hr/kapp': [group('group:kapps/hr/forms', 'Forms', formCounts)],
@@ -58,6 +60,7 @@ function tree(withLeave: boolean): Record<string, CompareTreeNode[]> {
     'group:handlers': [n('handlers/mail/handler', 'Mail', { kind: 'handler', status: 'drifted' })],
     'group:teams': [n('teams/ops', 'Operations', { kind: 'team', status: 'only-target' })],
     'group:models': [n('models/people', 'People', { kind: 'model', status: 'same' })],
+    'group:task-categories': [n(CATEGORY, 'Notifications', { kind: 'task-category', status: 'changed' })],
   };
 }
 
@@ -89,6 +92,13 @@ const ITEMS: Record<string, CompareItem> = {
 ITEMS['kapps/hr/kapp'] = {
   key: 'kapps/hr/kapp', type: 'kapp', label: 'HR', status: 'same', diff: [], current: { name: 'HR' }, incoming: { name: 'HR' },
   targetOnlyEntries: [{ key: 'kapps/hr/kapp#categories/old-hardware', collection: 'categories', word: 'category', name: 'old-hardware' }],
+};
+
+ITEMS[CATEGORY] = {
+  key: CATEGORY, type: 'task-categories', label: 'Notifications', status: 'changed',
+  diff: [{ path: 'handlers', from: ['utilities_echo_v1'], to: ['mail_send_v1', 'utilities_echo_v1'] }, { path: 'routines', from: [], to: ['routine_notify_v1'] }],
+  current: { name: 'Notifications', handlers: ['utilities_echo_v1'], routines: [] },
+  incoming: { name: 'Notifications', handlers: ['mail_send_v1', 'utilities_echo_v1'], routines: ['routine_notify_v1'] },
 };
 
 ITEMS['teams/ops'] = {
@@ -452,4 +462,20 @@ test('an item\'s entries only in the target are listed on it, each with its own 
   expect(m.callsTo('POST', '/api/projects/acme-demo/plans')[0].body).toEqual({
     to: 'test', from: 'dev', selected: [], remove: ['kapps/hr/kapp#categories/old-hardware'], sourceCommit: 'c-dev',
   });
+});
+
+test('Task categories show as their own group; a category\'s members differ as lists', async () => {
+  setup();
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare' });
+  const t = await screen.findByRole('tree', { name: /Differences/ });
+  await user.click(await within(t).findByText('Task categories'));
+  await user.click(await within(t).findByText('Notifications'));
+  const table = await screen.findByRole('table', { name: 'Changes' });
+  const rows = within(table).getAllByRole('row').slice(1);
+  expect(rows[0]).toHaveTextContent('Handlers');
+  expect(rows[0]).toHaveTextContent('utilities_echo_v1');
+  expect(rows[0]).toHaveTextContent('mail_send_v1, utilities_echo_v1');
+  expect(rows[1]).toHaveTextContent('Routines');
+  expect(rows[1]).toHaveTextContent('routine_notify_v1');
 });

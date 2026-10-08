@@ -116,3 +116,97 @@ test('fake Dev and Test: differences, a suggestion, an apply that sticks, a re-p
   const routine = again.items.find((i: { key: string }) => i.key === 'routines/Notify Requester');
   assert.equal(routine.action, 'unchanged', 'the routine was created with its tree, inputs and outputs');
 });
+
+test('fake Dev and Test: Task categories compare, are suggested for a handler, promote with their members and are removed', async (t) => {
+  const fake = fakeMode({ KINETIC_MIGRATE_FAKE: '1' })!;
+  const server = await startTestServer({ ...fake });
+  t.after(() => server.cleanup());
+  const call = async (method: string, pathname: string, body?: unknown) => {
+    const res = await server.api(pathname, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+    return { ...res, json: res.body ? JSON.parse(res.body) : undefined };
+  };
+  const job = async (method: string, pathname: string, body?: unknown) => {
+    const started = await call(method, pathname, body);
+    assert.equal(started.status, 202, started.body);
+    await server.jobs.wait(started.json.jobId);
+    const info = (await call('GET', `/api/jobs/${started.json.jobId}`)).json;
+    assert.equal(info.status, 'succeeded', JSON.stringify(info.error));
+    return info.result;
+  };
+  assert.equal((await call('POST', '/api/projects', { name: 'Demo' })).status, 201);
+  let position = 0;
+  for (const env of ['dev', 'test']) {
+    await call('PUT', `${P}/environments/${env}`, { url: `https://${env}.example.com`, readOnly: env === 'dev', position: position++ });
+    await call('PUT', `${P}/environments/${env}/credentials`, { username: 'admin', password: 'any' });
+    await job('POST', `${P}/snapshots`, { env });
+  }
+  const NOTIFY = 'task-categories/Notifications';
+  const HANDLER = 'handlers/mail_send_v1/handler';
+  const ROUTINE = 'routines/Notify Requester';
+
+  const cmp = await job('POST', `${P}/compare`, { from: 'dev', to: 'test', mode: 'preview' });
+  const root = (await call('GET', `${P}/compare/${cmp.compareId}/tree`)).json as Array<{ id: string; label: string }>;
+  const group = root.find((n) => n.id === 'group:task-categories');
+  assert.equal(group?.label, 'Task categories');
+  const kids = (await call('GET', `${P}/compare/${cmp.compareId}/tree?parent=group:task-categories`)).json as Array<{ key: string; status: string; kind: string }>;
+  assert.deepEqual(kids.map((k) => [k.key, k.status, k.kind]), [
+    ['task-categories/Legacy Tools', 'only-target', 'task-category'],
+    [NOTIFY, 'changed', 'task-category'],
+    ['task-categories/System Controls', 'manual', 'task-category'],
+  ], 'only Stored categories; Dev\'s Stored System Controls shares its name with the built-in one, so it is set by hand');
+  const item = (await call('GET', `${P}/compare/${cmp.compareId}/item?key=${encodeURIComponent(NOTIFY)}`)).json;
+  // Members as whole lists; Test's own member is kept (and removable).
+  assert.deepEqual(item.diff, [
+    { path: 'description', from: 'Email', to: 'Email and alerts' },
+    { path: 'handlers', from: ['utilities_echo_v1'], to: ['mail_send_v1', 'utilities_echo_v1'] },
+    { path: 'routines', from: [], to: ['routine_notify_requester_v1'] },
+  ]);
+  assert.deepEqual(item.current.handlers, ['utilities_echo_v1']);
+  assert.deepEqual(item.targetOnlyEntries, [{ key: `${NOTIFY}#handlers/utilities_echo_v1`, collection: 'handlers', name: 'utilities_echo_v1', word: 'handler' }]);
+
+  const sug = (await call('POST', `${P}/compare/${cmp.compareId}/suggestions`, { selected: [HANDLER] })).json as Array<{ key: string; reason: string }>;
+  const forCategory = sug.find((s) => s.key === NOTIFY);
+  assert.match(forCategory?.reason ?? '', /Mail Send belongs to Task category "Notifications", so Mail Send appears in the workflow builder/);
+
+  // The category alone: its handler and routine are not in Test, so they are
+  // left out with a warning (not an error). The routine alone: in no category.
+  const alone = await job('POST', `${P}/plans`, { to: 'test', from: 'dev', selected: [NOTIFY] });
+  assert.deepEqual(alone.errors, []);
+  assert.ok(alone.warnings.includes(`${NOTIFY}: mail_send_v1 is not in test; promote it to add it to the category`), JSON.stringify(alone.warnings));
+  const routineOnly = await job('POST', `${P}/plans`, { to: 'test', from: 'dev', selected: [ROUTINE] });
+  assert.ok(routineOnly.warnings.some((w: string) => w.startsWith(`${ROUTINE}: will be in no Task category in test`)), JSON.stringify(routineOnly.warnings));
+
+  const selected = [HANDLER, ROUTINE, NOTIFY];
+  const remove = ['task-categories/Legacy Tools', `${NOTIFY}#handlers/utilities_echo_v1`];
+  const plan = async () => job('POST', `${P}/plans`, { to: 'test', from: 'dev', selected, remove });
+  const p = await plan();
+  assert.deepEqual(p.errors, []);
+  const notify = p.items.find((i: { key: string }) => i.key === NOTIFY);
+  assert.equal(notify.action, 'update');
+  assert.deepEqual(p.removals.map((r: { key: string; label: string; action: string }) => [r.key, r.label, r.action]), [
+    ['task-categories/Legacy Tools', 'Legacy Tools', 'delete'],
+    [`${NOTIFY}#handlers/utilities_echo_v1`, 'utilities_echo_v1 (handler of Notifications)', 'delete'],
+  ]);
+  const values: Record<string, Record<string, unknown>> = {};
+  for (const v of p.environmentValues) (values[v.key] ??= {})[v.path] = v.to ?? v.from ?? 'x';
+  const started = await call('POST', `${P}/plans/${p.planId}/apply`, {
+    acknowledgements: p.needsAttention.map((n: { id: string }) => n.id), values, confirm: 'test',
+  });
+  assert.equal(started.status, 202, started.body);
+  await server.jobs.wait(started.json.jobId);
+  const applied = (await call('GET', `/api/jobs/${started.json.jobId}`)).json.result;
+  assert.equal(applied.status, 'applied', JSON.stringify(applied));
+
+  // Test now holds the category with Dev's members and nothing else.
+  const env = { name: 'test', url: 'https://test.example.com', readOnly: false, username: 'a', password: 'b', vars: {} };
+  const listed = await fake.clientFactory({ env, mode: 'read' }).get('task', '/categories', { include: 'details,handlers,trees' }) as { categories: Array<{ name: string; type: string; description: string; handlers: Array<{ definitionId: string }>; trees: Array<{ definitionId: string }> }> };
+  assert.deepEqual(listed.categories.map((c) => [c.name, c.type, c.description, c.handlers.map((h) => h.definitionId), c.trees.map((r) => r.definitionId)]), [
+    ['Notifications', 'Stored', 'Email and alerts', ['mail_send_v1'], ['routine_notify_requester_v1']],
+    ['System Controls', 'Integrated', '', ['system_join_v1', 'system_junction_v1'], []],
+  ]);
+
+  const again = await plan();
+  assert.equal(again.items.find((i: { key: string }) => i.key === NOTIFY).action, 'unchanged');
+  assert.deepEqual(again.removals.map((r: { action: string }) => r.action), ['gone', 'gone']);
+  assert.ok(!again.warnings.some((w: string) => /Task categor|workflow builder/.test(w)), JSON.stringify(again.warnings));
+});

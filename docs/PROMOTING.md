@@ -14,12 +14,14 @@ Space settings, attribute definitions and security policies; teams (without
 memberships); bridge models; file resources; Integrator connections and
 operations; kapps (settings, attribute definitions, policies, categories,
 form types, integrations, index definitions); forms; WebAPIs; workflows; Task
-handlers (package and settings); global routines; and submissions on forms
-you allowlist as reference data.
+handlers (package and settings); global routines; Task categories (the
+Stored ones, with their handlers and routines); and submissions on forms you
+allowlist as reference data.
 
 Not promoted: users, team memberships, transactional submissions, built-in
 handlers (`utilities_*`, `system_*`, and any handler with no downloadable
-package), and webhooks.
+package), built-in (Integrated) Task categories, Task policy rules, and
+webhooks.
 
 ## 1. Create a project
 
@@ -424,8 +426,8 @@ when `--from` is omitted; with neither, the command stops and asks for
 Apply shows the plan, asks you to type the environment name (`--yes` skips
 this for CI), saves a full export of the target under `backups/`, then
 creates and updates in dependency order (handlers, then global routines,
-then the WebAPIs and workflows that use them; a routine that calls another
-routine comes after it). If something fails it stops and
+then the Task categories that hold them, then the WebAPIs and workflows that
+use them; a routine that calls another routine comes after it). If something fails it stops and
 says how far it got; fix the cause and run it again, since every step is
 safe to repeat.
 
@@ -433,7 +435,7 @@ Nothing is deleted unless you name the type: `--prune teams`,
 `--prune forms`, `--prune data` (rows not in the export, for entries with
 match fields only), and so on. The
 types are teams, models, file-resources, connections, operations, handlers,
-routines, kapps, forms, webapis, workflows and data.
+routines, task-categories, kapps, forms, webapis, workflows and data.
 
 Routines are exported with their inputs and outputs (the Task API returns
 them only when asked: `include=treeJson,details,inputs,outputs`); a snapshot
@@ -454,8 +456,56 @@ For handlers, apply installs a new one (upload, then its settings and any
 supplied secret values), re-uploads the package with `force` when its
 `packageSha256` changed (then re-sends the plaintext settings), and
 otherwise sends only the plaintext settings that differ. Other differences
-(name, categories, status) come from the package or the console; apply warns
-and leaves them for you.
+(name, status) come from the package or the console; apply warns and leaves
+them for you. A handler's categories are promoted as Task categories (below),
+so they are never a difference of the handler itself, nor part of its drift
+check (a state entry recorded by an earlier version still matches as long as
+the handler is unchanged).
+
+### Task categories
+
+A handler or routine that is in no Task category does not appear in the
+workflow builder, so a promoted handler or routine is only usable there once
+its categories come along. Task categories are exported under
+`task-categories/<name>`: the name, the description, the definitionIds of
+the handlers and routines in the category, and its policy rule names (for
+information only).
+
+- Only **Stored** categories are exported and promoted. **Integrated**
+  categories are built into the platform: never exported, changed or
+  removed. A Stored and an Integrated category may share a name (a space
+  may have a Stored "System Controls" beside the built-in one). Every Task
+  API call addresses a category by name, so a Stored category whose name a
+  built-in category also has, in the source or the target, is never written
+  by name: the plan shows it as **manual** with the warning "`<name>: the
+  target also has a built-in category with this name; set its members in
+  <target> by hand`", and removing it or one of its members is refused.
+- Membership is additive. Handlers and routines that only the target's copy
+  of a category holds are kept and are no difference. A member is added only
+  when it is in the target once the run's creates are done (built-in
+  handlers are in every space; a handler or routine selected for the same
+  run counts). Otherwise the plan warns "`<category>: <id> is not in
+  <target>; promote it to add it to the category`" and leaves it out; it is
+  not an error.
+- A new category is one `POST /categories` (name, description, type
+  `Stored`); each member is added with its own `POST
+  /categories/<name>/handlers` or `/routines` (`{ definitionId }`). A
+  changed description is a `PUT /categories/<name>` with the name and
+  description only: a `PUT` with member lists clears the category's routines
+  (or fails), so members are never sent that way.
+- Policy rules are not migrated. When the source's category has policy rules
+  the target's lacks, the plan warns "`<category>: its policy rules (…) are
+  not carried; set them in <target>`".
+- Compare shows a **Task categories** group; a category's members differ as
+  whole lists. Selecting a handler or routine suggests each category that
+  holds it in the source when the target's copy does not ("…, so <name>
+  appears in the workflow builder"). The plan also warns when a handler or
+  routine it creates will be in no Task category in the target.
+- A category only in the target can be removed (`DELETE /categories/<name>`),
+  and so can a member only the target's copy holds: an entry keyed
+  `task-categories/<name>#handlers/<definitionId>` or `#routines/<definitionId>`
+  (see Entries below). Restoring from the backup recreates a removed
+  category and puts its members back (those that are in the target).
 
 ## Removing items from a target
 
@@ -508,8 +558,8 @@ What happens:
   you reviewed the plan, it is not deleted; the run says so and is partial.
   One that is already gone is fine.
 - Never removable: the space itself, built-in handlers (`utilities_*`,
-  `system_*`), reference data records (use `--prune data`) and the
-  `task-refs` summary. A changeset cannot save a removal of an item that
+  `system_*`), built-in (Integrated) Task categories (never listed),
+  reference data records (use `--prune data`) and the `task-refs` summary. A changeset cannot save a removal of an item that
   is in its pinned source snapshot.
 - The backup taken before the apply can restore removed items (History,
   Restore…), with limits the plan and the confirm step spell out: a kapp
@@ -517,19 +567,21 @@ What happens:
   a connection without its credentials, a handler without its secret
   property values, and a team without its members.
 
-### Entries of the space and of a kapp
+### Entries of the space, of a kapp and of a Task category
 
 The space's attribute definitions (space, team, user, user profile) and
 security policy definitions, and a kapp's attribute definitions (kapp, form,
 category), security policy definitions, form types, categories and
-integrations are created and updated with their item. Entries only the
+integrations, and a Task category's handlers and routines, are created and
+updated with their item. Entries only the
 target has are kept and never count as a difference. Compare lists them on
 the item under **Only in <target>**, each with its own Remove action. Such
 a removal is keyed `<item key>#<collection>/<name>` (for example
 `kapps/services/kapp#categories/old-hardware`; the name is encoded like a
 file name) and works with `--remove` too. Apply deletes only the chosen
 entries, through the collection's own endpoint
-(`DELETE /kapps/<kapp>/categories/<slug>`, `DELETE /spaceAttributeDefinitions/<name>`…).
+(`DELETE /kapps/<kapp>/categories/<slug>`, `DELETE /spaceAttributeDefinitions/<name>`,
+`DELETE /categories/<name>/handlers/<definitionId>` on the Task API…).
 The plan warns when an entry is still in use: an attribute definition set on
 the space, a team, the kapp, a category or a form; a category forms are in;
 a security policy definition a policy names; a form type forms use. (User
