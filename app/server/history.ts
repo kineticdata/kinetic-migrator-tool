@@ -20,12 +20,12 @@ const TYPES: HistoryType[] = ['snapshot', 'changeset', 'applied', 'backup', 'res
 // The whole log: backups and runs of any age must stay findable.
 const ALL = Number.MAX_SAFE_INTEGER;
 
-function typeOf(title: string): HistoryType {
+export function typeOf(title: string): HistoryType {
   if (/^Snapshot of /.test(title)) return 'snapshot';
   if (/^Backup of /.test(title)) return 'backup';
   if (/^(Saved|Updated|Deleted) changeset /.test(title)) return 'changeset';
-  if (/^(Applied|Partly applied) /.test(title)) return 'applied';
-  if (/^(Restored|Partly restored) /.test(title)) return 'restore';
+  if (/^(Applied|Partly applied|Failed to apply|Cancelled applying) /.test(title)) return 'applied';
+  if (/^(Restored|Partly restored|Failed to restore) /.test(title)) return 'restore';
   return 'project';
 }
 

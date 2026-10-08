@@ -29,7 +29,7 @@ function FilterSelect({ label, value, onChange, children }: { label: string; val
   return (
     <div className="flex items-center gap-2">
       <label htmlFor={id} className="text-[13px] font-medium text-muted">{label}</label>
-      <select id={id} value={value} onChange={(e) => onChange(e.target.value)} className={cn(inputClasses, 'h-8 w-auto min-w-32 py-0 text-[13px]')}>
+      <select id={id} value={value} onChange={(e) => onChange(e.target.value)} className={cn(inputClasses, 'w-auto min-w-36')}>
         {children}
       </select>
     </div>

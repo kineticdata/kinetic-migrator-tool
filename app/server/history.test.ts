@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { CompareItem, CompareResult, HistoryDetail, HistoryEvent } from '../shared/sync-api.ts';
 import { PLANTED, assertNoSecret, harness, testRoutes } from './sync-fixtures.ts';
+import { typeOf } from './history.ts';
 
 const P = '/api/projects/sync-test';
 const TEAM = 'teams/Ops';
@@ -70,4 +71,21 @@ test('history events, drift with a three-way view, and restore from a backup', a
   assert.deepEqual([latest.type, latest.title], ['restore', 'Restored Test from a backup']);
   assertNoSecret(h);
   assert.ok(!h.bodies.join('').includes(PLANTED));
+});
+
+test('commit titles map to history types, including cancelled and failed runs', () => {
+  const cases: Array<[string, string]> = [
+    ['Snapshot of Dev', 'snapshot'],
+    ['Backup of Test', 'backup'],
+    ["Saved changeset 'Q4'", 'changeset'],
+    ["Applied 'Q4' to Test", 'applied'],
+    ["Partly applied 'Q4' to Test", 'applied'],
+    ["Failed to apply 'Q4' to Test", 'applied'],
+    ["Cancelled applying 'Q4' to Test", 'applied'],
+    ['Restored Test from a backup', 'restore'],
+    ['Partly restored Test from a backup', 'restore'],
+    ['Failed to restore Test from a backup', 'restore'],
+    ['Updated repository settings', 'project'],
+  ];
+  for (const [title, type] of cases) assert.equal(typeOf(title), type, title);
 });

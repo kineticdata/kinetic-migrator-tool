@@ -98,15 +98,45 @@ test('repository settings: author, remote and a write-only token', async (t) => 
   const stored = [...(h.store as any).values.entries()] as Array<[string, string]>;
   assert.ok(stored.some(([account, v]) => /\/_project\/git\/token$/.test(account) && v === TOKEN));
 
-  // Leaving the token out keeps it; null clears it.
-  const kept = (await h.call('PUT', `${P}/repository`, { remoteUrl: 'https://git.example.com/team/other.git' })).json as RepositorySettings;
-  assert.deepEqual(kept.remote, { url: 'https://git.example.com/team/other.git', token: { has: true } });
-  const cleared = (await h.call('PUT', `${P}/repository`, { token: null })).json as RepositorySettings;
-  assert.equal(cleared.remote.token.has, false);
-  await h.call('PUT', `${P}/repository`, { token: TOKEN });
-  // Disconnecting the remote forgets its token too.
-  const gone = (await h.call('PUT', `${P}/repository`, { remoteUrl: null })).json as RepositorySettings;
-  assert.deepEqual(gone.remote, { url: null, token: { has: false } });
+  // The author change is in History.
+  const events = (await h.call('GET', `${P}/history`)).json as Array<{ title: string; author: string; type: string }>;
+  assert.deepEqual([events[0].title, events[0].author, events[0].type], ['Updated repository settings', 'Pat Example', 'project']);
+
+  const hasToken = () => [...(h.store as any).values.keys()].some((a: string) => /\/_project\/git\/token$/.test(a));
+  // Re-sending the same address without a token keeps it.
+  const same = (await h.call('PUT', `${P}/repository`, { remoteUrl: 'https://git.example.com/team/project.git' })).json as RepositorySettings;
+  assert.equal(same.remote.token.has, true);
+  // A different address without a token forgets the old one: a credential for
+  // one host never follows the remote to another.
+  const moved = (await h.call('PUT', `${P}/repository`, { remoteUrl: 'https://other.example.com/team/project.git' })).json as RepositorySettings;
+  assert.deepEqual(moved.remote, { url: 'https://other.example.com/team/project.git', token: { has: false } });
+  assert.equal(hasToken(), false);
+  // A different address with a token in the same request keeps the new token.
+  const both = (await h.call('PUT', `${P}/repository`, { remoteUrl: 'https://git.example.com/team/project.git', token: TOKEN })).json as RepositorySettings;
+  assert.deepEqual(both.remote, { url: 'https://git.example.com/team/project.git', token: { has: true } });
+  // null and '' both remove the token.
+  for (const token of [null, '']) {
+    const cleared = (await h.call('PUT', `${P}/repository`, { token })).json as RepositorySettings;
+    assert.equal(cleared.remote.token.has, false);
+    assert.equal(hasToken(), false);
+    await h.call('PUT', `${P}/repository`, { token: TOKEN });
+  }
+  // Disconnecting the remote (null or '') forgets its token too.
+  for (const remoteUrl of [null, '']) {
+    const gone = (await h.call('PUT', `${P}/repository`, { remoteUrl })).json as RepositorySettings;
+    assert.deepEqual(gone.remote, { url: null, token: { has: false } });
+    assert.equal(hasToken(), false);
+    await h.call('PUT', `${P}/repository`, { remoteUrl: 'https://git.example.com/team/project.git', token: TOKEN });
+  }
+
+  // https only; http is allowed for this computer alone.
+  const plain = await h.call('PUT', `${P}/repository`, { remoteUrl: 'http://git.example.com/team/project.git' });
+  assert.equal(plain.status, 400);
+  assert.match(plain.json.error.message, /https/);
+  for (const host of ['localhost:8080', '127.0.0.1:8080', '[::1]:8080']) {
+    const local = await h.call('PUT', `${P}/repository`, { remoteUrl: `http://${host}/team/project.git` });
+    assert.equal(local.status, 200, `${host}: ${local.body}`);
+  }
 
   // Validation, without echoing what was sent.
   const withCreds = await h.call('PUT', `${P}/repository`, { remoteUrl: `https://user:${TOKEN}@git.example.com/x.git` });
@@ -156,6 +186,9 @@ test('push: a job that sends the token only to the remote and records the last p
   assert.equal(settings.lastPush?.ok, false);
   assert.match(settings.lastPush?.message ?? '', /refused/i);
   assert.ok(settings.lastPush?.at);
+  // Any settings change clears the stale outcome.
+  const after = (await h.call('PUT', `${P}/repository`, { author: { name: 'Pat Example', email: 'pat@example.com' } })).json as RepositorySettings;
+  assert.equal(after.lastPush, null);
   h.noToken();
 });
 

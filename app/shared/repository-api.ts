@@ -22,8 +22,11 @@ export interface RepositorySettings {
   lastPush: LastPush | null;
 }
 
-// Fields left out stay as they are. `remoteUrl: null` disconnects the remote
-// (and forgets its token); `token: null` forgets the token.
+// Fields left out stay as they are. `remoteUrl: null` (or '') disconnects the
+// remote and forgets its token; a different `remoteUrl` sent without a token
+// also forgets the stored one. `token: null` (or '') forgets the token.
+// Addresses must be https:// (http:// only for localhost). Any PUT clears the
+// last push outcome.
 export interface PutRepositoryRequest {
   author?: RepositoryAuthor;
   remoteUrl?: string | null;

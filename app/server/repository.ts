@@ -53,6 +53,10 @@ function readLastPush(ref: ProjectRef): LastPush | null {
   }
 }
 
+function clearLastPush(ref: ProjectRef): void {
+  fs.rmSync(lastPushFile(ref), { force: true });
+}
+
 function writeLastPush(ref: ProjectRef, last: LastPush): void {
   try {
     fs.writeFileSync(lastPushFile(ref), JSON.stringify(last));
@@ -108,15 +112,18 @@ function parseRemoteUrl(v: unknown): string | null {
   } catch {
     throw badRequest('Enter the remote repository’s address, starting with https://.');
   }
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw badRequest('The remote repository’s address must start with https://.');
+  // The token travels as basic auth: plain http only to this computer.
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && loopback)) throw badRequest('The remote repository’s address must start with https://.');
   if (u.username || u.password) throw badRequest('Leave sign-in details out of the address: put the token in the Token field.');
   return u.toString();
 }
 
+// null and '' both mean "remove the token".
 function parseToken(v: unknown): string | null {
   if (v === null || v === '') return null;
   if (typeof v !== 'string' || v.length > 4000 || /[\r\n\x00]/.test(v)) throw badRequest('The token must be a single line of text.');
-  return v.trim();
+  return v.trim() || null;
 }
 
 export async function putRepository(ref: ProjectRef, store: SecretStore, body: unknown): Promise<RepositorySettings> {
@@ -125,16 +132,24 @@ export async function putRepository(ref: ProjectRef, store: SecretStore, body: u
   const remoteUrl = body.remoteUrl === undefined ? undefined : parseRemoteUrl(body.remoteUrl);
   const token = body.token === undefined ? undefined : parseToken(body.token);
   const account = await tokenAccount(ref);
+  let remoteChanged = false;
   await withProjectLock(ref, async () => {
     if (author) {
       writeMeta(ref.dir, { ...readMeta(ref.dir), author });
       await commitChange(ref, 'Updated repository settings');
     }
-    if (remoteUrl !== undefined) await setRemote(ref.dir, remoteUrl);
+    if (remoteUrl !== undefined) {
+      const current = await getRemote(ref.dir).catch(() => null);
+      remoteChanged = (current ?? null) !== remoteUrl;
+      if (remoteChanged) await setRemote(ref.dir, remoteUrl);
+    }
+    // The last outcome is about settings that may no longer hold.
+    clearLastPush(ref);
   });
   await withSecretsLock(ref, async () => {
-    // A disconnected remote keeps no token.
-    if (remoteUrl === null || token === null) await store.delete(account);
+    // A token belongs to the remote it was given for: a disconnected or
+    // different remote keeps none unless a new one comes with it.
+    if (remoteUrl === null || token === null || (remoteChanged && !token)) await store.delete(account);
     else if (token) await store.set(account, token);
   });
   return repositorySettings(ref, store);
@@ -182,10 +197,10 @@ export function registerRepositoryRoutes(router: Router, ctx: RepositoryContext)
       emit({ type: 'step', step: 'push', status: 'running' });
       const at = () => new Date().toISOString();
       try {
-        const commit = await withProjectLock(ref, async () => {
-          await pushImpl(ref.dir, { store: ctx.secrets, account });
-          return headOid(ref.dir);
-        });
+        // Only reading HEAD needs the lock; the push itself runs outside it
+        // so a slow remote never holds up snapshots or applies.
+        const commit = await withProjectLock(ref, () => headOid(ref.dir));
+        await pushImpl(ref.dir, { store: ctx.secrets, account });
         const last: LastPush = { at: at(), ok: true, commit, message: null };
         writeLastPush(ref, last);
         emit({ type: 'step', step: 'push', status: 'done' });
