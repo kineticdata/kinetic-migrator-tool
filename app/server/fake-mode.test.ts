@@ -117,7 +117,7 @@ test('fake Dev and Test: differences, a suggestion, an apply that sticks, a re-p
   assert.equal(routine.action, 'unchanged', 'the routine was created with its tree, inputs and outputs');
 });
 
-test('fake Dev and Test: Task categories compare, are suggested for a handler, promote with their members and are removed', async (t) => {
+test('fake Dev and Test: workflow categories compare, are suggested for a handler, promote with their members and are removed', async (t) => {
   const fake = fakeMode({ KINETIC_MIGRATE_FAKE: '1' })!;
   const server = await startTestServer({ ...fake });
   t.after(() => server.cleanup());
@@ -147,7 +147,7 @@ test('fake Dev and Test: Task categories compare, are suggested for a handler, p
   const cmp = await job('POST', `${P}/compare`, { from: 'dev', to: 'test', mode: 'preview' });
   const root = (await call('GET', `${P}/compare/${cmp.compareId}/tree`)).json as Array<{ id: string; label: string }>;
   const group = root.find((n) => n.id === 'group:task-categories');
-  assert.equal(group?.label, 'Task categories');
+  assert.equal(group?.label, 'Workflow categories');
   const kids = (await call('GET', `${P}/compare/${cmp.compareId}/tree?parent=group:task-categories`)).json as Array<{ key: string; status: string; kind: string }>;
   assert.deepEqual(kids.map((k) => [k.key, k.status, k.kind]), [
     ['task-categories/Legacy Tools', 'only-target', 'task-category'],
@@ -166,15 +166,15 @@ test('fake Dev and Test: Task categories compare, are suggested for a handler, p
 
   const sug = (await call('POST', `${P}/compare/${cmp.compareId}/suggestions`, { selected: [HANDLER] })).json as Array<{ key: string; reason: string }>;
   const forCategory = sug.find((s) => s.key === NOTIFY);
-  assert.match(forCategory?.reason ?? '', /Mail Send belongs to Task category "Notifications", so Mail Send appears in the workflow builder/);
+  assert.match(forCategory?.reason ?? '', /Mail Send belongs to workflow category "Notifications", so Mail Send appears in the workflow builder/);
 
   // The category alone: its handler and routine are not in Test, so they are
   // left out with a warning (not an error). The routine alone: in no category.
   const alone = await job('POST', `${P}/plans`, { to: 'test', from: 'dev', selected: [NOTIFY] });
   assert.deepEqual(alone.errors, []);
-  assert.ok(alone.warnings.includes(`${NOTIFY}: mail_send_v1 is not in test; promote it to add it to the category`), JSON.stringify(alone.warnings));
+  assert.ok(alone.warnings.includes(`${NOTIFY}: mail_send_v1 is not in test; promote it to add it to the workflow category`), JSON.stringify(alone.warnings));
   const routineOnly = await job('POST', `${P}/plans`, { to: 'test', from: 'dev', selected: [ROUTINE] });
-  assert.ok(routineOnly.warnings.some((w: string) => w.startsWith(`${ROUTINE}: will be in no Task category in test`)), JSON.stringify(routineOnly.warnings));
+  assert.ok(routineOnly.warnings.some((w: string) => w.startsWith(`${ROUTINE}: will be in no workflow category in test`)), JSON.stringify(routineOnly.warnings));
 
   const selected = [HANDLER, ROUTINE, NOTIFY];
   const remove = ['task-categories/Legacy Tools', `${NOTIFY}#handlers/utilities_echo_v1`];
@@ -208,5 +208,5 @@ test('fake Dev and Test: Task categories compare, are suggested for a handler, p
   const again = await plan();
   assert.equal(again.items.find((i: { key: string }) => i.key === NOTIFY).action, 'unchanged');
   assert.deepEqual(again.removals.map((r: { action: string }) => r.action), ['gone', 'gone']);
-  assert.ok(!again.warnings.some((w: string) => /Task categor|workflow builder/.test(w)), JSON.stringify(again.warnings));
+  assert.ok(!again.warnings.some((w: string) => /workflow categor|workflow builder/.test(w)), JSON.stringify(again.warnings));
 });

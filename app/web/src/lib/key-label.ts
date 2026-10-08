@@ -12,7 +12,7 @@ export function segmentLabel(segment: string): string {
 }
 
 // Sub-collection entry keys: `<item key>#<collection>/<encoded name>`.
-// Only the space, kapps and Task categories (their handlers and routines)
+// Only the space, kapps and workflow categories (their handlers and routines)
 // have entries; other keys may contain '#' in a name, and so may a Task
 // category's (mirrors lib/sync/entries.mjs).
 const ENTRY = /^(space|kapps\/[^/#]+\/kapp|task-categories\/[^/]+)#([^/#]+)\/(.+)$/;

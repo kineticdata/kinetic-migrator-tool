@@ -45,7 +45,7 @@ function tree(withLeave: boolean): Record<string, CompareTreeNode[]> {
       group('group:handlers', 'Handlers', { drifted: 1 }),
       group('group:teams', 'Teams', { 'only-target': 1 }),
       group('group:models', 'Models', { same: 1 }),
-      group('group:task-categories', 'Task categories', { changed: 1 }),
+      group('group:task-categories', 'Workflow categories', { changed: 1 }),
     ],
     'group:kapps': [n('kapps/hr/kapp', 'HR', { kind: 'kapp', status: 'same', hasChildren: true, counts: formCounts })],
     'kapps/hr/kapp': [group('group:kapps/hr/forms', 'Forms', formCounts)],
@@ -464,12 +464,12 @@ test('an item\'s entries only in the target are listed on it, each with its own 
   });
 });
 
-test('Task categories show as their own group; a category\'s members differ as lists', async () => {
+test('Workflow categories show as their own group; a category\'s members differ as lists', async () => {
   setup();
   const user = userEvent.setup();
   renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare' });
   const t = await screen.findByRole('tree', { name: /Differences/ });
-  await user.click(await within(t).findByText('Task categories'));
+  await user.click(await within(t).findByText('Workflow categories'));
   await user.click(await within(t).findByText('Notifications'));
   const table = await screen.findByRole('table', { name: 'Changes' });
   const rows = within(table).getAllByRole('row').slice(1);

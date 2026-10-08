@@ -31,7 +31,7 @@ interface FakeSpace {
   handlers: Array<{ handler: Obj; zip: Buffer }>;
   // Global routines (Task trees), keyed by title (= name).
   routines: Obj[];
-  // Task categories (the engine's stateful fake of the endpoint).
+  // workflow categories (the engine's stateful fake of the endpoint).
   categories: { handle: (api: string, method: string, path: string, opts: { body?: unknown }) => unknown };
 }
 

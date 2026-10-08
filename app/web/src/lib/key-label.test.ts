@@ -14,7 +14,7 @@ describe('segmentLabel', () => {
   });
 });
 
-describe('Task categories', () => {
+describe('Workflow categories', () => {
   it('a category member is an entry of its category (a name may hold "#")', () => {
     const key = 'task-categories/A#B#handlers/mail_send_v1';
     expect(isEntryKey(key)).toBe(true);

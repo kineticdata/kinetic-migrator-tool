@@ -14,13 +14,13 @@ Space settings, attribute definitions and security policies; teams (without
 memberships); bridge models; file resources; Integrator connections and
 operations; kapps (settings, attribute definitions, policies, categories,
 form types, integrations, index definitions); forms; WebAPIs; workflows; Task
-handlers (package and settings); global routines; Task categories (the
+handlers (package and settings); global routines; workflow categories (the
 Stored ones, with their handlers and routines); and submissions on forms you
 allowlist as reference data.
 
 Not promoted: users, team memberships, transactional submissions, built-in
 handlers (`utilities_*`, `system_*`, and any handler with no downloadable
-package), built-in (Integrated) Task categories, Task policy rules, and
+package), built-in (Integrated) workflow categories, Task policy rules, and
 webhooks.
 
 ## 1. Create a project
@@ -426,7 +426,7 @@ when `--from` is omitted; with neither, the command stops and asks for
 Apply shows the plan, asks you to type the environment name (`--yes` skips
 this for CI), saves a full export of the target under `backups/`, then
 creates and updates in dependency order (handlers, then global routines,
-then the Task categories that hold them, then the WebAPIs and workflows that
+then the workflow categories that hold them, then the WebAPIs and workflows that
 use them; a routine that calls another routine comes after it). If something fails it stops and
 says how far it got; fix the cause and run it again, since every step is
 safe to repeat.
@@ -457,16 +457,16 @@ supplied secret values), re-uploads the package with `force` when its
 `packageSha256` changed (then re-sends the plaintext settings), and
 otherwise sends only the plaintext settings that differ. Other differences
 (name, status) come from the package or the console; apply warns and leaves
-them for you. A handler's categories are promoted as Task categories (below),
+them for you. A handler's categories are promoted as workflow categories (below),
 so they are never a difference of the handler itself, nor part of its drift
 check (a state entry recorded by an earlier version still matches as long as
 the handler is unchanged).
 
-### Task categories
+### Workflow categories
 
-A handler or routine that is in no Task category does not appear in the
+A handler or routine that is in no workflow category does not appear in the
 workflow builder, so a promoted handler or routine is only usable there once
-its categories come along. Task categories are exported under
+its categories come along. workflow categories are exported under
 `task-categories/<name>`: the name, the description, the definitionIds of
 the handlers and routines in the category, and its policy rule names (for
 information only).
@@ -496,11 +496,11 @@ information only).
 - Policy rules are not migrated. When the source's category has policy rules
   the target's lacks, the plan warns "`<category>: its policy rules (…) are
   not carried; set them in <target>`".
-- Compare shows a **Task categories** group; a category's members differ as
+- Compare shows a **Workflow categories** group; a category's members differ as
   whole lists. Selecting a handler or routine suggests each category that
   holds it in the source when the target's copy does not ("…, so <name>
   appears in the workflow builder"). The plan also warns when a handler or
-  routine it creates will be in no Task category in the target.
+  routine it creates will be in no workflow category in the target.
 - A category only in the target can be removed (`DELETE /categories/<name>`),
   and so can a member only the target's copy holds: an entry keyed
   `task-categories/<name>#handlers/<definitionId>` or `#routines/<definitionId>`
@@ -558,7 +558,7 @@ What happens:
   you reviewed the plan, it is not deleted; the run says so and is partial.
   One that is already gone is fine.
 - Never removable: the space itself, built-in handlers (`utilities_*`,
-  `system_*`), built-in (Integrated) Task categories (never listed),
+  `system_*`), built-in (Integrated) workflow categories (never listed),
   reference data records (use `--prune data`) and the `task-refs` summary. A changeset cannot save a removal of an item that
   is in its pinned source snapshot.
 - The backup taken before the apply can restore removed items (History,
@@ -567,12 +567,12 @@ What happens:
   a connection without its credentials, a handler without its secret
   property values, and a team without its members.
 
-### Entries of the space, of a kapp and of a Task category
+### Entries of the space, of a kapp and of a workflow category
 
 The space's attribute definitions (space, team, user, user profile) and
 security policy definitions, and a kapp's attribute definitions (kapp, form,
 category), security policy definitions, form types, categories and
-integrations, and a Task category's handlers and routines, are created and
+integrations, and a workflow category's handlers and routines, are created and
 updated with their item. Entries only the
 target has are kept and never count as a difference. Compare lists them on
 the item under **Only in <target>**, each with its own Remove action. Such

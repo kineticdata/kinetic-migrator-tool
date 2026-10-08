@@ -16,7 +16,7 @@ export const groupOf = (n: Pick<TreeNode, 'id'>): string => n.id.replace(/^group
 const SIMPLE: Array<[string, string, string]> = [
   ['handlers', 'handler', 'handlers'], ['teams', 'team', 'teams'], ['models', 'model', 'models'],
   ['routines', 'routine', 'routines'], ['file-resources', 'file resource', 'file resources'],
-  ['task-categories', 'Task category', 'Task categories'],
+  ['task-categories', 'Workflow category', 'Workflow categories'],
 ];
 
 // `children` maps a node id to its loaded children.

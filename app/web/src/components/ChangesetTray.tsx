@@ -30,7 +30,7 @@ export interface TrayItem {
 const GROUPS: Array<[NodeKind, string]> = [
   ['space', 'Space'], ['kapp', 'Kapps'], ['form', 'Forms'], ['data', 'Reference data'], ['workflow', 'Workflows'], ['webapi', 'WebAPIs'],
   ['connection', 'Connections'], ['operation', 'Operations'], ['handler', 'Handlers'], ['team', 'Teams'], ['model', 'Models'],
-  ['file-resource', 'File resources'], ['routine', 'Routines'], ['task-category', 'Task categories'], ['other', 'Other'],
+  ['file-resource', 'File resources'], ['routine', 'Routines'], ['task-category', 'Workflow categories'], ['other', 'Other'],
 ];
 
 export interface ChangesetTrayProps {

@@ -175,7 +175,7 @@ export const PHASES: Phase[] = [
   { id: 'connections', label: 'Connections', types: ['connections', 'operations'] },
   { id: 'handlers', label: 'Handlers', types: ['handlers'] },
   { id: 'routines', label: 'Routines', types: ['routines'] },
-  { id: 'task-categories', label: 'Task categories', types: ['task-categories'] },
+  { id: 'task-categories', label: 'Workflow categories', types: ['task-categories'] },
   { id: 'kapps', label: 'Kapps', types: ['kapps'] },
   { id: 'forms', label: 'Forms', types: ['forms'] },
   { id: 'webapis', label: 'WebAPIs', types: ['webapis'] },

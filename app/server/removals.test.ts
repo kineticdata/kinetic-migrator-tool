@@ -353,7 +353,7 @@ test('after removing an entry, the next snapshot reports no drift for its item; 
   assert.deepEqual((await h.job('POST', `${P}/snapshots`, { env: 'test' })).result.drifted, [], 'a restore is not drift');
 });
 
-test('a Task category and a category member only in the target are removed, with no drift after; a restore puts both back', async (t) => {
+test('a workflow category and a category member only in the target are removed, with no drift after; a restore puts both back', async (t) => {
   const h = await harness(t);
   const seed = (name: string, handlers: string[]) => ({ name, type: 'Stored', description: name, handlers: handlers.map((definitionId) => ({ definitionId })), trees: [] });
   const devCats = fakeTaskCategories([seed('Notifications', ['utilities_echo_v1'])]);
@@ -362,7 +362,7 @@ test('a Task category and a category member only in the target are removed, with
     { ...seed('Built In', ['system_join_v1']), type: 'Integrated' },
   ]);
   type Store = { handle: (api: string, method: string, path: string, opts?: { body?: unknown }) => unknown };
-  // Routes for every Task categories call, answered by the stateful fake.
+  // Routes for every workflow categories call, answered by the stateful fake.
   const categoryRoutes = (store: Store) => {
     const r: Record<string, unknown> = {};
     const at = (method: string, p: string) => { r[`${method} task${p}`] = ({ body }: { body?: unknown }) => store.handle('task', method, p, { body }); };

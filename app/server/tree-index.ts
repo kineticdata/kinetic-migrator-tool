@@ -27,7 +27,7 @@ export interface TreeIndex {
 const ROOTS: Array<[string, string]> = [
   ['space', 'Space'], ['group:kapps', 'Kapps'], ['group:connections', 'Connections'], ['group:handlers', 'Handlers'],
   ['group:teams', 'Teams'], ['group:models', 'Models'], ['group:file-resources', 'File resources'], ['group:routines', 'Routines'],
-  ['group:task-categories', 'Task categories'], ['group:other', 'Other'],
+  ['group:task-categories', 'Workflow categories'], ['group:other', 'Other'],
 ];
 const ROOT_RANK = new Map(ROOTS.map(([id], i) => [id, i]));
 
@@ -86,7 +86,7 @@ function place(key: string): Placement | null {
   if (p[0] === 'models' && p.length === 2) return { kind: 'model', parents: [g('group:models', 'Models')] };
   if (p[0] === 'file-resources' && p.length === 2) return { kind: 'file-resource', parents: [g('group:file-resources', 'File resources')] };
   if (p[0] === 'routines' && p.length === 2) return { kind: 'routine', parents: [g('group:routines', 'Routines')] };
-  if (p[0] === 'task-categories' && p.length === 2) return { kind: 'task-category', parents: [g('group:task-categories', 'Task categories')] };
+  if (p[0] === 'task-categories' && p.length === 2) return { kind: 'task-category', parents: [g('group:task-categories', 'Workflow categories')] };
   return { kind: 'other', parents: [g('group:other', 'Other')] };
 }
 
