@@ -18,7 +18,7 @@ export function TabsTrigger({ value, children }: { value: string; children: Reac
   return (
     <TabsPrimitive.Trigger
       value={value}
-      className="rounded-md px-3 py-1 text-[13px] font-medium text-muted transition-colors hover:text-fg data-[state=active]:bg-surface data-[state=active]:text-fg data-[state=active]:shadow-card"
+      className="rounded-md px-3 py-1 text-[13px] font-medium text-muted transition-colors hover:text-fg data-[state=active]:bg-surface data-[state=active]:text-fg data-[state=active]:shadow-card data-[state=active]:ring-1 data-[state=active]:ring-border-strong"
     >
       {children}
     </TabsPrimitive.Trigger>
