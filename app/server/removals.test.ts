@@ -313,3 +313,40 @@ test('a restore planned from a changeset never plans its removals', async (t) =>
   assert.deepEqual([p.remove, p.removals, p.counts.delete], [[], [], 0]);
   assert.equal((await h.call('POST', `${P}/plans`, { to: 'test', from: 'test', selected: ['teams/Ops'], restore: true, remove: [OLD] })).status, 400);
 });
+
+test('after removing an entry, the next snapshot reports no drift for its item; nor after restoring it from the backup', async (t) => {
+  const h = await harness(t);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  const KAPP = 'kapps/services/kapp';
+  const ENTRY = `${KAPP}#categories/old-hardware`;
+  // Test's kapp keeps what is written to its categories.
+  let cats: Array<Record<string, unknown>> = [{ slug: 'old-hardware', name: 'Old Hardware' }];
+  h.spaces.test = () => {
+    const r = testRoutes();
+    const kapp = (r['GET core/kapps/services'] as { kapp: Record<string, unknown> }).kapp;
+    return {
+      ...r,
+      'GET core/kapps/services': () => ({ kapp: { ...kapp, categories: structuredClone(cats) } }),
+      'DELETE core/kapps/services/categories/old-hardware': () => { cats = cats.filter((c) => c.slug !== 'old-hardware'); return {}; },
+      'POST core/kapps/services/categories': ({ body }: { body: Record<string, unknown> }) => { cats = [...cats, body]; return {}; },
+    };
+  };
+  // The kapp was promoted before, so its state is recorded.
+  const first = await plan(h, { to: 'test', from: 'dev', selected: [KAPP] });
+  assert.equal((await h.job('POST', `${P}/plans/${first.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result.status, 'applied');
+  assert.deepEqual((await h.job('POST', `${P}/snapshots`, { env: 'test' })).result.drifted, []);
+
+  const p = await plan(h, { to: 'test', from: 'dev', remove: [ENTRY] });
+  const done = (await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result as ApplyResult;
+  assert.equal(done.status, 'applied', String(done.error));
+  assert.deepEqual(cats, []);
+  assert.deepEqual((await h.job('POST', `${P}/snapshots`, { env: 'test' })).result.drifted, [], 'removing an entry is not drift');
+
+  const rr = (await h.job('POST', `${P}/restore`, { commit: done.backupCommit })).result as CompareResult;
+  assert.deepEqual(rr.preselected, [KAPP]);
+  const rp = await plan(h, { to: 'test', from: 'test', sourceCommit: rr.sourceCommit, selected: rr.preselected, restore: true });
+  const restored = (await h.job('POST', `${P}/plans/${rp.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result as ApplyResult;
+  assert.equal(restored.status, 'applied', String(restored.error));
+  assert.deepEqual((cats as Array<Record<string, unknown>>).map((c) => c.slug), ['old-hardware']);
+  assert.deepEqual((await h.job('POST', `${P}/snapshots`, { env: 'test' })).result.drifted, [], 'a restore is not drift');
+});
