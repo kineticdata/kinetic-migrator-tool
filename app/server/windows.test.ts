@@ -94,3 +94,24 @@ test('the catalog lists kapp and form slugs, not their encoded file names', asyn
   const cat = buildCatalog(snapshotFrom('dev', 'c0ffee', '/x', artifacts));
   assert.deepEqual(cat.kapps.map((k) => [k.slug, k.forms.map((f) => f.slug)]), [['con', ['aux']]]);
 });
+
+test('a pinned tree whose entries differ only by case fails clearly instead of overwriting one with the other', async (t) => {
+  const fs = await import('node:fs');
+  const git = (await import('isomorphic-git')).default;
+  const { materializeTree } = await import('./pinned.ts');
+  const dir = fs.mkdtempSync(path.join(tmpdir(), 'km-case-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  await git.init({ fs, dir, defaultBranch: 'main' });
+  const blob = await git.writeBlob({ fs, dir, blob: Buffer.from('{}\n') });
+  const teams = await git.writeTree({ fs, dir, tree: [
+    { mode: '100644', path: 'Ops.json', oid: blob, type: 'blob' },
+    { mode: '100644', path: 'ops.json', oid: blob, type: 'blob' },
+  ] });
+  const snap = await git.writeTree({ fs, dir, tree: [{ mode: '040000', path: 'teams', oid: teams, type: 'tree' }] });
+  const root = await git.writeTree({ fs, dir, tree: [{ mode: '040000', path: 'snap', oid: snap, type: 'tree' }] });
+  const commit = await git.writeCommit({ fs, dir, commit: {
+    message: 'x', tree: root, parent: [],
+    author: { name: 'a', email: 'a@b', timestamp: 0, timezoneOffset: 0 }, committer: { name: 'a', email: 'a@b', timestamp: 0, timezoneOffset: 0 },
+  } });
+  await assert.rejects(materializeTree(dir, commit, 'snap', path.join(dir, 'out')), /"Ops\.json" and "ops\.json", which differ only in letter case/);
+});

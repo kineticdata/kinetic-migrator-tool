@@ -22,7 +22,7 @@ import type {
 import { ApiError, badRequest, notFound, toApiError } from './errors.ts';
 import { envBoundNamesFor, envKey, loadConfig, loadOverrides, stableStringify, type EngineEnv } from './engine.ts';
 import {
-  ENV_BOUND_FIELDS, computePlan, isSecretName, isSecretProperty, parsePath, readTree, runApply, stamp, type EnginePlan, type PlanItem,
+  ENV_BOUND_FIELDS, computePlan, isSecretName, isSecretProperty, parsePath, readTree, runApply, segmentLabel, stamp, type EnginePlan, type PlanItem,
 } from './engine-sync.ts';
 import { readChangeset, recordApplied } from './changesets.ts';
 import { hasEnvSecret, readEnvironmentFile, readOverrides, resolveEnv, setEnvSecret } from './environments.ts';
@@ -147,14 +147,14 @@ async function secretsNeeded(store: SecretStore, ref: ProjectRef, to: string, it
     if (i.action !== 'create') continue;
     const d = obj(i.desired);
     if (i.type === 'connections') {
-      const conn = String(d.name ?? i.key.split('/')[1]);
+      const conn = String(d.name ?? segmentLabel(i.key.split('/')[1]));
       for (const f of connectionSecretFields(d)) {
         const name = connectionSecretName(conn, f);
         out.push({ id: `secret/${name}`, key: i.key, scope: 'secret', name, label: `${conn} › ${f}`, has: await hasEnvSecret(store, ref, to, 'secret', name) });
       }
     }
     if (i.type === 'handlers') {
-      const id = String(d.definitionId ?? i.key.split('/')[1]);
+      const id = String(d.definitionId ?? segmentLabel(i.key.split('/')[1]));
       for (const p of handlerSecretProperties(d)) {
         const name = handlerSecretName(id, p);
         out.push({ id: `handler/${name}`, key: i.key, scope: 'handler', name, label: `${d.name ?? id} › ${p}`, has: await hasEnvSecret(store, ref, to, 'handler', name) });
@@ -185,7 +185,7 @@ function needsAttention(to: string, items: PlanItem[], warnings: string[], secre
   }
   for (const w of warnings) {
     const m = DATA_WORKFLOWS.exec(w);
-    if (m) add('data-workflows', m[1], `Writing the reference data of ${m[1].split('/')[3]} runs these workflows in ${To}: ${m[2]}.`);
+    if (m) add('data-workflows', m[1], `Writing the reference data of ${segmentLabel(m[1].split('/')[3] ?? '')} runs these workflows in ${To}: ${m[2]}.`);
   }
   return out;
 }

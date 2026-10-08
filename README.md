@@ -67,8 +67,7 @@ Ubuntu with Node 20 and 22.
   `node kinetic-migrate.mjs ui` (or `npm run start`). Every npm script works
   in cmd.exe and PowerShell; none needs a Unix shell or inline environment
   variables (use `--fake`, not `KINETIC_MIGRATE_FAKE=1 …`).
-- The browser opens through Windows' URL handler (`rundll32
-  url.dll,FileProtocolHandler`); with `--no-open`, copy the printed address.
+- The browser opens through Explorer (`explorer.exe <url>`, the default browser); with `--no-open`, copy the printed address.
 - Secrets are stored in **Windows Credential Manager** (Control Panel →
   Credential Manager → Windows Credentials, entries named
   `kinetic-migrate:…`), saved for your user on this computer and never

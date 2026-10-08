@@ -51,31 +51,32 @@ export function driftedKeys(projectDir: string, env: string, artifacts: Map<stri
 // deleted afterwards stays in plans/ until the next start.
 // On Windows a rename fails with EPERM/EACCES/EBUSY while another process
 // (antivirus, the search indexer, an editor or Explorer preview) briefly holds
-// a file inside; retry for about two seconds before giving up.
+// a file inside; retry for about two seconds before giving up. The waits
+// are asynchronous: the server keeps answering meanwhile.
 const TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
-const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const sleepAsync = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
 
 export function retryingRename(rename: (from: string, to: string) => void, opts: {
-  platform?: string; sleep?: (ms: number) => void; attempts?: number;
-} = {}): (from: string, to: string) => void {
-  if ((opts.platform ?? process.platform) !== 'win32') return rename;
-  const sleep = opts.sleep ?? sleepSync;
+  platform?: string; sleep?: (ms: number) => void | Promise<void>; attempts?: number;
+} = {}): (from: string, to: string) => Promise<void> {
+  if ((opts.platform ?? process.platform) !== 'win32') return async (from, to) => rename(from, to);
+  const sleep = opts.sleep ?? sleepAsync;
   const attempts = opts.attempts ?? 8;
-  return (from, to) => {
+  return async (from, to) => {
     for (let i = 1; ; i++) {
       try {
         return rename(from, to);
       } catch (err) {
         if (i >= attempts || !TRANSIENT.has(String((err as NodeJS.ErrnoException).code))) throw err;
-        sleep(Math.min(50 * 2 ** (i - 1), 500));
+        await sleep(Math.min(50 * 2 ** (i - 1), 500));
       }
     }
   };
 }
 
-export function swapInto(temp: string, final: string, aside: string, ops: {
-  rename?: (from: string, to: string) => void; rm?: (p: string) => void; platform?: string; sleep?: (ms: number) => void;
-} = {}): void {
+export async function swapInto(temp: string, final: string, aside: string, ops: {
+  rename?: (from: string, to: string) => void; rm?: (p: string) => void; platform?: string; sleep?: (ms: number) => void | Promise<void>;
+} = {}): Promise<void> {
   const rename = retryingRename(ops.rename ?? fs.renameSync, { platform: ops.platform, sleep: ops.sleep });
   const rm = ops.rm ?? ((p: string) => fs.rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const removeTemp = () => fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -84,17 +85,17 @@ export function swapInto(temp: string, final: string, aside: string, ops: {
   if (hadOld) {
     try {
       fs.mkdirSync(path.dirname(aside), { recursive: true });
-      rename(final, aside);
+      await rename(final, aside);
     } catch (err) {
       removeTemp();
       throw err;
     }
   }
   try {
-    rename(temp, final);
+    await rename(temp, final);
   } catch (err) {
     if (hadOld) {
-      try { rename(aside, final); } catch { /* left in plans/; reported by the error below */ }
+      try { await rename(aside, final); } catch { /* left in plans/; reported by the error below */ }
     }
     removeTemp();
     throw err;
@@ -123,7 +124,7 @@ export async function takeSnapshot(opts: {
     throw scrubError(err, envSecrets(env));
   }
   const final = snapshotDir(ref.dir, env.name);
-  swapInto(temp, final, path.join(ref.dir, 'plans', `old-${randomUUID()}`));
+  await swapInto(temp, final, path.join(ref.dir, 'plans', `old-${randomUUID()}`));
   const drifted = driftedKeys(ref.dir, env.name, readTree(snapshotDir(ref.dir, env.name)));
   const body = drifted.length ? `Drifted: ${drifted.length} item(s) changed since the last promotion.\n${drifted.join('\n')}` : undefined;
   const message = commitMessage(opts.title, { Environment: env.name, ...opts.trailers }, body);

@@ -47,6 +47,17 @@ export async function materializeTree(dir: string, commit: string, subdir: strin
   const walk = async (oid: string, base: string): Promise<void> => {
     fs.mkdirSync(base, { recursive: true });
     const { tree } = await git.readTree({ fs, dir, oid });
+    // Windows and macOS would write two names that differ only in letter
+    // case into one file, silently.
+    const seen = new Map<string, string>();
+    for (const entry of tree) {
+      const folded = entry.path.normalize('NFC').toLowerCase();
+      const other = seen.get(folded);
+      if (other !== undefined) {
+        throw new Error(`This snapshot holds "${other}" and "${entry.path}", which differ only in letter case and cannot both be written on this computer.`);
+      }
+      seen.set(folded, entry.path);
+    }
     for (const entry of tree) {
       if (!isSafeEntryName(entry.path)) continue;
       const target = path.join(base, entry.path);

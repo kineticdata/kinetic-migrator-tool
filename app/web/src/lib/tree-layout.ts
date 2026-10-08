@@ -2,6 +2,7 @@
 // mirrors the server's tree layout (app/server/tree-index.ts): the section an
 // item belongs to and the tree nodes above it, root first.
 import type { NodeKind } from '../../../shared/sync-api';
+import { segmentLabel } from './key-label';
 
 // Which top-level section an item key belongs to (for the type filter).
 export function sectionOf(key: string): string {
@@ -61,10 +62,5 @@ export function nameOfKey(key: string): string {
   return safe(last);
 }
 
-function safe(s: string): string {
-  try {
-    return decodeURIComponent(s);
-  } catch {
-    return s;
-  }
-}
+// Key segments are engine-encoded file names (see key-label.ts).
+const safe = segmentLabel;

@@ -25,6 +25,7 @@ import { cn } from '../components/ui/cn';
 import { envLabel, plural, timeAgo } from '../lib/format';
 import { useProjectContext } from '../lib/project';
 import { ancestorsOf, sectionOf } from '../lib/tree-layout';
+import { segmentLabel } from '../lib/key-label';
 
 const SEARCH_DELAY_MS = 250;
 const ALL = 'all';
@@ -33,8 +34,8 @@ const ALL = 'all';
 function whereOf(r: SearchResult): string {
   if (r.match === 'field' && r.field) return `field ${r.field}`;
   const p = r.key.split('/');
-  if (p[0] === 'kapps' && p.length > 3) return p[1];
-  if (p[0] === 'connections' && p[2] === 'operations') return p[1];
+  if (p[0] === 'kapps' && p.length > 3) return segmentLabel(p[1]);
+  if (p[0] === 'connections' && p[2] === 'operations') return segmentLabel(p[1]);
   return '';
 }
 

@@ -59,7 +59,7 @@ async function summaryExtra(ref: ProjectRef, snap: Snapshot, key: string, store:
     extra.secrets = secrets;
   } else if (/^handlers\/[^/]+\/handler$/.test(key)) {
     const secrets: Record<string, boolean> = {};
-    const id = String(d.definitionId ?? key.split('/')[1]);
+    const id = String(d.definitionId ?? segmentLabel(key.split('/')[1]));
     for (const p of handlerSecretProperties(d)) secrets[p] = await hasEnvSecret(store, ref, snap.env, 'handler', handlerSecretName(id, p));
     extra.secrets = secrets;
     extra.packageSize = fileSize(packagePath(snap, key));
@@ -67,13 +67,13 @@ async function summaryExtra(ref: ProjectRef, snap: Snapshot, key: string, store:
     const prefix = `${m[1]}/workflows/`;
     extra.workflows = keys.filter((k) => k.startsWith(prefix)).map((k) => {
       const w = obj(snap.artifacts.get(k));
-      return { event: String(w.event ?? k.split('/')[5]), name: String(w.name ?? k.split('/')[6]) };
+      return { event: String(w.event ?? segmentLabel(k.split('/')[5])), name: String(w.name ?? segmentLabel(k.split('/')[6])) };
     });
     const byId = new Map<string, string>();
     for (const k of keys) {
       if (/^connections\/[^/]+\/(connection|operations\/[^/]+)$/.test(k)) {
         const x = obj(snap.artifacts.get(k));
-        if (typeof x.id === 'string') byId.set(x.id, String(x.name ?? k.split('/').pop()));
+        if (typeof x.id === 'string') byId.set(x.id, String(x.name ?? segmentLabel(k.split('/').pop() ?? '')));
       }
     }
     if (Array.isArray(d.integrations)) {
