@@ -23,7 +23,7 @@ import { ApiError, badRequest, notFound, toApiError } from './errors.ts';
 import { envBoundNamesFor, envKey, loadConfig, spaceFieldPair, loadOverrides, stableStringify, type EngineEnv } from './engine.ts';
 import {
   MODULES, collectionWord, computePlan, describeFailureMessage, removalInSource, envBoundFields, isEmptyValue, isSecretName, isSecretProperty, missingRequired, parseEntryKey, parsePath, readTree, runApply, segmentLabel, stamp,
-  type EngineRemoval, type EnginePlan, type PlanItem,
+  type EngineHints, type EngineRemoval, type EnginePlan, type PlanItem, type SettingsHintParts,
 } from './engine-sync.ts';
 import { currentKeys, readChangeset, recordApplied, removeList } from './changesets.ts';
 import { hasEnvSecret, readEnvironmentFile, readOverrides, resolveEnv, setEnvSecret } from './environments.ts';
@@ -37,6 +37,9 @@ import {
   connectionSecretFields, connectionSecretName, handlerSecretName, handlerSecretProperties,
 } from './secret-names.ts';
 import type { SecretStore } from './secrets.ts';
+import {
+  availableHandlerSecrets, engineHints, readHandlerMemory, recordHandlerOutcomes, writeHandlerMemory, type HandlerMemory, type HandlerSettingsOutcome,
+} from './handler-memory.ts';
 import { forwardEvents, latestSnapshotCommit, loadSnapshot, requireEnvironment, takeSnapshot, type SyncContext } from './snapshots.ts';
 import { labelFor } from './tree-index.ts';
 import { commitMessage } from './trailers.ts';
@@ -158,19 +161,42 @@ function environmentValues(projectDir: string, to: string, items: PlanItem[], ex
   return out;
 }
 
-// Secret properties of a handler the apply may send: every one for an
-// install or a package re-install; otherwise those that are required and
-// empty in the target (a settings write is then still needed).
-function handlerSecretsSent(i: PlanItem): string[] {
-  const all = handlerSecretProperties(i.desired);
-  if (i.action === 'create') return all;
-  if (i.action !== 'update' || !i.existing) return [];
-  if (obj(i.desired).packageSha256 !== obj(i.existing.data).packageSha256) return all;
-  const unset = new Set<string>(obj(i.existing.meta).unsetRequired ?? []);
-  return all.filter((p) => unset.has(p));
+// Required handler properties that are (or may be) empty in the target: read
+// empty from it, named empty by the platform last time, or not in its copy.
+function knownEmpty(i: PlanItem, memory: HandlerMemory): Set<string> {
+  const d = obj(i.desired);
+  const out = new Set<string>(obj(i.existing?.meta).unsetRequired ?? []);
+  for (const n of memory.empty[String(d.definitionId)] ?? []) out.add(n);
+  const there = new Set((obj(i.existing?.data).properties ?? []).map((p: Obj) => p?.name));
+  for (const p of d.properties ?? []) if (p?.required && !there.has(p.name)) out.add(p.name);
+  return out;
 }
 
-async function secretsNeeded(store: SecretStore, ref: ProjectRef, to: string, items: PlanItem[]): Promise<SecretNeeded[]> {
+// Secret properties of a handler the plan offers (write-only), each with a
+// hint: every one for an install or a package re-install; for an update,
+// every required one (the target never shows its value, so it can always be
+// entered or replaced), plus any entered and not yet accepted.
+function handlerSecretsOffered(i: PlanItem, memory: HandlerMemory, To: string): Array<{ prop: string; hint?: string }> {
+  const d = obj(i.desired);
+  const all = handlerSecretProperties(d);
+  if (i.action === 'create') return all.map((prop) => ({ prop }));
+  if (i.action !== 'update' || !i.existing) return [];
+  const id = String(d.definitionId);
+  const repackaged = d.packageSha256 !== obj(i.existing.data).packageSha256;
+  const required = new Set((d.properties ?? []).filter((p: Obj) => p?.required).map((p: Obj) => p.name));
+  const pending = new Set(memory.pending);
+  const empty = knownEmpty(i, memory);
+  return all
+    .filter((prop) => repackaged || required.has(prop) || empty.has(prop) || pending.has(handlerSecretName(id, prop)))
+    .map((prop) => ({
+      prop,
+      hint: empty.has(prop) && required.has(prop)
+        ? `Empty in ${To}; needed before the handler's settings can be saved.`
+        : `Not readable in ${To} — leave blank to keep ${To}'s value.`,
+    }));
+}
+
+async function secretsNeeded(store: SecretStore, ref: ProjectRef, to: string, items: PlanItem[], memory: HandlerMemory): Promise<SecretNeeded[]> {
   const out: SecretNeeded[] = [];
   for (const i of items) {
     const d = obj(i.desired);
@@ -183,9 +209,12 @@ async function secretsNeeded(store: SecretStore, ref: ProjectRef, to: string, it
     }
     if (i.type === 'handlers') {
       const id = String(d.definitionId ?? segmentLabel(i.key.split('/')[1]));
-      for (const p of handlerSecretsSent(i)) {
-        const name = handlerSecretName(id, p);
-        out.push({ id: `handler/${name}`, key: i.key, scope: 'handler', name, label: `${d.name ?? id} › ${p}`, has: await hasEnvSecret(store, ref, to, 'handler', name) });
+      for (const { prop, hint } of handlerSecretsOffered(i, memory, displayName(to))) {
+        const name = handlerSecretName(id, prop);
+        out.push({
+          id: `handler/${name}`, key: i.key, scope: 'handler', name, label: `${d.name ?? id} › ${prop}`, has: await hasEnvSecret(store, ref, to, 'handler', name),
+          ...(hint ? { hint } : {}),
+        });
       }
     }
   }
@@ -195,14 +224,14 @@ async function secretsNeeded(store: SecretStore, ref: ProjectRef, to: string, it
 // Required handler settings that would still be empty after the apply (see
 // missingRequired), each with what fills it: a secret (by its id) or an
 // environment value (by its id).
-function handlerSettingsNeeded(i: PlanItem, secrets: SecretNeeded[]): Array<{ name: string; valueId: string }> {
+function handlerSettingsNeeded(i: PlanItem, secrets: SecretNeeded[], hints: EngineHints): Array<{ name: string; valueId: string }> {
   if (i.type !== 'handlers' || (i.action !== 'create' && i.action !== 'update')) return [];
   const d = obj(i.desired);
   const id = String(d.definitionId ?? segmentLabel(i.key.split('/')[1]));
   const secretId = (p: string) => `handler/${handlerSecretName(id, p)}`;
   const props: Obj[] = d.properties ?? [];
   const has = (p: string) => secrets.some((s) => s.id === secretId(p) && s.has);
-  return missingRequired(d, i.existing, has).map((name) => ({
+  return missingRequired(d, i.existing, has, hints.handlers).map((name) => ({
     name,
     valueId: isSecretProperty(props.find((p) => p?.name === name)) ? secretId(name) : `${i.key}#properties.${escapeSeg(name)}.value`,
   }));
@@ -210,7 +239,7 @@ function handlerSettingsNeeded(i: PlanItem, secrets: SecretNeeded[]): Array<{ na
 
 const DATA_WORKFLOWS = /^(.+?): creating\/updating rows will run these workflows in the target: (.+)$/;
 
-function needsAttention(to: string, items: PlanItem[], warnings: string[], secrets: SecretNeeded[]): NeedsAttention[] {
+function needsAttention(to: string, items: PlanItem[], warnings: string[], secrets: SecretNeeded[], hints: EngineHints): NeedsAttention[] {
   const out: NeedsAttention[] = [];
   const add = (kind: AttentionKind, key: string, message: string) => out.push({ id: `${kind}:${key}`, kind, key, message });
   const To = displayName(to);
@@ -229,7 +258,7 @@ function needsAttention(to: string, items: PlanItem[], warnings: string[], secre
     // The Task API saves none of a handler's settings while a required one is
     // empty: each is filled in under Environment values (a secret or a
     // setting), or ticked to install without it.
-    for (const n of handlerSettingsNeeded(i, secrets)) {
+    for (const n of handlerSettingsNeeded(i, secrets, hints)) {
       out.push({
         id: `handler-settings:${i.key}#${n.name}`, kind: 'handler-settings', key: i.key, valueId: n.valueId,
         message: `${name} needs ${n.name} before its settings can be saved in ${To}.`,
@@ -262,7 +291,7 @@ function removalsOut(plan: EnginePlan): PlanRemovalOut[] {
 }
 
 function buildResult(base: Omit<PlanResult, 'items' | 'removals' | 'counts' | 'needsAttention' | 'environmentValues' | 'secretsNeeded' | 'errors' | 'warnings'>, plan: EnginePlan, extra: {
-  environmentValues: EnvironmentValue[]; secretsNeeded: SecretNeeded[];
+  environmentValues: EnvironmentValue[]; secretsNeeded: SecretNeeded[]; hints: EngineHints;
 }): PlanResult {
   const active = plan.items.filter((i) => i.action !== 'excluded');
   const counts: PlanResult['counts'] = { create: 0, update: 0, unchanged: 0, manual: 0, 'skip-drift': 0, delete: 0 };
@@ -274,7 +303,7 @@ function buildResult(base: Omit<PlanResult, 'items' | 'removals' | 'counts' | 'n
   counts.delete = removals.filter((r) => r.action === 'delete').length;
   return {
     ...base, items, removals, counts,
-    needsAttention: needsAttention(base.to, active, plan.warnings, extra.secretsNeeded),
+    needsAttention: needsAttention(base.to, active, plan.warnings, extra.secretsNeeded, extra.hints),
     environmentValues: extra.environmentValues, secretsNeeded: extra.secretsNeeded,
     errors: plan.errors, warnings: plan.warnings,
   };
@@ -367,9 +396,11 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
       for (const k of back) unplanned.push(`${k}: still exists in ${displayName(from)} (newest snapshot) — not removed`);
       remove = remove.filter((k) => !back.includes(k));
     }
+    const memory = readHandlerMemory(ref.dir, to);
+    const hints = engineHints(memory, availableHandlerSecrets(to, env.vars));
     const { plan } = await computePlan({
       projectDir: ref.dir, envName: to, env, sourceDir, sourceName: from, select, resolutions, remove, onEvent: forwardEvents(emit, [env.password, ...Object.values(env.vars)]),
-      signal, clientFactory: ctx.clientFactory,
+      signal, clientFactory: ctx.clientFactory, hints,
     });
     plan.warnings.push(...unplanned);
     // Only what the plan shows as a delete is ever sent to apply.
@@ -378,9 +409,9 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     const active = plan.items.filter((i) => i.action !== 'excluded');
     const missing = keys.filter((k) => !plan.items.some((i) => i.key === k));
     if (missing.length) plan.errors.push(...missing.map((k) => `${k}: not in the source snapshot`));
-    const secrets = await secretsNeeded(ctx.secrets, ref, to, active);
+    const secrets = await secretsNeeded(ctx.secrets, ref, to, active, memory);
     const result = buildResult({ planId, name, to, from, changesetId, sourceCommit: pinned, selected: keys, remove }, plan, {
-      environmentValues: environmentValues(ref.dir, to, active, readTree(sourceDir)), secretsNeeded: secrets,
+      environmentValues: environmentValues(ref.dir, to, active, readTree(sourceDir)), secretsNeeded: secrets, hints,
     });
     const scrubbed = makeScrubber([env.password, ...Object.values(env.vars)])(result);
     remember(planId, { projectDir: ref.dir, result: scrubbed, kind, select, sourceDir, sourcePath, resolutions, remove: deletes.map((x) => x.key), removeExpected });
@@ -431,7 +462,7 @@ function validateApply(plan: StoredPlan, body: unknown, readOnly: boolean): Appl
 
   const given = (key: string, p: string) => {
     const v = (values as Obj)[key]?.[p];
-    return v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && !v.length);
+    return v !== undefined && v !== null && !(typeof v === 'string' && v.trim() === '') && !(Array.isArray(v) && !v.length);
   };
   const required = r.needsAttention.filter((n) => {
     if (n.kind === 'drift') return resolutions[n.key] === 'overwrite';
@@ -493,6 +524,20 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
     else extraVars[`KINETIC_${envKey(r.to)}_${s.scope === 'secret' ? 'SECRET' : 'HANDLER'}_${s.name}`] = value;
   }
   const env: EngineEnv = await resolveEnv(ref, r.to, ctx.secrets, extraVars);
+  // Handler secrets entered now are sent with the next settings write; kept
+  // ones stay pending (names only) until the target accepts one.
+  const supplied = r.secretsNeeded.filter((s) => s.scope === 'handler' && input.secrets[s.id] !== undefined).map((s) => s.name);
+  const memory = readHandlerMemory(ref.dir, r.to);
+  if (input.remember && supplied.length) writeHandlerMemory(ref.dir, r.to, { ...memory, pending: [...memory.pending, ...supplied] });
+  const hints = engineHints(readHandlerMemory(ref.dir, r.to), availableHandlerSecrets(r.to, env.vars), supplied);
+  // What an unsaved handler's message offers: entering them here only when
+  // the plan has an input for each.
+  const settingsHint = (parts: SettingsHintParts): string | null => {
+    if (parts.unknown.length) return null;
+    const offered = parts.secrets.every((p) => r.secretsNeeded.some((s) => s.key === parts.key && s.name === handlerSecretName(parts.definitionId, p)));
+    if (!offered) return null;
+    return parts.settings.length ? 'or enter them under Environment values and apply again' : 'or enter them here and apply again';
+  };
   const known = [env.password, ...Object.values(env.vars), ...secretValues];
   const scrub = makeScrubber(known);
 
@@ -512,7 +557,7 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   const onEvent = forwardEvents(emit, known, (e) => {
     if (e.type !== 'item') return e;
     if (e.status === 'running') wrote = true;
-    const out: RunItemOutcome = { key: String(e.key), status: e.status as RunItemOutcome['status'] };
+    const out: RunItemOutcome = { key: String(e.key), status: e.status as RunItemOutcome['status'], ...(e.attention === true ? { attention: true } : {}) };
     if (e.status === 'failed') out.message = plainFailure(e.message);
     else if (typeof e.message === 'string' && e.message) out.message = e.message;
     outcomes.set(out.key, out);
@@ -561,8 +606,10 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
       projectDir: ref.dir, envName: r.to, env, sourceDir: plan.sourceDir, sourceName: r.from ?? undefined, yes: true, select: plan.select, resolutions: input.resolutions,
       remove: plan.remove, removeExpected: plan.removeExpected,
       onEvent, onPlan, signal, clientFactory: ctx.clientFactory, log: () => {},
-      targetLabel: To, settingsHint: 'or enter them here and apply again',
+      targetLabel: To, settingsHint, hints,
+      heldHint: input.remember ? 'kept for the next apply' : 'not kept: enter it again to use it',
     });
+    recordHandlerOutcomes(ref.dir, r.to, res.settings);
     done = res.done;
     const leftOver = res.failed ?? [];
     const attention = res.attention ?? [];
@@ -580,6 +627,7 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
       error = `${attention.length === 1 ? '1 handler is' : `${attention.length} handlers are`} installed without required settings (see the list below). Enter them and apply again, or set them in ${To}'s Task console.`;
     }
   } catch (err) {
+    recordHandlerOutcomes(ref.dir, r.to, (err as { settings?: HandlerSettingsOutcome[] } | null)?.settings);
     const failed = [...outcomes.values()].find((o) => o.status === 'failed' || o.status === 'running');
     done = [...outcomes.values()].filter((o) => o.status === 'done').length;
     if ((err as { name?: string } | null)?.name === 'CancelledError' || signal.aborted) {
@@ -676,7 +724,9 @@ export function registerRunRoutes(router: Router, ctx: SyncContext): void {
       try {
         return await withProjectLock(ref, () => runApplyJob(ctx, ref, plan, input, emit, signal));
       } catch (err) {
-        throw scrubError(err, [...Object.values(input.secrets)]);
+        // Every secret the run could have seen: typed ones and the target's.
+        const env = await resolveEnv(ref, plan.result.to, ctx.secrets).catch(() => null);
+        throw scrubError(err, [...Object.values(input.secrets), ...(env ? [env.password, ...Object.values(env.vars)] : [])]);
       } finally {
         applying.delete(id);
       }

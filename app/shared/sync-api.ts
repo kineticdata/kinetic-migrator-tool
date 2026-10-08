@@ -323,6 +323,8 @@ export interface SecretNeeded {
   name: string;
   label: string;
   has: boolean;
+  // Said beside the input (a handler in the target: its value is not readable).
+  hint?: string;
 }
 
 export interface PlanResult {
@@ -366,6 +368,8 @@ export interface RunItemOutcome {
   key: string;
   status: 'done' | 'skipped' | 'failed' | 'running';
   message?: string;
+  // Done, but left needing attention (a handler without required settings).
+  attention?: boolean;
 }
 
 export interface RunRecord {

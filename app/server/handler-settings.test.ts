@@ -5,7 +5,7 @@
 // after they are entered saves them. The secret never leaves the server.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 // @ts-expect-error -- untyped engine module
 import { fakeTaskHandlers } from '../../lib/sync/fake-client.mjs';
@@ -80,7 +80,8 @@ test('live scenario: a new handler with empty required settings is installed, as
   assert.equal(run.status, 'partial');
   assert.deepEqual(run.items.find((i) => i.key === KEY), {
     key: KEY, status: 'done',
-    message: "Installed; set account_id, certificate_id, client_id, private_key_b64 in Test's Task console (or enter them here and apply again)",
+    message: "Installed; set account_id, certificate_id, client_id, private_key_b64 in Test's Task console (or enter them under Environment values and apply again).",
+    attention: true,
   });
   assert.ok((await log(h.dir, { limit: 3 })).some((e) => /^Partly applied '1 item from Dev' to Test\n/.test(e.message)));
 
@@ -147,4 +148,106 @@ test('API errors carry the platform message and error list (names only, capped);
   assert.equal(toApiError(http(500, '<html>stack trace with secrets</html>')).message, 'The Kinetic Platform returned an error (500).');
   assert.equal(toApiError(http(400, JSON.stringify({ message: 'x', password: 'hunter2' }))).message, 'The Kinetic Platform rejected the change (400): x');
   assert.ok(toApiError(http(400, JSON.stringify({ message: 'm'.repeat(9000), errors: Array(50).fill('e'.repeat(300)) }))).message.length < 700);
+});
+
+// ---- a required Encrypted property (never read back) ----
+
+const VID = 'vault_call_v1';
+const VKEY = `handlers/${VID}/handler`;
+const VZIP = Buffer.from('PK\x03\x04 vault');
+const VSECRET = 'handler/VAULT_CALL_V1__VAULT_PASSWORD';
+const VPROPS = [
+  { name: 'host', type: 'Plaintext', required: true, description: '' },
+  { name: 'vault_password', type: 'Encrypted', required: true, description: '' },
+];
+
+function withVault(h: Harness, installed: unknown[] = []) {
+  const task = fakeTaskHandlers({ [VID]: { handler: { definitionId: VID, name: 'Vault Call', properties: VPROPS }, zip: VZIP } }, installed);
+  const { 'GET task/handlers': _, ...rest } = testRoutes();
+  h.spaces.dev = () => ({
+    ...devRoutes(),
+    'GET task/handlers': { handlers: [{ definitionId: VID, name: 'Vault Call', properties: VPROPS.map((p) => (p.type === 'Encrypted' ? p : { ...p, value: null })) }] },
+    [`GET task/handlers/${VID}/zip`]: VZIP,
+  });
+  h.spaces.test = () => ({ ...rest, [FALLBACK]: task.handle });
+  return task;
+}
+
+const memoryText = (h: Harness) => { try { return readFileSync(path.join(h.dir, 'plans', 'handler-settings-test.json'), 'utf8'); } catch { return ''; } };
+
+test('Encrypted, create then re-apply: a kept secret entered while a setting was missing is sent with the next settings write, once', async (t) => {
+  const h = await harness(t);
+  const task = withVault(h);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  const p = await plan(h, { to: 'test', from: 'dev', selected: [VKEY] });
+  assert.deepEqual(p.secretsNeeded.map((s) => [s.id, s.has, s.hint]), [[VSECRET, false, undefined]]);
+  assert.deepEqual(p.needsAttention.filter((n) => n.kind === 'handler-settings').map((n) => n.valueId), [`${VKEY}#properties.host.value`, VSECRET]);
+
+  // The secret is entered and kept; host is not: the PUT is skipped, the secret is held.
+  const first = await h.job('POST', `${P}/plans/${p.planId}/apply`, {
+    confirm: 'test', acknowledgements: p.needsAttention.map((n) => n.id), secrets: { [VSECRET]: PLANTED_RUN }, remember: true,
+  });
+  assert.equal(first.result.status, 'partial', first.result.error);
+  assert.deepEqual(h.writes('test'), ['POST /handlers']);
+  assert.equal(runs(h)[0].items.find((i) => i.key === VKEY)!.message,
+    "Installed; set host in Test's Task console (or enter them under Environment values and apply again). vault_password was entered but not saved yet (kept for the next apply).");
+  assert.deepEqual(JSON.parse(memoryText(h)), { pending: ['VAULT_CALL_V1__VAULT_PASSWORD'], empty: { [VID]: ['host'] } });
+
+  // Re-plan: an update; the secret is offered again (stored, not readable in Test); only host is asked for.
+  const again = await plan(h, { to: 'test', from: 'dev', selected: [VKEY] });
+  assert.deepEqual(again.items.map((i) => i.action), ['update']);
+  assert.deepEqual(again.secretsNeeded.map((s) => [s.id, s.has, s.hint]), [[VSECRET, true, "Not readable in Test — leave blank to keep Test's value."]]);
+  assert.deepEqual(again.needsAttention.filter((n) => n.kind === 'handler-settings').map((n) => n.id), [`handler-settings:${VKEY}#host`]);
+  const done = await h.job('POST', `${P}/plans/${again.planId}/apply`, {
+    confirm: 'test', acknowledgements: [`handler:${VKEY}`], values: { [VKEY]: { 'properties.host.value': 'vault.example.com' } },
+  });
+  assert.equal(done.result.status, 'applied', done.result.error);
+  const put = h.calls.find((c) => c.method === 'PUT' && c.env === 'test')!;
+  assert.deepEqual((put.body as any).properties, { host: 'vault.example.com', vault_password: PLANTED_RUN });
+  assert.equal(task.values(VID).vault_password, PLANTED_RUN);
+  assert.deepEqual(JSON.parse(memoryText(h)), { pending: [], empty: {} }, 'accepted: nothing pending');
+
+  // Once accepted it is not resent: the next plan has nothing to do.
+  const clean = await plan(h, { to: 'test', from: 'dev', selected: [VKEY] });
+  assert.deepEqual(clean.items.map((i) => i.action), ['unchanged']);
+  assertNoSecret(h, [first.events, done.events, memoryText(h)]);
+  for (const r of runs(h)) assert.ok(!JSON.stringify(r).includes(PLANTED_RUN));
+});
+
+test('Encrypted, update then Resume: the platform names the empty encrypted property, the plan offers it, and a value entered on Resume is sent', async (t) => {
+  const h = await harness(t);
+  const task = withVault(h, [{ definitionId: VID, values: { host: 'old.example.com' } }]);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  mkdirSync(path.join(h.dir, 'overrides'), { recursive: true });
+  writeFileSync(path.join(h.dir, 'overrides', 'test.json'), JSON.stringify({ artifacts: { [VKEY]: { 'properties.host': { value: 'new.example.com' } } } }));
+  const p = await plan(h, { to: 'test', from: 'dev', selected: [VKEY] });
+  assert.deepEqual(p.items.map((i) => i.action), ['update']);
+  // Required and encrypted: always offered for a handler in the target, never readable.
+  assert.deepEqual(p.secretsNeeded.map((s) => [s.id, s.has, s.hint]), [[VSECRET, false, "Not readable in Test — leave blank to keep Test's value."]]);
+  assert.deepEqual(p.needsAttention.filter((n) => n.kind === 'handler-settings'), [], 'not known to be empty yet');
+
+  const body = { confirm: 'test', acknowledgements: [`handler:${VKEY}`] };
+  const first = await h.job('POST', `${P}/plans/${p.planId}/apply`, body);
+  assert.equal(first.result.status, 'partial', first.result.error);
+  const item = runs(h)[0].items.find((i) => i.key === VKEY)!;
+  assert.deepEqual([item.status, item.attention, item.message], ['done', true,
+    "Settings not saved; set vault_password in Test's Task console (or enter them here and apply again)."]);
+  assert.deepEqual(JSON.parse(memoryText(h)).empty, { [VID]: ['vault_password'] });
+
+  // A re-plan knows it is empty now.
+  const replan = await plan(h, { to: 'test', from: 'dev', selected: [VKEY] });
+  assert.equal(replan.secretsNeeded[0].hint, "Empty in Test; needed before the handler's settings can be saved.");
+  assert.deepEqual(replan.needsAttention.filter((n) => n.kind === 'handler-settings').map((n) => n.valueId), [VSECRET]);
+
+  // Resume of the first plan with the value (for this run only): sent, saved, forgotten.
+  const resumed = await h.job('POST', `${P}/plans/${p.planId}/apply`, { ...body, secrets: { [VSECRET]: PLANTED_RUN } });
+  assert.equal(resumed.result.status, 'applied', resumed.result.error);
+  const puts = h.calls.filter((c) => c.method === 'PUT' && c.env === 'test');
+  assert.deepEqual((puts.at(-1)!.body as any).properties, { host: 'new.example.com', vault_password: PLANTED_RUN });
+  assert.equal(task.values(VID).vault_password, PLANTED_RUN);
+  assert.deepEqual(JSON.parse(memoryText(h)), { pending: [], empty: {} });
+  const sid = JSON.parse(readFileSync(path.join(h.dir, 'kinetic-migrate.json'), 'utf8')).secretsId;
+  assert.equal(await h.store.has(`${sid}/test/handler/VAULT_CALL_V1__VAULT_PASSWORD`), false, 'one run only: not kept');
+  assertNoSecret(h, [first.events, resumed.events, memoryText(h)]);
+  for (const r of runs(h)) assert.ok(!JSON.stringify(r).includes(PLANTED_RUN));
 });

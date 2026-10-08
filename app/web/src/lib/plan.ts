@@ -240,6 +240,8 @@ export type StepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 export interface ItemProgress {
   status: StepStatus;
   message?: string;
+  // Done, but left needing attention (a handler without required settings).
+  attention?: boolean;
 }
 
 export interface ChecklistState {
@@ -260,9 +262,11 @@ export function checklistFrom(events: JobEventData[], carried: Record<string, It
     } else if (e.type === 'item' && typeof e.key === 'string' && typeof e.status === 'string' && STATUSES.has(e.status)) {
       // Done in an earlier run of this plan stays done when this run finds it up to date.
       if (e.status === 'skipped' && carried[e.key]?.status === 'done' && state.items[e.key]?.status === 'done') continue;
-      state.items[e.key] = typeof e.message === 'string' && e.message
-        ? { status: e.status as StepStatus, message: e.message }
-        : { status: e.status as StepStatus };
+      state.items[e.key] = {
+        status: e.status as StepStatus,
+        ...(typeof e.message === 'string' && e.message ? { message: e.message } : {}),
+        ...(e.attention === true ? { attention: true } : {}),
+      };
     }
   }
   return state;

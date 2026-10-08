@@ -638,3 +638,34 @@ test('a handler installed without a required secret: the run is partly applied, 
   expect(await screen.findByRole('heading', { name: 'Applied to Test' })).toBeInTheDocument();
   expect(document.body.innerHTML).not.toContain(SECRET);
 });
+
+test('a handler in the target: its required secret is offered as not readable, and after a refused write Resume asks for it', async () => {
+  const SID = 'handler/SMTP_SEND_V1__PASSWORD';
+  const message = "Settings not saved; set password in Test's Task console (or enter them here and apply again).";
+  const first = sse([{ type: 'item', data: { type: 'item', key: HANDLER, status: 'done', message, attention: true } }]);
+  const m = setup(simple({
+    items: [{ key: HANDLER, type: 'handlers', label: 'SMTP Send', action: 'update', drift: false, diff: [{ path: 'properties[server].value', from: 'a', to: 'b' }] }],
+    counts: { create: 0, update: 1, unchanged: 0, manual: 0, 'skip-drift': 0, delete: 0 },
+    secretsNeeded: [{ id: SID, key: HANDLER, scope: 'handler', name: 'SMTP_SEND_V1__PASSWORD', label: 'SMTP Send › password', has: false, hint: "Not readable in Test — leave blank to keep Test's value." }],
+  }), {
+    applyJobs: [
+      { id: 'a1', events: first, result: { runId: 'r1', status: 'partial', commit: 'c', backupCommit: 'b', done: 1, error: '1 handler is installed without required settings (see the list below).' } },
+      { id: 'a2', result: { runId: 'r2', status: 'applied', commit: 'c2', backupCommit: 'b2', done: 1, error: null } },
+    ],
+  });
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  await screen.findByRole('heading', { name: /from Dev/ });
+  await user.click(next());
+  const secrets = screen.getByRole('region', { name: 'Secrets needed' });
+  expect(secrets).toHaveTextContent("Not readable in Test — leave blank to keep Test's value.");
+  await user.click(next());
+  await user.type(screen.getByLabelText(/Type test to confirm/), 'test');
+  await user.click(screen.getByRole('button', { name: 'Apply to Test' }));
+  const alert = await screen.findByRole('alert');
+  await user.type(within(alert).getByLabelText(/SMTP Send › password/), SECRET);
+  await user.click(screen.getByRole('button', { name: 'Resume' }));
+  await waitFor(() => expect(m.callsTo('POST', '/api/projects/acme-demo/plans/pl1/apply')).toHaveLength(2));
+  expect((m.callsTo('POST', '/api/projects/acme-demo/plans/pl1/apply')[1].body as { secrets?: unknown }).secrets).toEqual({ [SID]: SECRET });
+  expect(document.body.innerHTML).not.toContain(SECRET);
+});

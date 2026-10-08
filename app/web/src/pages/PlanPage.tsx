@@ -215,7 +215,7 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
           {plan.secretsNeeded.length > 0 && (
             <section aria-label="Secrets needed" className="mt-6 rounded-xl border border-border bg-surface p-4">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-fg"><KeyRound size={15} aria-hidden className="text-muted" />Secrets needed</h3>
-              <p className="mt-0.5 text-[13px] text-muted">Passwords and keys for new connections and handlers. They are never shown again; leave one empty to keep what {To} has.</p>
+              <p className="mt-0.5 text-[13px] text-muted">Passwords and keys for connections and handlers. They are never shown again; leave one empty to keep what {To} has.</p>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 {plan.secretsNeeded.map((s) => (
                   <SecretInput
@@ -224,7 +224,7 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
                     isSet={s.has}
                     value={secrets[s.id] ?? ''}
                     onChange={(v) => setSecrets((cur) => ({ ...cur, [s.id]: v }))}
-                    hint={s.has ? `Already stored for ${To}.` : 'Used for this apply.'}
+                    hint={s.hint ? `${s.hint}${s.has ? ` A value is stored for ${To}.` : ''}` : s.has ? `Already stored for ${To}.` : 'Used for this apply.'}
                   />
                 ))}
               </div>
@@ -589,7 +589,10 @@ function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, k
   // Secrets given for the last run only, and those a handler's settings still
   // need (not entered yet): Resume can send them.
   const settingsIds = new Set(plan.needsAttention.filter((n) => n.kind === 'handler-settings').map((n) => n.valueId));
-  const unset = (id: string) => settingsIds.has(id) && !oneRun.includes(id) && !kept.includes(id);
+  // A handler left needing attention by the last run: each of its secrets
+  // not stored can be entered.
+  const unset = (id: string) => !oneRun.includes(id) && !kept.includes(id)
+    && (settingsIds.has(id) || plan.secretsNeeded.some((s) => s.id === id && s.scope === 'handler' && checklist.items[s.key]?.attention));
   const resumeSecrets = plan.secretsNeeded.filter((s) => oneRun.includes(s.id) || (!s.has && unset(s.id)));
 
   const heading = !outcome ? `Applying to ${To}…` : {

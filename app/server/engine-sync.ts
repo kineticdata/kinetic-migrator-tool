@@ -78,6 +78,14 @@ export interface EnginePlan {
   warnings: string[];
 }
 
+// What a caller knows about the target beyond its export (see lib/sync/artifacts/handlers.mjs).
+export interface EngineHints {
+  handlers?: { pending?: (definitionId: string, property: string) => boolean; empty?: (definitionId: string) => string[] };
+}
+// The names an unsaved handler's settings need, by what can supply them.
+export interface SettingsHintParts { key: string; definitionId: string; secrets: string[]; settings: string[]; unknown: string[] }
+export interface HandlerSettingsResult { key: string; definitionId: string; saved: boolean; sent: string[]; empty: string[] | null }
+
 export interface EngineModule {
   type: string;
   scope: string | null;
@@ -97,7 +105,7 @@ interface RunCommon { projectDir: string; env: EngineEnv; onEvent?: OnEvent; sig
 export const runExport: (opts: RunCommon & { dest?: string }) => Promise<{ code: number; artifacts: number; counts: Record<string, number> }> = commandsModule.runExport;
 export const computePlan: (opts: RunCommon & {
   envName: string; from?: string; sourceName?: string; sourceDir?: string; sourceArtifacts?: Artifact[]; sourceUnresolved?: Map<string, string>; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
-  remove?: string[]; removeExpected?: Record<string, string>;
+  remove?: string[]; removeExpected?: Record<string, string>; hints?: EngineHints;
 }) => Promise<{ env: EngineEnv; config: EngineConfig; plan: EnginePlan; targetList: TargetArtifact[] }> = commandsModule.computePlan;
 export const runApply: (opts: RunCommon & {
   envName: string; from?: string; sourceName?: string; sourceDir?: string; yes: boolean; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
@@ -105,8 +113,9 @@ export const runApply: (opts: RunCommon & {
   onPlan?: (plan: EnginePlan) => void;
   // How messages name the target (default: its environment name), and what
   // a handler installed without its required settings tells the user to do.
-  targetLabel?: string; settingsHint?: string;
-}) => Promise<{ code: number; done: number; backupDir?: string; failed?: string[]; attention?: string[] }> = commandsModule.runApply;
+  // `heldHint` follows the names of secrets entered but not saved yet.
+  targetLabel?: string; settingsHint?: string | ((parts: SettingsHintParts) => string | null); heldHint?: string; hints?: EngineHints;
+}) => Promise<{ code: number; done: number; backupDir?: string; failed?: string[]; attention?: string[]; settings?: HandlerSettingsResult[] }> = commandsModule.runApply;
 export const stamp: () => string = commandsModule.stamp;
 export const compareArtifacts: (opts: { modules: EngineModule[]; left: Map<string, { data: unknown }>; right: Map<string, { data: unknown }> }) => {
   items: Array<{ key: string; type: string; status: 'same' | 'differs' | 'only-left' | 'only-right'; diff: DiffEntry[] }>;
@@ -156,7 +165,7 @@ export const isSecretProperty: (p: unknown) => boolean = secretsModule.isSecretP
 export const describePlatformError: (e: { status?: number; method?: string; body?: unknown }) => string = httpModule.describePlatformError;
 export const describeFailureMessage: (message: unknown) => string | null = httpModule.describeFailureMessage;
 // Required handler properties that would be empty after apply (see lib/sync/artifacts/handlers.mjs).
-export const missingRequired: (desired: unknown, existing: TargetArtifact | null, has: (name: string) => boolean) => string[] = handlersModule.missingRequired;
+export const missingRequired: (desired: unknown, existing: TargetArtifact | null, has: (name: string) => boolean, hints?: EngineHints['handlers']) => string[] = handlersModule.missingRequired;
 export const secretFieldKey: (field: string) => string = envModule.secretFieldKey;
 export const parsePath: (path: string) => string[] = overridesModule.parsePath;
 export const loadState: (projectDir: string, env: string) => Record<string, string> = stateModule.loadState;

@@ -270,44 +270,43 @@ property. So:
   because its package changed), and for one already in the target whose
   required settings are empty there, each required property that would still
   be empty after the apply is listed under Needs attention: "<handler> needs
-  <name> before its settings can be saved in <target>". A secret one
-  (encrypted type or secret-looking name) is asked for under Secrets needed,
-  write-only, and kept in the keychain under the target's handler secrets when
-  you choose to remember it; a plaintext one is an environment value (the
-  target's own value is kept when it has one). Entering it takes care of the
-  entry; ticking it installs the handler without it.
+  <name> before its settings can be saved in <target>". A plaintext one is an
+  environment value (the target's own value is kept when it has one).
+  Entering it takes care of the entry; ticking it installs the handler
+  without it.
+- **Secrets are always offered.** Secret properties (encrypted type or
+  secret-looking name) are asked for under Secrets needed, write-only: every
+  one for an install or re-install, and every required one for a handler
+  already in the target, whose value the platform never shows ("not readable
+  in <target>: leave blank to keep <target>'s value"). A value you enter is
+  kept in the keychain under the target's handler secrets when you choose to
+  remember it, and is sent with the next settings write, even when nothing
+  else changed. Once the target accepts that write it is not sent again until
+  you enter a new one.
 - **Apply never sends the write that is bound to fail.** When a required
   setting is still empty, apply installs the package, skips the settings
   write and reports the handler as done with a note: "Installed; set <names>
-  in <target>'s Task console (or enter them here and apply again)". The run
-  carries on with the other items and finishes as partly applied. A settings
-  write the platform refuses only because required properties are empty (for
-  example an encrypted one, whose value is never read back) is reported the
-  same way; a write refused for any other reason stops the run as before.
+  in <target>'s Task console (or enter them here and apply again)". A secret
+  you entered for it is named as not saved yet; a kept one stays in the
+  keychain and is sent on the next apply. The run carries on with the other
+  items and finishes as partly applied. A settings write the platform refuses
+  only because required properties are empty (for example an encrypted one,
+  whose value is never read back) is reported the same way, and the app
+  remembers those names (in `plans/`, names only), so the next plan asks for
+  them. A write refused for any other reason stops the run as before.
 - **Applying again finishes the job.** While a required property is empty in
-  the target, the next plan shows the handler as an update (its settings
-  only), so after you enter the missing values, Resume or a new plan and apply
-  saves them. On the command line, supply secrets as
-  `KINETIC_<ENV>_HANDLER_<DEFINITION_ID>__<PROPERTY>` and other settings as
-  overrides, then apply again.
+  the target, or a secret was entered and not yet accepted, the next plan
+  shows the handler as an update (its settings only). Enter what is missing
+  and apply again, or use Resume, which asks for the handler's secrets. On the
+  command line, supply secrets as `KINETIC_<ENV>_HANDLER_<DEFINITION_ID>__<PROPERTY>`
+  and other settings as overrides, then apply again.
+- A handler you leave unconfigured on purpose keeps showing as an update,
+  and every run that includes it is partly applied. Leave it out of the
+  selection instead.
 
 Which required properties the target has empty is read from its plaintext
-values only: encrypted values are never read back, so an empty encrypted
-property is only found out when the platform refuses the write.
-
-### Typical environment-specific settings
-
-These came up in a real dev-to-prod round trip:
-
-- List the space attribute `Web Server Url` in `envBoundAttributes.space`, so
-  each environment keeps its own.
-- Keep the space `displayType`/`displayValue` (the portal bundle URL) per
-  environment (they are in the default `envBoundSpaceFields`); for a space
-  that has none yet, set them once with an override or under Environment
-  values.
-- Add a `replace` rule from the source space host to the target host, for
-  example `{ "from": "dev-space.kinops.io", "to": "your-space.kinops.io" }`,
-  so self-referencing connection base URLs follow the environment.
+values; an empty encrypted property is only found out when the platform
+refuses a write.
 
 ## 5. Connection credentials
 
@@ -364,11 +363,16 @@ KINETIC_PROD_HANDLER_SMTP_EMAIL_SEND_V1__PROD_PRIVATE_KEY_B64=...
 
 Each optional secret property with no variable is left unset, and the run
 prints a warning; set it in the target console. A required one with no value
-holds back the handler's settings (see Required handler settings above). Updates never send secret values, so
-the target keeps its own. The one exception is a package re-install (the
-package changed): apply then re-sends each secret that has a variable set,
-and warns for each one without a variable so you can check it in the
-console.
+holds back the handler's settings (see Required handler settings above).
+Updates do not send secret values, so the target keeps its own, with three
+exceptions:
+- After a package re-install (the package changed), apply re-sends each
+  secret that has a variable set, and warns for each one without a variable
+  so you can check it in the console.
+- A required secret the target has empty (or the platform last named empty)
+  is sent when a value is at hand.
+- In the app, a secret entered since the target last accepted a settings
+  write is sent.
 
 Existing connections are never written, because sending a connection back
 to the platform can wipe its stored credentials. If one differs, the plan
