@@ -283,6 +283,7 @@ export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, rende
               <KindIcon kind={node.kind} className={selected ? 'text-accent' : 'text-subtle'} />
               <span className={cn('min-w-0 truncate', !node.key && 'font-medium')} title={node.label}>{node.label}</span>
               {row.detail && <span className="min-w-0 truncate text-xs text-subtle">{row.detail}</span>}
+              {node.note && <span className="shrink-0 rounded bg-drift-soft px-1.5 text-[11px] font-medium text-drift" title={node.note} aria-label={node.note}>Not captured</span>}
               <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
                 {renderAside?.(row)}
                 {showCounts && node.hasChildren && node.count > 0 && (

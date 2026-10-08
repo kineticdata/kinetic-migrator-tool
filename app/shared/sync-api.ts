@@ -35,6 +35,8 @@ export interface TreeNode {
   // Items below this node (not counting itself).
   count: number;
   hasChildren: boolean;
+  // A group the snapshot could not capture, and why (Explore).
+  note?: string;
 }
 
 export type CompareStatus = 'new' | 'changed' | 'drifted' | 'manual' | 'only-target' | 'same';
@@ -436,6 +438,8 @@ export interface HistoryEvent {
   changesetId: string | null;
   status: RunStatus | null;
   drifted: string[];
+  // Snapshots and backups: what was not captured, and why.
+  notes?: string[];
 }
 
 export interface HistoryDetail {

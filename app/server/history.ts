@@ -21,6 +21,9 @@ const TYPES: HistoryType[] = ['snapshot', 'changeset', 'applied', 'backup', 'res
 // The whole log: backups and runs of any age must stay findable.
 const ALL = Number.MAX_SAFE_INTEGER;
 
+const LEFT_OUT = 'Connections and operations were left out: ';
+export const NOT_CAPTURED = "Connections and operations weren't captured in this snapshot: ";
+
 export function typeOf(title: string): HistoryType {
   if (/^Snapshot of /.test(title)) return 'snapshot';
   if (/^Backup of /.test(title)) return 'backup';
@@ -36,10 +39,15 @@ export function eventsFor(ref: ProjectRef, entry: LogEntry): HistoryEvent[] {
   const type = typeOf(title);
   const runId = trailers.Run ?? null;
   const run = runId ? readRun(ref, runId) : null;
-  const drifted = /^Drifted: /.test(body) ? body.split('\n').slice(1).filter(Boolean) : [];
+  const paragraphs = body.split(/\n\n+/);
+  const driftBlock = paragraphs.find((b) => /^Drifted: /.test(b));
+  const drifted = driftBlock ? driftBlock.split('\n').slice(1).filter(Boolean) : [];
+  // What a snapshot (or backup) left out, recorded in its commit body.
+  const notes = paragraphs.filter((b) => b.startsWith(LEFT_OUT)).map((b) => `${NOT_CAPTURED}${b.slice(LEFT_OUT.length).replace(/\s+/g, ' ').trim()}`);
   const base: HistoryEvent = {
     id: entry.oid, commit: entry.oid, type, title, at: entry.at, author: entry.author.name,
     env: trailers.Environment ?? null, runId, changesetId: trailers.Changeset ?? null, status: run?.status ?? null, drifted,
+    ...(notes.length && (type === 'snapshot' || type === 'backup') ? { notes } : {}),
   };
   const out = [base];
   if (type === 'snapshot' && drifted.length) {

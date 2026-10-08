@@ -296,3 +296,18 @@ test('previous search results stay visible while typing more', async () => {
   expect(within(screen.getByRole('tree', { name: 'Search results' })).getByText('Leave request')).toBeInTheDocument();
   expect(await screen.findByText('No matches')).toBeInTheDocument();
 });
+
+test('a snapshot that could not capture connections says so on the Connections group', async () => {
+  const note = "Connections and operations weren't captured in this snapshot: dev.example.com runs Kinetic Platform 7.0.0-rc3, which doesn't offer the sign-in this tool uses for the Integrator yet.";
+  const saved = TREE[''];
+  TREE[''] = [saved[0], saved[1], n('group:connections', 'Connections', 'group', { key: undefined, note })];
+  try {
+    setup();
+    renderWithApp(<AppRoutes />, { route: '/p/acme-demo/explore/dev' });
+    const tree = await screen.findByRole('tree', { name: 'Items in Dev' });
+    expect(within(tree).getByLabelText(note)).toHaveTextContent('Not captured');
+    expect(screen.getByRole('list', { name: 'Snapshot notes' })).toHaveTextContent(note);
+  } finally {
+    TREE[''] = saved;
+  }
+});

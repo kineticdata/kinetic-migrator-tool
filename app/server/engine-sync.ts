@@ -174,6 +174,9 @@ export const isSecretProperty: (p: unknown) => boolean = secretsModule.isSecretP
 // A platform failure in plain words, with the platform's own message and
 // error list when its body has them (see lib/sync/http.mjs).
 export const describePlatformError: (e: { status?: number; method?: string; body?: unknown }) => string = httpModule.describePlatformError;
+// Why the Integrator could not be signed in to, in plain words (built from
+// the status, platform version and host only).
+export const integratorAuthText: (e: { status?: number | null; version?: string | null; host?: string | null; unsupported?: boolean }) => string = httpModule.integratorAuthText;
 export const describeFailureMessage: (message: unknown) => string | null = httpModule.describeFailureMessage;
 // Required handler properties that would be empty after apply (see lib/sync/artifacts/handlers.mjs).
 export const missingRequired: (desired: unknown, existing: TargetArtifact | null, has: (name: string) => boolean, hints?: EngineHints['handlers']) => string[] = handlersModule.missingRequired;

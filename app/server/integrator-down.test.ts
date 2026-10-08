@@ -9,6 +9,11 @@ import path from 'node:path';
 import type { CompareResult, CompareTreeNode, PlanResult, SnapshotResult, SuggestionOut } from '../shared/sync-api.ts';
 import type { ConnectionTestResult } from '../shared/api.ts';
 import { log } from './repo.ts';
+import { toApiError } from './errors.ts';
+import { eventsFor } from './history.ts';
+import { commitMessage } from './trailers.ts';
+// @ts-expect-error -- untyped engine module
+import { integratorAuthUnavailable } from '../../lib/sync/fake-client.mjs';
 import { assertNoSecret, devRoutes, harness, type Harness } from './sync-fixtures.ts';
 
 const P = '/api/projects/sync-test';
@@ -45,11 +50,22 @@ test('a snapshot succeeds without connections and operations, with a warning in 
   const head = (await log(h.dir, { limit: 1 }))[0];
   assert.match(head.message, /Connections and operations were left out: test\.example\.com runs Kinetic Platform 7\.0\.0-rc3/);
   assert.match(readFileSync(path.join(h.dir, 'snapshots', 'test', '.kinetic-sync-export'), 'utf8'), /^omitted: \{.*"status":404/m);
+  // Explore shows the Connections group with why; History shows the note.
+  const NOTE = `Connections and operations weren't captured in this snapshot: ${WHY}`;
+  const roots = (await h.call('GET', `${P}/explore/test/tree`)).json as Array<{ id: string; note?: string; count: number }>;
+  const group = roots.find((n) => n.id === 'group:connections');
+  assert.deepEqual([group?.note, group?.count], [NOTE, 0]);
+  assert.deepEqual((await h.call('GET', `${P}/explore/test/tree?parent=group%3Aconnections`)).json, []);
+  const events = (await h.call('GET', `${P}/history?env=test&type=snapshot`)).json as Array<{ notes?: string[] }>;
+  assert.deepEqual(events[0].notes, [NOTE]);
   // A later snapshot with the Integrator back records no omission.
   h.integratorDown.delete('test');
   const again = await snapshot(h, 'test');
   assert.equal(again.warnings, undefined);
   assert.doesNotMatch(readFileSync(path.join(h.dir, 'snapshots', 'test', '.kinetic-sync-export'), 'utf8'), /omitted/);
+  const after = (await h.call('GET', `${P}/explore/test/tree`)).json as Array<{ id: string; note?: string; count: number }>;
+  assert.equal(after.find((n) => n.id === 'group:connections')?.note, undefined);
+  assert.ok((after.find((n) => n.id === 'group:connections')?.count ?? 0) > 0);
   assertNoSecret(h);
 });
 
@@ -111,4 +127,21 @@ test('Test connection says in plain words that the Integrator sign-in is not off
   assert.equal(step.ok, false);
   assert.equal(step.message, `${WHY} Snapshots will leave connections and operations out.`);
   assert.equal(r.steps.find((s) => s.step === 'core')!.ok, true);
+});
+
+test('an Integrator sign-in error that reaches a route maps to the plain message, never a generic 500', () => {
+  const err = integratorAuthUnavailable({ host: 'test.example.com' });
+  err.message = 'ignored';
+  const a = toApiError(err);
+  assert.equal(a.status, 502);
+  assert.equal(a.code, 'integrator_unavailable');
+  assert.equal(a.message, `Connections and operations were left out: ${WHY}`);
+});
+
+test('History reads drift and the not-captured note from one snapshot commit body, in either order', () => {
+  const message = commitMessage('Snapshot of Test', { Environment: 'test' }, `Connections and operations were left out: ${WHY}\n\nDrifted: 1 item(s) changed since the last promotion.\nteams/Ops`);
+  const [snap, drift] = eventsFor({ id: 'p', dir: '/nowhere' }, { oid: 'abc', message, at: '2026-10-08T00:00:00Z', author: { name: 'A', email: 'a@x' } } as any);
+  assert.deepEqual(snap.drifted, ['teams/Ops']);
+  assert.deepEqual(snap.notes, [`Connections and operations weren't captured in this snapshot: ${WHY}`]);
+  assert.equal(drift.type, 'drift');
 });
