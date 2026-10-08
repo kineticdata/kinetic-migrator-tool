@@ -303,6 +303,8 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
       : !keys.length ? `Remove ${items(remove.length)} from ${displayName(to)}`
         : `${items(keys.length)} from ${displayName(from)}${remove.length ? `, ${remove.length} to remove` : ''}`;
   }
+  // A restore only brings back what a backup holds: it never removes.
+  if (kind === 'restore') remove = [];
   if (from === to && kind !== 'restore') throw badRequest('The source and target are the same environment.');
   await secretsId(ref);
   const env = await resolveEnv(ref, to, ctx.secrets);
@@ -560,8 +562,9 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
     recordApplied(ref, r.changesetId, { env: r.to, runId, at: safe.finishedAt });
   }
   // Removals actually made (as planned when none was).
-  const removedCount = plan.remove.filter((k) => outcomes.get(k)?.status === 'done').length || plan.remove.length;
-  const title = runTitle(plan.kind, status, r.name, To, r.selected.length, removedCount);
+  // Removals actually made; a failed run names what it tried.
+  const made = plan.remove.filter((k) => outcomes.get(k)?.status === 'done').length;
+  const title = runTitle(plan.kind, status, r.name, To, r.selected.length, status === 'failed' ? plan.remove.length : made, plan.remove.length);
   const commit = await commitChange(ref, commitMessage(title, { Environment: r.to, Run: runId, Changeset: r.changesetId, Plan: r.planId }));
 
   // 6. A fresh snapshot of the target once anything was written, so Compare,
@@ -589,10 +592,12 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
 }
 
 // The commit title of a run (History reads it back, see history.ts typeOf).
-export function runTitle(kind: 'apply' | 'restore', status: RunStatus, name: string, To: string, promoted: number, removed: number): string {
+export function runTitle(kind: 'apply' | 'restore', status: RunStatus, name: string, To: string, promoted: number, removed: number, asked = removed): string {
   if (kind === 'restore') {
     return `${{ applied: 'Restored', partial: 'Partly restored', failed: 'Failed to restore', cancelled: 'Partly restored' }[status]} ${To} from a backup`;
   }
+  // Every removal skipped (changed since review, already gone).
+  if (!promoted && asked && !removed) return `Removed nothing from ${To} (${items(asked)} skipped)`;
   if (!promoted && removed) {
     return `${{ applied: 'Removed', partial: 'Partly removed', failed: 'Failed to remove', cancelled: 'Cancelled removing' }[status]} ${items(removed)} from ${To}`;
   }

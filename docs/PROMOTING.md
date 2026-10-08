@@ -435,6 +435,11 @@ match fields only), and so on. The
 types are teams, models, file-resources, connections, operations, handlers,
 routines, kapps, forms, webapis, workflows and data.
 
+Routines are exported with their inputs and outputs (the Task API returns
+them only when asked: `include=treeJson,details,inputs,outputs`); a snapshot
+taken before this version stores them empty, so take a new snapshot of the
+source before promoting routines.
+
 Global routines are created and updated through the Task API's component
 path (`/app/components/task/app/api/v2/trees`; the `/kinetic-task` path
 silently drops a routine's inputs and outputs). A new routine is one `POST
@@ -481,7 +486,12 @@ What happens:
   handlers they run, operations before connections).
 - A kapp takes its forms, workflows, WebAPIs and reference data with it; a
   form its workflows and data; a connection its operations. The plan lists
-  them, and they are not deleted one by one. After the deletes the target is
+  them, and they are not deleted one by one, with one exception: a kapp's
+  or form's workflows are deleted first, through the Core API, because
+  deleting the kapp or form leaves their Task trees behind in the Task
+  engine (deleting a workflow removes its tree). Afterwards the Task API is
+  checked for any tree of those workflows still there; one is deleted by
+  title, or reported failed. After the deletes the target is
   read again: anything listed that is still there is deleted on its own (or,
   if that fails, reported as failed, kept in drift state, and the run is
   partial).
