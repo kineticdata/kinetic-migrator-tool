@@ -4,7 +4,7 @@
 import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   ConnectionTestResult, CreateProjectRequest, CredentialsStatus, JobStarted, OpenProjectRequest, ProjectConfig,
-  ProjectDetail, ProjectSummary, PutCredentialsRequest, PutEnvironmentRequest, SessionInfo,
+  ProjectCatalog, ProjectDetail, ProjectSummary, PutCredentialsRequest, PutEnvironmentRequest, SessionInfo,
 } from '../../../shared/api';
 import type {
   Changeset, CompareItem, CompareMode, CompareRequest, CompareResult, CompareTreeNode, CreateChangesetRequest, ExploreItem, HistoryEvent,
@@ -18,6 +18,7 @@ export const qk = {
   projects: ['projects'] as const,
   project: (p: string) => ['project', p] as const,
   config: (p: string) => ['project', p, 'config'] as const,
+  catalog: (p: string) => ['project', p, 'catalog'] as const,
   history: (p: string) => ['project', p, 'history'] as const,
   tree: (p: string, env: string, commit: string) => ['project', p, 'explore', env, 'tree', commit] as const,
   treeChildren: (p: string, env: string, commit: string, parent: string) => ['project', p, 'explore', env, 'tree', commit, parent] as const,
@@ -58,6 +59,10 @@ export const useHistory = (p: string) => useQuery({
 });
 
 export const useConfig = (p: string) => useQuery({ queryKey: qk.config(p), queryFn: () => api.get<ProjectConfig>(projectPath(p, 'config')) });
+
+// Names from the latest snapshot for the settings pickers (refreshed with the
+// project when a snapshot job ends).
+export const useCatalog = (p: string) => useQuery({ queryKey: qk.catalog(p), queryFn: () => api.get<ProjectCatalog>(projectPath(p, 'catalog')) });
 
 // The root of an environment's snapshot tree (group nodes with item counts).
 export const useTreeRoot = (p: string, env: string, commit: string | undefined) => useQuery({

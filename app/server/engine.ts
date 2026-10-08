@@ -9,6 +9,10 @@ import * as commandsModule from '../../lib/sync/commands.mjs';
 import * as httpModule from '../../lib/sync/http.mjs';
 // @ts-expect-error -- untyped engine module
 import * as normalizeModule from '../../lib/sync/normalize.mjs';
+// @ts-expect-error -- untyped engine module
+import * as envBoundModule from '../../lib/sync/env-bound.mjs';
+// @ts-expect-error -- untyped engine module
+import * as dataModule from '../../lib/sync/artifacts/data.mjs';
 
 // The resolved environment every engine run accepts.
 export interface EngineEnv {
@@ -28,10 +32,23 @@ export interface EngineClient {
 
 export type ClientFactory = (opts: { env: EngineEnv; mode: 'read' | 'write' }) => EngineClient;
 
+// An environment-specific attribute rule: a name (every item at its level)
+// or a name plus where it applies (see lib/sync/env-bound.mjs).
+export type EnvBoundRule = string | { name: string; kapp?: string; form?: string; team?: string; category?: string };
+export type EnvBoundAttributes = Record<string, EnvBoundRule[]>;
+
+export interface EngineDataEntry {
+  kapp: string;
+  form: string;
+  key?: string[];
+  filter?: Array<{ field: string; value: string }>;
+}
+
 export interface EngineConfig {
-  data: Array<{ kapp: string; form: string; key: string[] }>;
+  data: EngineDataEntry[];
   exclude: { kapps: string[]; forms: string[]; [k: string]: unknown };
-  envBoundAttributes: Record<string, string[]>;
+  envBoundAttributes: EnvBoundAttributes;
+  warnings?: string[];
 }
 
 export interface EngineOverrides {
@@ -47,3 +64,6 @@ export const runInit: (opts: { projectDir: string; log: (line: string) => void }
 export const snapshotDir: (projectDir: string, env: string) => string = commandsModule.snapshotDir;
 export const createClient: ClientFactory = httpModule.createClient;
 export const stableStringify: (value: unknown) => string = normalizeModule.stableStringify;
+export const envBoundAttributesError: (value: unknown) => string | null = envBoundModule.envBoundAttributesError;
+export const envBoundNamesFor: (eba: EnvBoundAttributes, scope: string | null, key: string, data?: unknown) => Set<string> = envBoundModule.envBoundNamesFor;
+export const dataConfigError: (entries: unknown) => string | null = dataModule.dataConfigError;

@@ -303,3 +303,14 @@ test('a failed post-apply snapshot is a warning: the apply still reports its rea
   assert.ok(!readdirSync(path.join(h.dir, 'plans')).some((n) => n.startsWith('snap-')), 'no half export left behind');
   assertNoSecret(h, [job.events]);
 });
+
+test('environment values follow scoped attribute rules: only the matching form asks for a value', async (t) => {
+  const h = await harness(t);
+  const put = await h.call('PUT', `${P}/config`, { envBoundAttributes: { form: [{ name: 'Owner', kapp: 'services', form: 'leave' }, { name: 'Region', kapp: 'services' }] } });
+  assert.equal(put.status, 200);
+  for (const env of ['dev', 'test']) assert.equal((await h.job('POST', `${P}/snapshots`, { env })).status, 'succeeded');
+  const p = await plan(h, { to: 'test', from: 'dev', selected: [FORM, CONN, OP] });
+  const labels = p.environmentValues.filter((v) => v.key === FORM).map((v) => v.label);
+  assert.ok(labels.includes('Region'), JSON.stringify(labels));
+  assert.equal(labels.includes('Owner'), false);
+});

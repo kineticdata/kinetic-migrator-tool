@@ -7,7 +7,8 @@ import type { ExploreItem, SearchResponse, SnapshotResult, TreeNode } from '../s
 import { log, readTreeAt } from './repo.ts';
 import { PLANTED, PLANTED_CONN, assertNoSecret, harness } from './sync-fixtures.ts';
 import { setEnvSecret } from './environments.ts';
-import { SEARCH_LIMIT, search } from './explore.ts';
+import { SEARCH_LIMIT, buildCatalog, search } from './explore.ts';
+import type { ProjectCatalog } from '../shared/api.ts';
 import { snapshotFrom } from './snapshots.ts';
 
 const P = '/api/projects/sync-test';
@@ -100,4 +101,42 @@ test('search is capped at 200 results', () => {
   const res = search(snapshotFrom('dev', 'c', '/nowhere', artifacts), 'team');
   assert.equal(res.results.length, SEARCH_LIMIT);
   assert.equal(res.truncated, true);
+});
+
+test('catalog: empty without a snapshot, then kapps, forms, fields and teams from the newest snapshot only', async (t) => {
+  const h = await harness(t);
+  const before = (await h.call('GET', `${P}/catalog`)).json as ProjectCatalog;
+  assert.equal(before.env, null);
+  assert.deepEqual(before.kapps, []);
+  assert.equal((await h.call('GET', `${P}/catalog?env=ghost`)).status, 404);
+  const snap = await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  assert.equal(snap.status, 'succeeded');
+  const reads = h.calls.length;
+  const cat = (await h.call('GET', `${P}/catalog`)).json as ProjectCatalog;
+  assert.equal(cat.env, 'dev');
+  const services = cat.kapps.find((k) => k.slug === 'services')!;
+  assert.equal(services.name, 'Services');
+  assert.deepEqual(services.forms.map((f) => f.slug), ['it-request', 'leave']);
+  assert.deepEqual(services.forms[0].fields, ['Asset Tag', 'Priority', 'Summary']);
+  assert.deepEqual(cat.teams, ['Ops']);
+  assert.equal(h.calls.length, reads, 'the catalog never reads the live environment');
+  assert.equal(((await h.call('GET', `${P}/catalog?env=dev`)).json as ProjectCatalog).env, 'dev');
+  assertNoSecret(h);
+});
+
+test('buildCatalog lists categories and attribute names per level (definitions and those in use)', () => {
+  const artifacts = new Map<string, unknown>([
+    ['space', { spaceAttributeDefinitions: [{ name: 'Host' }], teamAttributeDefinitions: [{ name: 'Email' }], attributes: [{ name: 'Theme', values: [] }] }],
+    ['kapps/hr/kapp', {
+      slug: 'hr', name: 'HR', kappAttributeDefinitions: [{ name: 'Url' }], formAttributeDefinitions: [{ name: 'Queue' }], categoryAttributeDefinitions: [{ name: 'Icon' }],
+      categories: [{ slug: 'pay', name: 'Payroll', attributes: [{ name: 'Color' }] }, { slug: 'benefits', name: 'Benefits' }],
+    }],
+    ['kapps/hr/forms/leave/form', { slug: 'leave', name: 'Leave', attributes: [{ name: 'Owner' }], pages: [{ elements: [{ type: 'section', elements: [{ type: 'field', name: 'Start' }] }] }] }],
+    ['teams/Ops', { name: 'Ops', attributes: [{ name: 'Pager' }] }],
+  ]);
+  const cat = buildCatalog(snapshotFrom('dev', 'c', '/nowhere', artifacts));
+  assert.deepEqual(cat.attributes, { space: ['Host', 'Theme'], kapp: ['Url'], form: ['Owner', 'Queue'], team: ['Email', 'Pager'], category: ['Color', 'Icon'] });
+  assert.deepEqual(cat.kapps[0].categories, [{ slug: 'benefits', name: 'Benefits' }, { slug: 'pay', name: 'Payroll' }]);
+  assert.deepEqual(cat.kapps[0].forms, [{ slug: 'leave', name: 'Leave', fields: ['Start'] }]);
+  assert.deepEqual(buildCatalog(null).env, null);
 });

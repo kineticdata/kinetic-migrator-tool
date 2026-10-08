@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, wri
 import path from 'node:path';
 import type { ProjectConfig, ProjectDetail, ProjectSummary } from '../shared/api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
-import { createClient, loadConfig, runInit, stableStringify, type ClientFactory } from './engine.ts';
+import { createClient, dataConfigError, envBoundAttributesError, loadConfig, runInit, stableStringify, type ClientFactory } from './engine.ts';
 import {
   checkEnvName, credentialsStatus, deleteEnvironment, environmentExists, pipelineOrder, putEnvironment, putOverrides,
   readEnvironmentFile, readOverrides, setCredentials, testConnection, validateNewEnvironment, writeEnvironment,
@@ -192,11 +192,8 @@ function validateConfig(body: unknown): Partial<ProjectConfig> {
   for (const k of Object.keys(body)) if (!['data', 'exclude', 'envBoundAttributes'].includes(k)) throw badRequest('Unknown field.');
   const out: Partial<ProjectConfig> = {};
   if ('data' in body) {
-    const ok = Array.isArray(body.data) && body.data.every((d) => isPlainObject(d)
-      && Object.keys(d).every((k) => ['kapp', 'form', 'key'].includes(k))
-      && typeof d.kapp === 'string' && d.kapp !== '' && typeof d.form === 'string' && d.form !== ''
-      && isStringList(d.key) && d.key.length > 0);
-    if (!ok) throw badRequest('Each reference-data entry needs a kapp, a form and at least one key field.');
+    const problem = dataConfigError(body.data);
+    if (problem) throw badRequest(problem);
     out.data = body.data as ProjectConfig['data'];
   }
   if ('exclude' in body) {
@@ -207,9 +204,9 @@ function validateConfig(body: unknown): Partial<ProjectConfig> {
     out.exclude = { kapps: (e.kapps as string[]) ?? [], forms: (e.forms as string[]) ?? [] };
   }
   if ('envBoundAttributes' in body) {
-    const a = body.envBoundAttributes;
-    if (!isPlainObject(a) || !Object.values(a).every(isStringList)) throw badRequest('"envBoundAttributes" maps each level to a list of attribute names.');
-    out.envBoundAttributes = a as ProjectConfig['envBoundAttributes'];
+    const problem = envBoundAttributesError(body.envBoundAttributes);
+    if (problem) throw badRequest(problem);
+    out.envBoundAttributes = body.envBoundAttributes as ProjectConfig['envBoundAttributes'];
   }
   return out;
 }

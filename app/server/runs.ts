@@ -20,7 +20,7 @@ import type {
   RunItemOutcome, RunRecord, RunStatus, SecretNeeded,
 } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound, toApiError } from './errors.ts';
-import { envKey, loadConfig, loadOverrides, stableStringify, type EngineEnv } from './engine.ts';
+import { envBoundNamesFor, envKey, loadConfig, loadOverrides, stableStringify, type EngineEnv } from './engine.ts';
 import {
   ENV_BOUND_FIELDS, computePlan, isSecretName, isSecretProperty, parsePath, readTree, runApply, stamp, type EnginePlan, type PlanItem,
 } from './engine-sync.ts';
@@ -122,7 +122,7 @@ function environmentValues(projectDir: string, to: string, items: PlanItem[], ex
       const to = obj(i.desired)[f];
       if (!same(from, to)) push({ key: i.key, path: escapeSeg(f), label: f, from: from ?? null, to: to ?? null, origin: 'environment', required: false });
     }
-    for (const name of eba[scope] ?? []) {
+    for (const name of envBoundNamesFor(eba, i.scope, i.key, i.desired)) {
       const p = `attributes.${escapeSeg(name)}`;
       if (p in own) continue;
       const to = attributeValues(i.desired, name);
@@ -264,7 +264,7 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     }
     const select = new Set(keys);
     const { plan } = await computePlan({
-      projectDir: ref.dir, envName: to, env, sourceDir, select, resolutions, onEvent: forwardEvents(emit, [env.password, ...Object.values(env.vars)]),
+      projectDir: ref.dir, envName: to, env, sourceDir, sourceName: from, select, resolutions, onEvent: forwardEvents(emit, [env.password, ...Object.values(env.vars)]),
       signal, clientFactory: ctx.clientFactory,
     });
     const active = plan.items.filter((i) => i.action !== 'excluded');
@@ -428,7 +428,7 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   let done = 0;
   try {
     const res = await runApply({
-      projectDir: ref.dir, envName: r.to, env, sourceDir: plan.sourceDir, yes: true, select: plan.select, resolutions: input.resolutions,
+      projectDir: ref.dir, envName: r.to, env, sourceDir: plan.sourceDir, sourceName: r.from ?? undefined, yes: true, select: plan.select, resolutions: input.resolutions,
       onEvent, onPlan, signal, clientFactory: ctx.clientFactory, log: () => {},
     });
     done = res.done;

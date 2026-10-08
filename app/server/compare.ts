@@ -117,13 +117,13 @@ async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
         modules: MODULES, exported: opts.source.artifacts, config: loadConfig(ref.dir),
         target: new Map([...target.artifacts].map(([key, data]) => [key, { key, data }])),
         state: loadState(ref.dir, opts.to), overrides: loadOverrides(ref.dir, opts.to),
-        vars: { targetUrl: readEnvironmentFile(ref.dir, opts.to).url },
+        vars: { targetUrl: readEnvironmentFile(ref.dir, opts.to).url }, sourceName: opts.from, targetName: opts.to,
       });
       items = previewItems(plan);
       progress(emit, 2, 2, 'compare');
     } else {
       const { plan } = await computePlan({
-        projectDir: ref.dir, envName: opts.to, env: env!, sourceArtifacts: sourceList, onEvent, signal, clientFactory: deps.clientFactory,
+        projectDir: ref.dir, envName: opts.to, env: env!, sourceArtifacts: sourceList, sourceName: opts.from, onEvent, signal, clientFactory: deps.clientFactory,
       });
       items = previewItems(plan);
     }
