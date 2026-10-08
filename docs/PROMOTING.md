@@ -96,11 +96,35 @@ platform component locations (UI location, task server URL), bundle paths,
 and each kapp's bundle path. The target keeps its own values.
 
 **Environment-bound attributes** are listed in `kinetic-sync.config.json` and
-treated the same way:
+treated the same way. Each level (`space`, `kapp`, `form`, `team`,
+`category`) takes a list of rules. A plain name applies to every item at that
+level; an object names the attribute and where it applies:
 
 ```json
-"envBoundAttributes": { "space": ["Environment"], "kapp": [], "form": [], "team": [], "category": [] }
+"envBoundAttributes": {
+  "space": ["Environment"],
+  "kapp": [{ "name": "Portal Url", "kapp": "services" }],
+  "form": ["Owner", { "name": "Queue", "kapp": "services" }, { "name": "Approver", "kapp": "services", "form": "it-request" }],
+  "team": [{ "name": "Email", "team": "Service Desk" }],
+  "category": [{ "name": "Icon", "kapp": "services", "category": "hardware" }]
+}
 ```
+
+| Level | Where-parts (all optional) |
+|-------|----------------------------|
+| `space` | none |
+| `kapp` | `kapp` (kapp slug) |
+| `form` | `kapp` (kapp slug), `form` (form slug) |
+| `team` | `team` (team name) |
+| `category` | `kapp` (kapp slug), `category` (category slug or name) |
+
+A where-part that is left out matches any item, so `{ "name": "Owner" }` is
+the same as `"Owner"`. Category attributes live inside the kapp, so a
+category rule is applied to the categories of each kapp it matches. The
+plan's "empty in the target" warning and drift detection use the same
+rules. In the app, Settings → Data & values edits these rules and lists
+kapps, forms, categories, teams and attribute names from the latest snapshot
+(take one first to pick from lists; otherwise type the names).
 
 **Overrides** in `overrides/<env>.json` set values for one target:
 
@@ -217,15 +241,41 @@ console.
 
 ## 6. Reference data
 
-To promote the rows of a lookup or configuration form, list it with the
-field(s) that identify a row:
+To promote the records of a lookup or configuration form, list its kapp and
+form. Two parts are optional: which records (`filter`) and the fields that
+match a record across environments (`key`, "Match records by" in the app):
 
 ```json
-"data": [{ "kapp": "services", "form": "categories", "key": ["Code"] }]
+"data": [
+  { "kapp": "services", "form": "categories", "key": ["Code"] },
+  { "kapp": "services", "form": "settings", "key": ["Name"], "filter": [{ "field": "Scope", "value": "Global" }] },
+  { "kapp": "services", "form": "messages" }
+]
 ```
 
-Rows are matched by that key in every environment. Creating or updating rows
-runs the target form's submission workflows; the plan names them.
+**Which records.** `filter` is a list of Field = Value conditions; a record is
+promoted only when every condition holds (a list value, such as checkboxes,
+matches when it contains the value). The filter is applied to the records
+read from each environment, not as a search query, so no index is needed.
+Records outside the filter are ignored on both sides: in the target they are
+never compared, updated or deleted. With no filter, every record is promoted.
+
+**With match fields** (`key`), records are matched by those fields in every
+environment: a record the target lacks is created, a changed one is updated
+in place, and `--prune data` deletes target records whose key is not in the
+source. Two source records with the same key, or a record with an empty key
+field, stop the export with an error.
+
+**Without match fields**, a record is identified by all of its values. A
+record the target already has with identical values is left alone; any other
+is created. Nothing is updated or deleted, so a record edited in the source
+is created as a new record in the target (the plan warns about this), and
+`--prune data` deletes nothing for that form (apply warns that it is
+ignored). Identical records in the source count as one: promoting three
+identical records ensures the target has at least one.
+
+Creating or updating records runs the target form's submission workflows;
+the plan names them.
 
 ## 7. Plan
 
@@ -265,7 +315,8 @@ says how far it got; fix the cause and run it again, since every step is
 safe to repeat.
 
 Nothing is deleted unless you name the type: `--prune teams`,
-`--prune forms`, `--prune data` (rows not in the export), and so on. The
+`--prune forms`, `--prune data` (rows not in the export, for entries with
+match fields only), and so on. The
 types are teams, models, file-resources, connections, operations, handlers,
 kapps, forms, webapis, workflows and data.
 
