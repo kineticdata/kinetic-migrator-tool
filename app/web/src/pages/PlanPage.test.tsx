@@ -669,3 +669,11 @@ test('a handler in the target: its required secret is offered as not readable, a
   expect((m.callsTo('POST', '/api/projects/acme-demo/plans/pl1/apply')[1].body as { secrets?: unknown }).secrets).toEqual({ [SID]: SECRET });
   expect(document.body.innerHTML).not.toContain(SECRET);
 });
+
+test('a promotion across major platform versions is allowed, with the warning in the header', async () => {
+  setup(simple({ crossVersion: 'Dev runs 6.1.7 and Test runs 7.0.0-rc3 — review differences carefully.' }));
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  const note = await screen.findByRole('list', { name: 'Platform versions' });
+  expect(note).toHaveTextContent('Dev runs 6.1.7 and Test runs 7.0.0-rc3 — review differences carefully.');
+  expect(next()).toBeEnabled();
+});

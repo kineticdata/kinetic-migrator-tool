@@ -42,6 +42,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs'
 import { useToast } from '../components/ui/Toast';
 import { cn } from '../components/ui/cn';
 import { envLabel, formatDateTime, plural } from '../lib/format';
+import { crossVersionText } from '../lib/platform';
 import { newestFirst, useProjectContext } from '../lib/project';
 import {
   SELECTABLE, addItems, checkStateOf, emptySelection, isMarkedForRemoval, isRemovable, isSelectable, planResolutions, pruneSelection, removalKeys, removeKeys, selectedKeys,
@@ -851,6 +852,8 @@ export function ComparePage() {
   }
 
   const missing = restore ? [] : [fromEnv, ...(live ? [] : [toEnv])].filter((e) => e && !e.lastSnapshot).map((e) => e!.name);
+  // Different major platform versions: allowed, with a warning.
+  const crossVersion = restore ? null : (result?.crossVersion ?? crossVersionText(fromEnv, toEnv));
 
   return (
     <div className="flex flex-col lg:h-full lg:min-h-[560px]">
@@ -897,6 +900,7 @@ export function ComparePage() {
             ? <Button size="sm" onClick={run.job.cancel}>Cancel</Button>
             : <Button size="sm" icon={<RotateCcw size={14} aria-hidden />} disabled={!run.ready} onClick={() => run.rerun()}>Run again</Button>}
         </div>
+        {crossVersion && <Notes notes={[crossVersion]} label="Platform versions" className="w-full" />}
       </div>
 
       {missing.length > 0 ? (

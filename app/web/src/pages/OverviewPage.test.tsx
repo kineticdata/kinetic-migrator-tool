@@ -6,7 +6,7 @@ import { afterEach, expect, test, vi } from 'vitest';
 import { AppRoutes } from '../routes';
 import { mockApi, sse } from '../test/mock-api';
 import { renderWithApp } from '../test/render';
-import { historyEvent, project } from '../test/fixtures';
+import { env, historyEvent, project, V6, V7 } from '../test/fixtures';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -85,4 +85,18 @@ test('a history failure is shown instead of silently hiding activity', async () 
   });
   renderWithApp(<AppRoutes />, { route: '/p/acme-demo/overview' });
   expect(await screen.findByText(/Could not load the project history/)).toBeInTheDocument();
+});
+
+test('each lane shows the platform version last detected, when known', async () => {
+  mockApi({
+    'GET /api/projects/:p': project({ environments: [env('dev', { platform: V6 }), env('test', { platform: V7 }), env('prod', { readOnly: true, lastSnapshot: null })] }),
+    'GET /api/projects/:p/history': [],
+    'GET /api/projects/:p/explore/:env/tree': [],
+    'POST /api/projects/:p/compare': { status: 202, json: { jobId: 'cmp1' } },
+    'GET /api/jobs/cmp1': { id: 'cmp1', kind: 'compare', status: 'succeeded', createdAt: 'x', result: { compareId: 'k', from: 'dev', fromName: 'Dev', to: 'test', mode: 'raw', sourceCommit: 'c', counts: {}, preselected: [] } },
+  });
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/overview' });
+  expect(await within(await lane('Dev')).findByText('Kinetic Platform 6.1.7')).toBeInTheDocument();
+  expect(within(await lane('Test')).getByText('Kinetic Platform 7.0.0-rc3')).toBeInTheDocument();
+  expect(within(await lane('Prod')).queryByTestId('env-platform')).toBeNull();
 });

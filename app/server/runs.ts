@@ -30,6 +30,7 @@ import { currentKeys, readChangeset, recordApplied, removeList } from './changes
 import { hasEnvSecret, readEnvironmentFile, readOverrides, resolveEnv, setEnvSecret } from './environments.ts';
 import type { Emit } from './jobs.ts';
 import { materializeTree, resolveCommit } from './pinned.ts';
+import { capturingFactory, crossVersionFor, rememberPlatform } from './platforms.ts';
 import { commitChange, displayName, isPlainObject, secretsId, withProjectLock, type ProjectRef } from './project-meta.ts';
 import type { Router } from './router.ts';
 import { RUNS_DIR } from './run-records.ts';
@@ -395,7 +396,7 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     // pinned one) is not removed.
     const newest = remove.length ? await latestSnapshotCommit(ref, from) : null;
     // Removals the newest snapshot could not check (it left their type out)
-    // are refused, with why.
+    // are dropped with a warning saying why: never sent, never blocking.
     const refused: string[] = [];
     if (newest && newest !== pinned) {
       const latest = (await loadSnapshot(ref, from)).artifacts;
@@ -411,12 +412,14 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     }
     const memory = readHandlerMemory(ref.dir, to);
     const hints = engineHints(memory, availableHandlerSecrets(to, env.vars));
+    const capture = capturingFactory(ctx.clientFactory);
     const { plan } = await computePlan({
       projectDir: ref.dir, envName: to, env, sourceDir, sourceName: from, select, resolutions, remove, onEvent: forwardEvents(emit, [env.password, ...Object.values(env.vars)]),
-      signal, clientFactory: ctx.clientFactory, hints,
+      signal, clientFactory: capture.factory, hints,
     });
+    rememberPlatform(ref.dir, to, await capture.platform());
     plan.warnings.push(...unplanned);
-    plan.errors.push(...refused);
+    plan.warnings.push(...refused);
     // Only what the plan shows as a delete is ever sent to apply.
     const deletes = (plan.removals ?? []).filter((x) => x.action === 'delete' && x.hash);
     const removeExpected = Object.fromEntries(deletes.map((x) => [x.key, x.hash!]));
@@ -436,6 +439,9 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     const result = buildResult({ planId, name, to, from, changesetId, sourceCommit: pinned, selected: keys, remove }, plan, {
       environmentValues: environmentValues(ref.dir, to, active, readTree(sourceDir)), secretsNeeded: secrets, hints,
     });
+    // Cross-major promotions are allowed, with a warning in the header.
+    const crossVersion = from === to ? null : crossVersionFor(ref.dir, from, to);
+    if (crossVersion) result.crossVersion = crossVersion;
     const scrubbed = makeScrubber([env.password, ...Object.values(env.vars)])(result);
     remember(planId, { projectDir: ref.dir, result: scrubbed, kind, select, sourceDir, sourcePath, resolutions, remove: deletes.map((x) => x.key), removeExpected, leftOut });
     return scrubbed;
@@ -622,7 +628,11 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
         onEvent({ type: 'item', key: reviewed.key, status: 'skipped', message: `Already gone from ${To}.` });
       } else if (now !== 'delete') {
         skipped.push(reviewed.key);
-        onEvent({ type: 'item', key: reviewed.key, status: 'skipped', message: `Changed in ${To} since you reviewed it — not removed.` });
+        // Left out of the apply's plan (connections couldn't be read) is not "changed".
+        const unchecked = now === undefined && isOmittedKey(reviewed.key.split('#')[0], new Set(applyPlan.omitted ?? []), (x) => moduleFor(x)?.type);
+        onEvent({ type: 'item', key: reviewed.key, status: 'skipped', message: unchecked
+          ? `Not removed: ${To}'s connections couldn't be checked.`
+          : `Changed in ${To} since you reviewed it — not removed.` });
       }
     }
   };

@@ -355,6 +355,13 @@ function write(s: FakeSpace, catalog: FakeSpace, api: string, method: string, pa
   return {};
 }
 
+// The platform versions the fake spaces run: Dev an older major version than
+// the others, as in a 6.x → 7.x migration (so the cross-version warning shows).
+export const FAKE_PLATFORMS = Object.freeze({
+  dev: Object.freeze({ version: '6.1.7', major: 6, minor: 1, source: 'integrator' }),
+  other: Object.freeze({ version: '7.0.0-rc3', major: 7, minor: 0, source: 'integrator' }),
+});
+
 // One fake space per environment name: "dev" is the Dev space, any other name
 // gets its own copy of the Test space. State lasts as long as the server.
 export function fakeSpacesFactory(): ClientFactory {
@@ -374,9 +381,11 @@ export function fakeSpacesFactory(): ClientFactory {
       if (mode === 'read') throw new Error(`read-only client got ${method} ${path}`);
       return write(space, catalog, api, method, path, opts.body, opts.form);
     };
+    const platform = env.name === 'dev' ? FAKE_PLATFORMS.dev : FAKE_PLATFORMS.other;
     const client: EngineClient & { getBinary: EngineClient['get'] } = {
       mode,
       request,
+      platform: async () => platform,
       get: (api, path, query) => request(api, 'GET', path, { query }),
       getBinary: (api, path, query) => request(api, 'GET', path, { query }),
     };

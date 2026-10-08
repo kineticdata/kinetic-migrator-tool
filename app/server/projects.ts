@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, wri
 import path from 'node:path';
 import type { ProjectConfig, ProjectDetail, ProjectSummary } from '../shared/api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
+import { readPlatform } from './platforms.ts';
 import { canonicalSpaceFields, createClient, dataConfigError, envBoundAttributesError, envBoundSpaceFieldsError, loadConfig, runInit, stableStringify, type ClientFactory } from './engine.ts';
 import { isReservedDeviceName } from './engine-sync.ts';
 import {
@@ -197,6 +198,7 @@ export async function readProject(ref: ProjectRef, store: SecretStore): Promise<
       readOnly: def.readOnly,
       credentials: await credentialsStatus(store, ref, name),
       lastSnapshot: last ? { commit: last.oid, at: last.at, message: last.message } : null,
+      platform: readPlatform(ref.dir, name),
     });
   }
   return { ...summary(ref), environments };

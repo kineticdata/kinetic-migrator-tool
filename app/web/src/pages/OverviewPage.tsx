@@ -19,6 +19,7 @@ import { EmptyState, InlineError } from '../components/ui/EmptyState';
 import { Spinner } from '../components/ui/Spinner';
 import { useToast } from '../components/ui/Toast';
 import { envLabel, hostOf, plural, timeAgo } from '../lib/format';
+import { platformText } from '../lib/platform';
 import { latestByEnv, newestFirst, useProjectContext } from '../lib/project';
 import { groupOf, typeCounts } from '../lib/type-counts';
 import { ApiError } from '../api/client';
@@ -123,6 +124,7 @@ function Lane({ projectId, env, next, drift, run }: {
             {env.readOnly && <Badge icon={<Lock size={11} aria-hidden />}>Protected</Badge>}
           </div>
           <p className="mt-0.5 truncate font-mono text-xs text-subtle" title={env.url}>{hostOf(env.url)}</p>
+          {platformText(env.platform) && <p className="mt-0.5 text-xs text-muted" data-testid="env-platform">{platformText(env.platform)}</p>}
         </div>
 
         <div className="flex flex-1 flex-col gap-4 px-5 py-4">

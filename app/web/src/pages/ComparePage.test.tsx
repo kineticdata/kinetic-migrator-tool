@@ -8,7 +8,7 @@ import type { CompareItem, CompareResult, CompareTreeNode, SuggestionOut } from 
 import { AppRoutes } from '../routes';
 import { mockApi, sse, type MockCall } from '../test/mock-api';
 import { currentLocation, renderWithApp } from '../test/render';
-import { historyEvent, project } from '../test/fixtures';
+import { env, historyEvent, project, V6, V7 } from '../test/fixtures';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
@@ -110,10 +110,10 @@ const SUGGESTION: SuggestionOut = {
   reason: 'Travel request calls operation "Create ticket" on connection "Tickets", which is new in Dev',
 };
 
-function setup(opts: { expireC1?: boolean } = {}) {
+function setup(opts: { expireC1?: boolean; project?: ReturnType<typeof project> } = {}) {
   let runs = 0;
   const m = mockApi({
-    'GET /api/projects/:p': project(),
+    'GET /api/projects/:p': opts.project ?? project(),
     'GET /api/projects/:p/history': [historyEvent({ commit: 'abc1234def', type: 'backup', env: 'test', at: '2026-10-08T09:30:00Z' })],
     'POST /api/projects/:p/restore': { status: 202, json: { jobId: 'rst1' } },
     'POST /api/projects/:p/compare': () => ({ status: 202, json: { jobId: `cmp${++runs}` } }),
@@ -478,4 +478,18 @@ test('Workflow categories show as their own group; a category\'s members differ 
   expect(rows[0]).toHaveTextContent('mail_send_v1, utilities_echo_v1');
   expect(rows[1]).toHaveTextContent('Routines');
   expect(rows[1]).toHaveTextContent('routine_notify_v1');
+});
+
+test('environments on different major platform versions get a warning in the header; the same major gets none', async () => {
+  setup({ project: project({ environments: [env('dev', { platform: V6 }), env('test', { platform: V7 }), env('prod', { readOnly: true, lastSnapshot: null })] }) });
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare' });
+  const note = await screen.findByRole('list', { name: 'Platform versions' });
+  expect(note).toHaveTextContent('Dev runs 6.1.7 and Test runs 7.0.0-rc3 — review differences carefully.');
+});
+
+test('no platform warning when both run the same major version', async () => {
+  setup({ project: project({ environments: [env('dev', { platform: V7 }), env('test', { platform: { ...V7, version: '7.1.0', minor: 1 } }), env('prod', { readOnly: true, lastSnapshot: null })] }) });
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare' });
+  await screen.findByRole('tree', { name: /Differences/ });
+  expect(screen.queryByRole('list', { name: 'Platform versions' })).toBeNull();
 });

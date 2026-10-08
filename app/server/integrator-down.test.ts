@@ -186,7 +186,7 @@ test('items left out at plan time are never written unreviewed, even when the In
   assert.equal(h.calls.some((c) => c.env === 'test' && c.api === 'integrator' && c.method !== 'GET'), false);
 });
 
-test('a removal of a connection is refused when the newest source snapshot left connections out', async (t) => {
+test('a removal of a connection is dropped with a warning (not a blocking error) when the newest source snapshot left connections out', async (t) => {
   const h = await harness(t);
   h.spaces.test = devRoutes; // Test has the connection; it is to be removed
   await snapshot(h, 'dev');
@@ -199,7 +199,9 @@ test('a removal of a connection is refused when the newest source snapshot left 
   assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
   const plan = job.result as PlanResult;
   assert.deepEqual(plan.removals, []);
-  assert.ok(plan.errors.includes(`${CONN}: not removed — couldn't check Dev's connections: dev.example.com runs Kinetic Platform 7.0.0-rc3, which doesn't offer the sign-in this tool uses for the Integrator yet.`), JSON.stringify(plan.errors));
+  assert.ok(plan.warnings.includes(`${CONN}: not removed — couldn't check Dev's connections: dev.example.com runs Kinetic Platform 7.0.0-rc3, which doesn't offer the sign-in this tool uses for the Integrator yet.`), JSON.stringify(plan.warnings));
+  assert.equal(plan.errors.some((e) => e.includes(CONN)), false, JSON.stringify(plan.errors));
+  assert.deepEqual(plan.remove, []);
 });
 
 test('a refused Integrator sign-in fails the snapshot loudly, and Test connection says to check the credentials', async (t) => {
@@ -211,4 +213,23 @@ test('a refused Integrator sign-in fails the snapshot loudly, and Test connectio
   h.spaces.test = () => ({ ...devRoutes(), 'GET core/me': { username: 'admin' } });
   const r = (await h.call('POST', `${P}/environments/test/test`)).json as ConnectionTestResult;
   assert.equal(r.steps.find((s) => s.step === 'integrator')!.message, 'The Integrator rejected the sign-in (401): check the username and password.');
+});
+
+test('a reviewed connection removal dropped at apply because the target\'s connections can no longer be read says so (not "changed")', async (t) => {
+  const h = await harness(t);
+  h.spaces.test = devRoutes; // Test has the connection; Dev's snapshot does not
+  h.spaces.dev = () => ({ ...devRoutes(), 'GET integrator/connections': [] });
+  await snapshot(h, 'dev');
+  const planned = await h.job('POST', `${P}/plans`, { to: 'test', from: 'dev', selected: [], remove: [CONN] });
+  assert.equal(planned.status, 'succeeded', JSON.stringify(planned.error));
+  const p = planned.result as PlanResult;
+  assert.ok(p.removals.some((r) => r.key === CONN && r.action === 'delete'), JSON.stringify(p.removals));
+  h.integratorDown.add('test');
+  const applied = await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: p.needsAttention.map((n) => n.id), confirm: 'test' });
+  assert.equal(applied.status, 'succeeded', JSON.stringify(applied.error));
+  const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${applied.result.runId}.json`), 'utf8'));
+  const o = run.items.find((i: { key: string }) => i.key === CONN);
+  assert.equal(o?.status, 'skipped');
+  assert.equal(o?.message, "Not removed: Test's connections couldn't be checked.");
+  assert.equal(h.calls.some((c) => c.env === 'test' && c.api === 'integrator' && c.method === 'DELETE'), false);
 });

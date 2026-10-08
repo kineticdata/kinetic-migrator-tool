@@ -54,10 +54,15 @@ environment still works too.)
 
 Fake mode serves two synthetic spaces, `dev` and every other environment name
 (a copy of a `test` space), from memory. Any URL and password are accepted and
-applies change only the in-memory space. Nothing leaves your machine.
+applies change only the in-memory space. Nothing leaves your machine. The
+fake `dev` space reports Kinetic Platform 6.1.7 and the others 7.0.0-rc3, so
+Compare and Plan show the cross-version warning.
 
 ## Supported platforms
 
+- **Kinetic Platform** 6.x and 7.x. The version of each environment is
+  detected and shown; what differs between versions (how the Integrator is
+  signed in to) is described in [docs/PROMOTING.md](docs/PROMOTING.md#platform-versions).
 - **macOS** 12 or newer (Apple silicon and Intel)
 - **Windows** 10 and 11 (x64 or Arm64)
 - **Linux** (tested on Ubuntu in CI; keychain needs a Secret Service such as

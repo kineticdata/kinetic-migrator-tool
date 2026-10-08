@@ -10,6 +10,7 @@ import type {
 } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
 import { resolveCommit } from './pinned.ts';
+import { capturingFactory, crossVersionFor, rememberPlatform } from './platforms.ts';
 import { readTreeAt } from './repo.ts';
 import { loadConfig, loadOverrides, type ClientFactory, type EngineEnv } from './engine.ts';
 import {
@@ -127,9 +128,12 @@ function entriesBelow(index: TreeIndex, items: Map<string, ItemFull>): Map<strin
 
 const typeOf = (key: string) => moduleFor(key)?.type;
 
-async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
+async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, given: {
   env: EngineEnv | null; clientFactory?: ClientFactory; emit: Emit; signal: AbortSignal;
 }): Promise<CompareResult> {
+  // A live target's client detects its platform version; it is remembered.
+  const capture = capturingFactory(given.clientFactory);
+  const deps = { ...given, clientFactory: capture.factory };
   const { emit, signal, env } = deps;
   const onEvent = forwardEvents(emit, env ? envSecrets(env) : []);
   const sourceOmitted = opts.source.artifacts.omitted ?? [];
@@ -206,6 +210,9 @@ async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
     sourceCommit: opts.source.commit, counts, preselected: (opts.preselected ?? []).filter((k) => byKey.has(k)),
     ...(notes.length ? { notes } : {}),
   };
+  if (env) rememberPlatform(ref.dir, opts.to, await capture.platform());
+  const crossVersion = opts.from === opts.to ? null : crossVersionFor(ref.dir, opts.from, opts.to);
+  if (crossVersion) result.crossVersion = crossVersion;
   compares.set(result.compareId, {
     projectDir: ref.dir, result, items: byKey, index, rollup: rollupCounts(index, byKey), entriesBelow: entriesBelow(index, byKey),
     source: opts.source.artifacts, omitted, scrub: makeScrubber(env ? envSecrets(env) : []),

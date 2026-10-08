@@ -1,7 +1,8 @@
-// The outcome of "Test connection": each step (Core sign-in, Integrator
-// token) with a plain message for the one that failed.
+// The outcome of "Test connection": the platform version, then each step
+// (Core sign-in, Integrator token) with a plain message for the one that failed.
 import { CheckCircle2, CircleDashed, XCircle } from 'lucide-react';
 import type { ConnectionTestResult } from '../../../shared/api';
+import { platformText } from '../lib/platform';
 
 export function ConnectionTestSteps({ result }: { result: ConnectionTestResult }) {
   return (
@@ -9,6 +10,7 @@ export function ConnectionTestSteps({ result }: { result: ConnectionTestResult }
       <p className={result.ok ? 'text-sm font-medium text-added' : 'text-sm font-medium text-danger'}>
         {result.ok ? 'Connected' : 'Could not connect'}
       </p>
+      {platformText(result.platform) && <p className="text-xs text-muted">{platformText(result.platform)}</p>}
       <div className="mt-1.5 space-y-1">
         {result.steps.map((s) => (
           <div key={s.step} className="flex items-start gap-2 text-[13px]">

@@ -4,6 +4,9 @@ import type { HistoryEvent } from '../../../shared/sync-api';
 
 export const NOW = new Date('2026-10-08T12:00:00Z');
 
+export const V6 = { version: '6.1.7', major: 6, minor: 1, source: 'integrator', detectedAt: '2026-10-08T10:00:00Z' };
+export const V7 = { version: '7.0.0-rc3', major: 7, minor: 0, source: 'integrator', detectedAt: '2026-10-08T10:00:00Z' };
+
 export function env(name: string, over: Partial<EnvironmentInfo> = {}): EnvironmentInfo {
   return {
     name,
