@@ -1,0 +1,139 @@
+// Saved changesets: changesets/<id>.json — a named selection of item keys
+// from one environment, pinned to the snapshot commit it was taken from.
+// Every change is committed.
+import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import type { AppliedTo, Changeset } from '../shared/sync-api.ts';
+import { ApiError, badRequest, notFound } from './errors.ts';
+import { stableStringify } from './engine.ts';
+import { moduleFor } from './engine-sync.ts';
+import { resolveCommit } from './pinned.ts';
+import { commitChange, isPlainObject, withProjectLock, type ProjectRef } from './project-meta.ts';
+import { slugify } from './projects.ts';
+import { readTreeAt } from './repo.ts';
+import type { Router } from './router.ts';
+import { latestSnapshotCommit, loadSnapshot, requireEnvironment, type SyncContext } from './snapshots.ts';
+import { commitMessage } from './trailers.ts';
+
+const DIR = 'changesets';
+const ID = /^[a-z0-9][a-z0-9-]*$/;
+const file = (ref: ProjectRef, id: string) => path.join(ref.dir, DIR, `${id}.json`);
+
+export function readChangeset(ref: ProjectRef, id: string): Changeset {
+  if (!ID.test(id) || !existsSync(file(ref, id))) throw notFound('No such changeset.');
+  try {
+    return JSON.parse(readFileSync(file(ref, id), 'utf8')) as Changeset;
+  } catch {
+    throw new ApiError(422, 'invalid_project_file', `changesets/${id}.json is not valid JSON.`);
+  }
+}
+
+export function listChangesets(ref: ProjectRef): Changeset[] {
+  const dir = path.join(ref.dir, DIR);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.json') && ID.test(f.slice(0, -5)))
+    .map((f) => readChangeset(ref, f.slice(0, -5)))
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+}
+
+function writeChangeset(ref: ProjectRef, cs: Changeset): void {
+  mkdirSync(path.join(ref.dir, DIR), { recursive: true });
+  writeFileSync(file(ref, cs.id), stableStringify(cs));
+}
+
+// Adds an apply to the changeset's record (the caller commits).
+export function recordApplied(ref: ProjectRef, id: string, entry: AppliedTo): void {
+  const cs = readChangeset(ref, id);
+  writeChangeset(ref, { ...cs, appliedTo: [...cs.appliedTo, entry] });
+}
+
+const text = (v: unknown, field: string, max: number, required: boolean): string | undefined => {
+  if (v === undefined && !required) return undefined;
+  if (typeof v !== 'string' || (required && !v.trim()) || v.length > max) throw badRequest(`"${field}" must be text of up to ${max} characters.`);
+  return v.trim();
+};
+
+function keyList(v: unknown): string[] {
+  if (!Array.isArray(v) || !v.length || !v.every((k) => typeof k === 'string' && moduleFor(k)?.applyable !== false && moduleFor(k))) {
+    throw badRequest('"keys" must be a non-empty list of item keys.');
+  }
+  return [...new Set(v as string[])].sort();
+}
+
+async function keysAt(ref: ProjectRef, env: string, commit: string): Promise<Set<string>> {
+  if (commit === (await latestSnapshotCommit(ref, env))) return new Set((await loadSnapshot(ref, env)).artifacts.keys());
+  return new Set((await readTreeAt(ref.dir, commit, `snapshots/${env}`)).keys());
+}
+
+async function checkKeys(ref: ProjectRef, env: string, commit: string, keys: string[]): Promise<void> {
+  const have = await keysAt(ref, env, commit);
+  const missing = keys.filter((k) => !have.has(k));
+  if (missing.length) throw badRequest('Some items are not in the pinned snapshot.', { missing });
+}
+
+const ALLOWED_CREATE = ['name', 'description', 'from', 'keys', 'sourceCommit'];
+const ALLOWED_UPDATE = ['name', 'description', 'keys'];
+
+export async function createChangeset(ref: ProjectRef, body: unknown): Promise<Changeset> {
+  if (!isPlainObject(body)) throw badRequest('Expected a JSON object.');
+  for (const k of Object.keys(body)) if (!ALLOWED_CREATE.includes(k)) throw badRequest(`Unknown field "${k}".`);
+  const name = text(body.name, 'name', 100, true)!;
+  const description = text(body.description, 'description', 2000, false) ?? '';
+  const from = requireEnvironment(ref, body.from);
+  const keys = keyList(body.keys);
+  let sourceCommit: string | null;
+  if (body.sourceCommit !== undefined) {
+    sourceCommit = typeof body.sourceCommit === 'string' ? await resolveCommit(ref.dir, body.sourceCommit) : null;
+    if (!sourceCommit) throw badRequest('"sourceCommit" is not a commit of this project.');
+  } else {
+    sourceCommit = await latestSnapshotCommit(ref, from);
+    if (!sourceCommit) throw new ApiError(404, 'no_snapshot', 'Take a snapshot of the source environment first.');
+  }
+  await checkKeys(ref, from, sourceCommit, keys);
+  const id = `${slugify(name) || 'changeset'}-${randomBytes(3).toString('hex')}`;
+  const cs: Changeset = { id, name, description, from, sourceCommit, keys, createdAt: new Date().toISOString(), appliedTo: [] };
+  await withProjectLock(ref, async () => {
+    writeChangeset(ref, cs);
+    await commitChange(ref, commitMessage(`Saved changeset '${name}'`, { Changeset: id, Environment: from }));
+  });
+  return cs;
+}
+
+export async function updateChangeset(ref: ProjectRef, id: string, body: unknown): Promise<Changeset> {
+  const current = readChangeset(ref, id);
+  if (!isPlainObject(body)) throw badRequest('Expected a JSON object.');
+  for (const k of Object.keys(body)) if (!ALLOWED_UPDATE.includes(k)) throw badRequest(`Unknown field "${k}".`);
+  const next: Changeset = { ...current };
+  if (body.name !== undefined) next.name = text(body.name, 'name', 100, true)!;
+  if (body.description !== undefined) next.description = text(body.description, 'description', 2000, false) ?? '';
+  if (body.keys !== undefined) {
+    next.keys = keyList(body.keys);
+    await checkKeys(ref, current.from, current.sourceCommit, next.keys);
+  }
+  await withProjectLock(ref, async () => {
+    writeChangeset(ref, next);
+    await commitChange(ref, commitMessage(`Updated changeset '${next.name}'`, { Changeset: id, Environment: next.from }));
+  });
+  return next;
+}
+
+export async function deleteChangeset(ref: ProjectRef, id: string): Promise<void> {
+  const cs = readChangeset(ref, id);
+  await withProjectLock(ref, async () => {
+    rmSync(file(ref, id));
+    await commitChange(ref, commitMessage(`Deleted changeset '${cs.name}'`, { Changeset: id, Environment: cs.from }));
+  });
+}
+
+export function registerChangesetRoutes(router: Router, ctx: SyncContext): void {
+  router.get('/api/projects/:p/changesets', ({ params }) => ({ json: listChangesets(ctx.find(params.p)) }));
+  router.post('/api/projects/:p/changesets', async ({ params, body }) => ({ status: 201, json: await createChangeset(ctx.find(params.p), body) }));
+  router.get('/api/projects/:p/changesets/:id', ({ params }) => ({ json: readChangeset(ctx.find(params.p), params.id) }));
+  router.put('/api/projects/:p/changesets/:id', async ({ params, body }) => ({ json: await updateChangeset(ctx.find(params.p), params.id, body) }));
+  router.delete('/api/projects/:p/changesets/:id', async ({ params }) => {
+    await deleteChangeset(ctx.find(params.p), params.id);
+    return { json: { deleted: params.id } };
+  });
+}

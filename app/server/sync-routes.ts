@@ -1,5 +1,6 @@
 // Registers the snapshot, explore, compare, changeset, plan/apply and history
 // routes on the server's router.
+import { registerChangesetRoutes } from './changesets.ts';
 import { registerCompareRoutes } from './compare.ts';
 import type { ClientFactory } from './engine.ts';
 import { registerExploreRoutes } from './explore.ts';
@@ -14,4 +15,5 @@ export function registerSyncRoutes(router: Router, opts: { workspace: string; se
   registerSnapshotRoutes(router, ctx);
   registerExploreRoutes(router, ctx);
   registerCompareRoutes(router, ctx);
+  registerChangesetRoutes(router, ctx);
 }
