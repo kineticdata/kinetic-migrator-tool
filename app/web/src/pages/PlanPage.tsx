@@ -95,7 +95,7 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
   const live = useMemo(() => checklistFrom(job.events, carried), [job.events, carried]);
   const finished = job.status !== 'idle' && job.status !== 'running';
   const outcome = useMemo(() => (finished ? applyOutcome(job, live) : null), [finished, job, live]);
-  const checklist = useMemo(() => settleChecklist(live, outcome?.status ?? null, applied.map((i) => i.key)), [live, outcome, applied]);
+  const checklist = useMemo(() => settleChecklist(live, outcome?.status ?? null, applied), [live, outcome, applied]);
   const filled = useMemo(() => new Set(values.filled), [values.filled]);
   const blank = useMemo(() => new Set(values.blank), [values.blank]);
 
@@ -432,8 +432,10 @@ function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, o
   const heading = !outcome ? `Applying to ${To}…` : {
     applied: `Applied to ${To}`, partial: `Partly applied to ${To}`, failed: `Failed to apply to ${To}`, cancelled: `Cancelled applying to ${To}`,
   }[outcome.status];
+  // A partial run with no failed row finished, but skipped what changed since review.
+  const stoppedEarly = outcome?.status !== 'partial' || Object.values(checklist.items).some((i) => i.status === 'failed');
   const summary = !outcome ? '' : outcome.done > 0
-    ? `${outcome.status === 'cancelled' ? 'Cancelled' : 'Stopped'} after ${plural(outcome.done, 'change')}.`
+    ? (stoppedEarly ? `${outcome.status === 'cancelled' ? 'Cancelled' : 'Stopped'} after ${plural(outcome.done, 'change')}.` : `${plural(outcome.done, 'change')} applied.`)
     : 'Nothing was applied.';
 
   const resume = () => {

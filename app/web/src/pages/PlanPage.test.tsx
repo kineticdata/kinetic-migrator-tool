@@ -286,6 +286,31 @@ test('a failed apply shows the error, and Resume applies again; View backup and 
   expect(within(progress).getByRole('listitem', { name: 'SMTP Send: Done' })).toBeInTheDocument();
 });
 
+test('an item changed in the target since review is shown skipped with its reason, and the run as partly applied', async () => {
+  const reason = 'Changed in Test since you reviewed it — not applied.';
+  const events = sse([
+    { type: 'step', data: { type: 'step', step: 'backup', status: 'done' } },
+    { type: 'item', data: { type: 'item', key: HANDLER, status: 'skipped', message: reason } },
+    { type: 'item', data: { type: 'item', key: CONN, status: 'done' } },
+    { type: 'item', data: { type: 'item', key: FORM, status: 'done' } },
+  ]);
+  setup(simple(), {
+    applyJobs: [{ id: 'a1', events, result: { runId: 'r1', status: 'partial', commit: 'c-run', backupCommit: 'c-backup', done: 2, error: '1 item was not applied (see the list below). Plan again to review it.' } }],
+  });
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  await toConfirm(user);
+  await user.type(screen.getByLabelText(/Type test to confirm/), 'test');
+  await user.click(screen.getByRole('button', { name: 'Apply to Test' }));
+
+  const alert = await screen.findByRole('alert');
+  expect(screen.getByRole('heading', { name: 'Partly applied to Test' })).toBeInTheDocument();
+  expect(alert).toHaveTextContent('2 changes applied. 1 item was not applied');
+  const progress = screen.getByRole('region', { name: 'Progress' });
+  expect(within(progress).getByRole('listitem', { name: `SMTP Send: Skipped — ${reason}` })).toBeInTheDocument();
+  expect(within(progress).getByText(reason)).toBeInTheDocument();
+});
+
 test('a protected target cannot be applied to', async () => {
   setup(simple(), { readOnly: true });
   const user = userEvent.setup();
@@ -353,6 +378,7 @@ test('a job that failed without a result: Failed, done counted from events, runn
         id: 'a2',
         events: sse([
           { type: 'step', data: { type: 'step', step: 'backup', status: 'done' } },
+          { type: 'item', data: { type: 'item', key: HANDLER, status: 'skipped', message: 'Already up to date in Test.' } },
           { type: 'item', data: { type: 'item', key: FORM, status: 'done' } },
         ]),
         result: { runId: 'r2', status: 'applied', commit: 'c2', backupCommit: 'c-b2', done: 1, error: null },
@@ -374,7 +400,7 @@ test('a job that failed without a result: Failed, done counted from events, runn
   expect(await screen.findByRole('heading', { name: 'Applied to Test' })).toBeInTheDocument();
   expect(within(progress).getByRole('listitem', { name: 'Tickets: Done' })).toBeInTheDocument();
   // The handler the resumed run found already as wanted is no longer running.
-  expect(within(progress).getByRole('listitem', { name: 'SMTP Send: Skipped' })).toBeInTheDocument();
+  expect(within(progress).getByRole('listitem', { name: 'SMTP Send: Skipped — Already up to date in Test.' })).toBeInTheDocument();
   expect(within(progress).queryAllByRole('listitem', { name: /: Running/ })).toHaveLength(0);
 });
 

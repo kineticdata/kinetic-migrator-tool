@@ -28,7 +28,7 @@ function Row({ label, sub, status, message }: { label: string; sub?: string; sta
       <span className="min-w-0 flex-1">
         <span className={cn('block truncate text-sm', status === 'pending' ? 'text-muted' : 'text-fg')}>{label}</span>
         {sub && <span className="block truncate font-mono text-[11px] text-subtle" title={sub}>{sub}</span>}
-        {message && <span className="mt-0.5 block text-[13px] text-danger">{message}</span>}
+        {message && <span className={cn('mt-0.5 block text-[13px]', status === 'failed' ? 'text-danger' : 'text-muted')}>{message}</span>}
       </span>
       <span className={cn('shrink-0 text-xs font-medium', s.text)}>{s.word}</span>
     </li>

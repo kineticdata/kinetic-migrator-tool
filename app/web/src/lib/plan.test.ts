@@ -173,11 +173,20 @@ test('a finished run leaves nothing running, and Resume carries only finished ro
     { type: 'item', key: 'a', status: 'done' },
     { type: 'item', key: 'b', status: 'running' },
   ]);
-  expect(settleChecklist(s, null, ['a', 'b', 'c'])).toBe(s);
-  expect(settleChecklist(s, 'failed', ['a', 'b', 'c']).items).toEqual({ a: { status: 'done' }, b: { status: 'failed', message: 'Stopped before it finished.' } });
-  expect(settleChecklist(s, 'cancelled', ['a', 'b', 'c']).items.b).toEqual({ status: 'skipped', message: 'Cancelled before it finished.' });
-  expect(settleChecklist(s, 'applied', ['a', 'b', 'c']).items).toEqual({ a: { status: 'done' }, b: { status: 'done' }, c: { status: 'skipped' } });
+  const rows = [{ key: 'a', action: 'update' }, { key: 'b', action: 'create' }, { key: 'c', action: 'update' }] as const;
+  expect(settleChecklist(s, null, [...rows])).toBe(s);
+  expect(settleChecklist(s, 'failed', [...rows]).items).toEqual({ a: { status: 'done' }, b: { status: 'failed', message: 'Stopped before it finished.' } });
+  expect(settleChecklist(s, 'cancelled', [...rows]).items.b).toEqual({ status: 'skipped', message: 'Cancelled before it finished.' });
+  // A write never reached is not passed off as skipped-because-as-wanted.
+  expect(settleChecklist(s, 'applied', [...rows]).items).toEqual({ a: { status: 'done' }, b: { status: 'done' } });
+  // Only rows the plan marked unchanged settle as skipped.
+  expect(settleChecklist(s, 'applied', [...rows, { key: 'd', action: 'unchanged' }]).items.d).toEqual({ status: 'skipped', message: 'Already up to date.' });
+  // A skip the server reported keeps its reason.
+  const skipped = checklistFrom([{ type: 'item', key: 'c', status: 'skipped', message: 'Changed in Test since you reviewed it — not applied.' }]);
+  expect(settleChecklist(skipped, 'partial', [...rows]).items.c).toEqual({ status: 'skipped', message: 'Changed in Test since you reviewed it — not applied.' });
   expect(settleChecklist(checklistFrom([{ type: 'step', step: 'backup', status: 'running' }]), 'failed', []).backup).toBe('failed');
+  // A row done in an earlier run stays done when the resumed run finds it up to date.
+  expect(checklistFrom([{ type: 'item', key: 'a', status: 'skipped', message: 'Already up to date in Test.' }], { a: { status: 'done' } }).items.a).toEqual({ status: 'done' });
   expect(carryOver(checklistFrom([
     { type: 'item', key: 'a', status: 'done' }, { type: 'item', key: 'b', status: 'running' }, { type: 'item', key: 'c', status: 'failed' }, { type: 'item', key: 'd', status: 'skipped' },
   ]))).toEqual({ a: { status: 'done' }, d: { status: 'skipped' } });

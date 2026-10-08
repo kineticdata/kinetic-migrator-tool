@@ -342,6 +342,13 @@ const plainFailure = (message: unknown) => {
   return m ? `The Kinetic Platform returned an error (${m[1]}).` : String(message ?? 'This item failed.');
 };
 
+function skipReason(action: string | undefined, To: string): string | null {
+  if (action === 'skip-drift') return `Changed in ${To} since you reviewed it — not applied.`;
+  if (action === 'manual') return `Now needs a change by hand in ${To} — not applied.`;
+  if (action === undefined || action === 'excluded') return `No longer part of the plan against ${To} — not applied.`;
+  return null;
+}
+
 async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, input: ApplyInput, emit: Emit, signal: AbortSignal): Promise<ApplyResult> {
   const r = plan.result;
   const To = displayName(r.to);
@@ -385,9 +392,32 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
     if (e.type !== 'item') return e;
     const out: RunItemOutcome = { key: String(e.key), status: e.status as RunItemOutcome['status'] };
     if (e.status === 'failed') out.message = plainFailure(e.message);
+    else if (typeof e.message === 'string' && e.message) out.message = e.message;
     outcomes.set(out.key, out);
     return { ...e, ...(out.message ? { message: out.message } : {}) };
   });
+  // Items reviewed as writes that the apply-time re-plan will not write are
+  // reported as skipped, with the reason: already up to date (fine), or
+  // changed in the target since review, now manual, or gone (the run is then
+  // partial), unless the user chose to keep the target's version.
+  const skipped: string[] = [];
+  const onPlan = (applyPlan: EnginePlan) => {
+    if (applyPlan.errors.length) return;
+    for (const reviewed of r.items) {
+      if (reviewed.action !== 'create' && reviewed.action !== 'update') continue;
+      if (input.resolutions[reviewed.key] === 'keep') continue;
+      const now = applyPlan.items.find((i) => i.key === reviewed.key)?.action;
+      if (now === 'unchanged') {
+        // Already as wanted (for example written by an earlier, stopped run).
+        onEvent({ type: 'item', key: reviewed.key, status: 'skipped', message: `Already up to date in ${To}.` });
+        continue;
+      }
+      const message = skipReason(now, To);
+      if (!message) continue;
+      skipped.push(reviewed.key);
+      onEvent({ type: 'item', key: reviewed.key, status: 'skipped', message });
+    }
+  };
   step('apply', 'running');
   let status: RunStatus = 'applied';
   let error: string | null = null;
@@ -395,12 +425,15 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   try {
     const res = await runApply({
       projectDir: ref.dir, envName: r.to, env, sourceDir: plan.sourceDir, yes: true, select: plan.select, resolutions: input.resolutions,
-      onEvent, signal, clientFactory: ctx.clientFactory, log: () => {},
+      onEvent, onPlan, signal, clientFactory: ctx.clientFactory, log: () => {},
     });
     done = res.done;
     if (res.code !== 0) {
       status = 'failed';
       error = 'The plan has errors against the current target; nothing was applied. Plan again.';
+    } else if (skipped.length) {
+      status = 'partial';
+      error = `${skipped.length === 1 ? '1 item was' : `${skipped.length} items were`} not applied (see the list below). Plan again to review ${skipped.length === 1 ? 'it' : 'them'}.`;
     }
   } catch (err) {
     const failed = [...outcomes.values()].find((o) => o.status === 'failed' || o.status === 'running');

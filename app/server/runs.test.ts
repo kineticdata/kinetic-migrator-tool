@@ -192,3 +192,39 @@ test('a cancelled apply finishes with its real outcome: run record, backup, item
   const again = await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [`index:${FORM}`, `connection-secrets:${CONN}`], confirm: 'test' });
   assert.equal(again.result.status, 'applied', again.result.error);
 });
+
+test('an item changed in the target after review is reported as skipped with a reason, and the run is partial', async (t) => {
+  const h = await harness(t);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  const acks = { acknowledgements: [`connection-secrets:${CONN}`], confirm: 'test' };
+  // A first promotion records the team's state in Test.
+  const first = await plan(h, { to: 'test', from: 'dev', selected: ['teams/Ops'] });
+  assert.equal((await h.job('POST', `${P}/plans/${first.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result.status, 'applied');
+
+  // Reviewed: the team is an update (no drift) and the connection a create.
+  const p = await plan(h, { to: 'test', from: 'dev', selected: ['teams/Ops', CONN] });
+  assert.deepEqual(p.items.map((i) => [i.key, i.action, i.drift]), [[CONN, 'create', false], ['teams/Ops', 'update', false]]);
+
+  // Then someone edits the team in Test before Apply.
+  const original = h.spaces.test;
+  h.spaces.test = () => ({ ...original(), 'GET core/teams': { teams: [{ name: 'Ops', slug: 'ops', description: 'Edited in Test' }] } });
+  const job = await h.job('POST', `${P}/plans/${p.planId}/apply`, acks);
+  assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
+  const result = job.result as ApplyResult;
+  assert.equal(result.status, 'partial');
+  assert.equal(result.done, 1);
+  assert.match(String(result.error), /not applied/);
+  assert.deepEqual(h.writes('test').filter((w) => w.includes('teams')), ['PUT /teams/ops'], 'only the first promotion wrote the team');
+  const reason = 'Changed in Test since you reviewed it — not applied.';
+  assert.match(job.events, new RegExp(`"key":"teams/Ops","status":"skipped","message":"${reason}"|"message":"${reason}"[^}]*"key":"teams/Ops"`));
+  const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${result.runId}.json`), 'utf8')) as RunRecord;
+  assert.equal(run.status, 'partial');
+  assert.deepEqual(run.items, [{ key: CONN, status: 'done' }, { key: 'teams/Ops', status: 'skipped', message: reason }]);
+  assert.match((await log(h.dir, { limit: 5 })).map((e) => e.message).join('\n'), /^Partly applied '2 items from Dev' to Test/m);
+
+  // Keeping the target's version on purpose is not a skip to report.
+  const kept = await h.job('POST', `${P}/plans/${p.planId}/apply`, { ...acks, resolutions: { 'teams/Ops': 'keep' } });
+  assert.equal(kept.result.status, 'applied', kept.result.error);
+  assert.doesNotMatch(kept.events, /"status":"skipped"/);
+  assertNoSecret(h, [job.events, kept.events]);
+});

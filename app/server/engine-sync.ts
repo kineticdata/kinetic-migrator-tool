@@ -75,6 +75,7 @@ export const computePlan: (opts: RunCommon & {
 }) => Promise<{ env: EngineEnv; config: EngineConfig; plan: EnginePlan; targetList: TargetArtifact[] }> = commandsModule.computePlan;
 export const runApply: (opts: RunCommon & {
   envName: string; from?: string; sourceDir?: string; yes: boolean; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
+  onPlan?: (plan: EnginePlan) => void;
 }) => Promise<{ code: number; done: number; backupDir?: string }> = commandsModule.runApply;
 export const stamp: () => string = commandsModule.stamp;
 export const compareArtifacts: (opts: { modules: EngineModule[]; left: Map<string, { data: unknown }>; right: Map<string, { data: unknown }> }) => {

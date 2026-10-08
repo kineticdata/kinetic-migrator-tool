@@ -210,6 +210,8 @@ export function checklistFrom(events: JobEventData[], carried: Record<string, It
     } else if (e.type === 'progress' && e.phase === 'backup' && state.backup === 'pending') {
       state.backup = 'running';
     } else if (e.type === 'item' && typeof e.key === 'string' && typeof e.status === 'string' && STATUSES.has(e.status)) {
+      // Done in an earlier run of this plan stays done when this run finds it up to date.
+      if (e.status === 'skipped' && carried[e.key]?.status === 'done' && state.items[e.key]?.status === 'done') continue;
       state.items[e.key] = typeof e.message === 'string' && e.message
         ? { status: e.status as StepStatus, message: e.message }
         : { status: e.status as StepStatus };
@@ -241,24 +243,27 @@ export function applyOutcome(
   return { status, done, error, backupCommit: null };
 }
 
-// A finished run leaves no row running: on success what was never reached was
-// already as wanted; otherwise a row still running stopped (or, on a cancel,
-// was skipped).
-export function settleChecklist(state: ChecklistState, outcome: Outcome | null, keys: string[]): ChecklistState {
+// A finished run leaves no row running: on success a row still running
+// finished; otherwise it stopped (or, on a cancel, was skipped). A row never
+// reached is settled as skipped only when the plan marked it unchanged (it
+// was already as wanted); any other unreached row stays as it is, because
+// the server reports every item it skipped, with the reason.
+export function settleChecklist(state: ChecklistState, outcome: Outcome | null, items: Array<Pick<PlanItemOut, 'key' | 'action'>>): ChecklistState {
   if (!outcome) return state;
   const stopped: ItemProgress = outcome === 'cancelled' ? { status: 'skipped', message: 'Cancelled before it finished.' } : { status: 'failed', message: 'Stopped before it finished.' };
-  const settle = (p: ItemProgress | undefined): ItemProgress | undefined => {
+  const unchanged = new Set(items.filter((i) => i.action === 'unchanged').map((i) => i.key));
+  const settle = (p: ItemProgress | undefined, key?: string): ItemProgress | undefined => {
     if (p?.status === 'running') return outcome === 'applied' ? { status: 'done' } : stopped;
-    if (!p || p.status === 'pending') return outcome === 'applied' ? { status: 'skipped' } : p;
+    if ((!p || p.status === 'pending') && key !== undefined && unchanged.has(key)) return { status: 'skipped', message: 'Already up to date.' };
     return p;
   };
-  const items: Record<string, ItemProgress> = {};
-  for (const k of new Set([...Object.keys(state.items), ...keys])) {
-    const p = settle(state.items[k]);
-    if (p) items[k] = p;
+  const out: Record<string, ItemProgress> = {};
+  for (const k of new Set([...Object.keys(state.items), ...items.map((i) => i.key)])) {
+    const p = settle(state.items[k], k);
+    if (p) out[k] = p;
   }
   const backup = settle({ status: state.backup })!.status;
-  return { backup, items };
+  return { backup, items: out };
 }
 
 // What a Resume starts from: only rows that finished (never running ones).
