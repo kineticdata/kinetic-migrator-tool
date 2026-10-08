@@ -75,6 +75,23 @@ and `data.json`, and `connections/<name>/connection.json` sits beside its
 `operations/`. Exploring one item means opening one folder. Exports made
 before this layout change must be re-exported.
 
+File and folder names are the item names and slugs, encoded the same way on
+every operating system so a project committed on a Mac opens on Windows and
+the other way round. Names that are already valid file names everywhere stay
+as they are. Otherwise: the characters Windows forbids (`< > : " / \ | ? *`
+and control characters) become `%` and two hex digits (`Departments::IT` is
+`Departments%3A%3AIT.json`); a leading dot or space and a trailing dot or
+space are escaped the same way; Windows device names (`con`, `nul`, `aux`,
+`com1`… with any extension) get their first letter escaped (`%63on`); a `%`
+is escaped only where it would read as an escape. A name longer than 80
+bytes is cut and ends in `%~` plus 8 hex digits of a hash of the full name
+(the full name is inside the file), which keeps paths under Windows'
+260-character limit in most projects. Two items whose names differ only in
+letter case (`Ops` and `ops`) would be one file on Windows and macOS, so
+export stops and names both; rename one in the source space. Projects
+exported before this encoding (which used `_`) get new file names for those
+items on the next snapshot.
+
 Each installed handler is exported as `handlers/<definitionId>/handler.json`
 (its settings without secret values, with a `packageSha256` of its package) beside
 `handlers/<definitionId>/package.zip`. The zip holds the handler's code and

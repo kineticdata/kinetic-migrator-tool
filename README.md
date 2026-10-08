@@ -38,12 +38,59 @@ one they are kept in memory until the server stops. Press Ctrl+C to stop.
 To try it without a Kinetic server, start it in fake mode:
 
 ```
-KINETIC_MIGRATE_FAKE=1 node kinetic-migrate.mjs ui
+node kinetic-migrate.mjs ui --fake
 ```
+
+(`npm run start:fake` does the same; `KINETIC_MIGRATE_FAKE=1` in the
+environment still works too.)
 
 Fake mode serves two synthetic spaces, `dev` and every other environment name
 (a copy of a `test` space), from memory. Any URL and password are accepted and
 applies change only the in-memory space. Nothing leaves your machine.
+
+## Supported platforms
+
+- **macOS** 12 or newer (Apple silicon and Intel)
+- **Windows** 10 and 11 (x64 or Arm64)
+- **Linux** (tested on Ubuntu in CI; keychain needs a Secret Service such as
+  GNOME Keyring and `secret-tool`)
+- **Node.js** 20.6 or newer to run the app. Developing it (build and tests)
+  needs Node 20.19+ or 22.12+ (Vite's requirement). Node 20 reached its end of
+  life in April 2026; prefer Node 22 or 24.
+
+CI runs every suite and a smoke test of the built app on macOS, Windows and
+Ubuntu with Node 20 and 22.
+
+### Windows notes
+
+- Run it from Command Prompt, PowerShell or Windows Terminal:
+  `node kinetic-migrate.mjs ui` (or `npm run start`). Every npm script works
+  in cmd.exe and PowerShell; none needs a Unix shell or inline environment
+  variables (use `--fake`, not `KINETIC_MIGRATE_FAKE=1 …`).
+- The browser opens through Windows' URL handler (`rundll32
+  url.dll,FileProtocolHandler`); with `--no-open`, copy the printed address.
+- Secrets are stored in **Windows Credential Manager** (Control Panel →
+  Credential Manager → Windows Credentials, entries named
+  `kinetic-migrate:…`), saved for your user on this computer and never
+  roamed. kinetic-migrate talks to it through the built-in Windows
+  PowerShell 5.1 (`%SystemRoot%\System32\WindowsPowerShell\v1.0`); nothing
+  to install. Each secret operation starts PowerShell, so it takes about a
+  second. Where Credential Manager cannot be used (for example some remote or
+  service sessions, or PowerShell blocked by policy), secrets are kept in
+  memory until the server stops and the app says so; they are never written
+  to disk in plain text. A single secret can be up to about 1.9 KB.
+- The default workspace is `%USERPROFILE%\KineticMigrate` (not Documents,
+  which OneDrive often syncs). Avoid putting the workspace in a OneDrive,
+  Dropbox or other synced folder: syncing locks files mid-write. The app
+  warns when it is in one.
+- Paths with spaces and non-ASCII letters (`C:\Users\José Núñez\…`) are
+  fine. Long item names are shortened in file names (see
+  [`docs/PROMOTING.md`](docs/PROMOTING.md)); if you clone a project with Git
+  for Windows and still hit the 260-character path limit, enable
+  `git config --global core.longpaths true`.
+- Projects carry a `.gitattributes` that keeps LF line ends, so a clone with
+  Git for Windows (which defaults to CRLF) compares cleanly.
+- Ctrl+C stops the server.
 
 ## A short tour
 
@@ -97,6 +144,8 @@ npm run dev:server   # API server, restarts on change
 npm test             # engine tests
 npm run test:app     # server and web tests
 npm run typecheck
+npm run build
+npm run smoke        # starts the built app in fake mode and checks it answers
 npm run test:e2e     # builds, then runs the Playwright smoke test in fake mode
 ```
 
