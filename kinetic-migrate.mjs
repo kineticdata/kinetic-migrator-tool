@@ -15,10 +15,11 @@ const USAGE = `Usage:
   node kinetic-migrate.mjs plan    [--project <dir>] [--from <name>] --to <name> [--overwrite-drift]
   node kinetic-migrate.mjs apply   [--project <dir>] [--from <name>] --to <name> [--yes] [--overwrite-drift] [--prune <type>]...
   node kinetic-migrate.mjs compare [--project <dir>] --from <name> --to <name> [--raw]
-  node kinetic-migrate.mjs ui      [--workspace <dir>] [--port <n>] [--no-open]
+  node kinetic-migrate.mjs ui      [--workspace <dir>] [--port <n>] [--no-open] [--fake]
 
 --project defaults to the current directory.
-ui starts the local web app (needs npm run build); --workspace defaults to ~/KineticMigrate.
+ui starts the local web app (needs npm run build); --workspace defaults to ~/KineticMigrate;
+--fake serves synthetic dev and test spaces from memory (same as KINETIC_MIGRATE_FAKE=1).
 export writes snapshots/<name>/; plan and apply read snapshots/<from>/.
 Without --from they read a legacy export/ folder, only when there is no snapshots/ folder.
 --prune types: ${PRUNABLE.join(', ')}`;

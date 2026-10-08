@@ -5,7 +5,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import type { SessionInfo } from '../shared/api.ts';
 import pkg from '../../package.json' with { type: 'json' };
 import { HOST, DEV_PORT } from './config.ts';
@@ -35,6 +35,8 @@ export interface StartServerOptions {
   secrets?: SecretStore;
   clientFactory?: ClientFactory;
   logger?: Logger;
+  // Fake mode without the environment variable (`kinetic-migrate ui --fake`).
+  fake?: boolean;
 }
 
 export interface ServerContext {
@@ -80,7 +82,7 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
   const jobs = new JobRegistry({ logger });
   const workspace = path.resolve(opts.workspace);
   // Fake mode only fills in what the caller did not inject.
-  const fake = opts.clientFactory || opts.secrets ? undefined : fakeMode(process.env);
+  const fake = opts.clientFactory || opts.secrets ? undefined : fakeMode(opts.fake ? { KINETIC_MIGRATE_FAKE: '1' } : process.env);
   const secrets = opts.secrets ?? fake?.secrets ?? await createDefaultStore();
   const clientFactory = opts.clientFactory ?? fake?.clientFactory;
   // Built bundle: dist/server.mjs serves dist/web next to itself.
@@ -115,7 +117,16 @@ function argValue(args: string[], name: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly (not imported)? Windows paths compare without case: the drive
+// letter in argv can differ from the one in import.meta.url.
+export function isMainModule(moduleUrl: string, argv1: string | undefined, platform: string = process.platform): boolean {
+  if (!argv1) return false;
+  const a = fileURLToPath(moduleUrl);
+  const b = path.resolve(argv1);
+  return platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+if (isMainModule(import.meta.url, process.argv[1])) {
   const args = process.argv.slice(2);
   const dev = args.includes('--dev');
   const portArg = argValue(args, '--port');
@@ -123,6 +134,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     workspace: argValue(args, '--workspace') ?? process.cwd(),
     port: portArg ? Number(portArg) : dev ? DEV_PORT : 0,
     webDir: argValue(args, '--web-dir'),
+    fake: args.includes('--fake'),
   });
   console.log(`kinetic-migrate is running at ${handle.url}`);
   if (handle.fake) console.log('Fake mode: synthetic dev and test spaces, nothing leaves this machine.');
