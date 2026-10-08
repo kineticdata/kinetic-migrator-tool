@@ -1,171 +1,186 @@
-# kinetic-migrate
+# Kinetic Migrator
 
-Explore a Kinetic Platform environment, compare it with another, build
-changesets and promote them safely, from a local web UI or the command line.
+Kinetic Migrator promotes Kinetic Platform configuration between
+environments, for example from Dev to Test to Prod. It takes a snapshot of
+each environment, shows what differs, lets you pick exactly what to promote
+(a changeset), shows a plan of every change, and applies it with a backup
+taken first. It runs on your computer as a local web app, with a command
+line for scripted use. The command is `kinetic-migrate`.
 
-- Engine: `lib/sync/` (plain JavaScript, no runtime dependencies)
-- Web app: `app/server` (local API) and `app/web` (React), bundled into `dist/`
-- CLI: `node kinetic-migrate.mjs --help`
-- Guide: [`docs/PROMOTING.md`](docs/PROMOTING.md)
+## Who it is for
+
+- **Kinetic admins and partners** who move kapps, forms, workflows and
+  integrations from one space to another. Use the web app.
+- **Power users** who script promotions or run them from CI. Use the
+  command line.
+- **Developers** who maintain the tool. See
+  [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) in the source repository.
+
+## Features
+
+- **Projects.** Each project is a folder managed as a git repository: every
+  snapshot, changeset, promotion and backup is a commit. Push it to a remote
+  repository to share it.
+- **Environments.** Connect any number of spaces and order them as a
+  pipeline. Mark one Protected (read-only) and nothing is ever written to it.
+- **Snapshots and Explore.** Browse everything in an environment: space
+  settings, teams, kapps, forms, workflows, WebAPIs, connections and
+  operations, handlers, routines, workflow categories and more. Each item
+  has a summary, its relationships (what it uses and what uses it), the raw
+  JSON and its history.
+- **Compare.** See what is new, changed, drifted or only in the target,
+  either as a preview of a promotion or as a raw difference.
+- **Changesets.** Tick what to promote. Dependencies an item needs are
+  suggested, with the reason. Save a changeset to promote the same set
+  through each environment.
+- **Plan and apply.** A guided apply: review, environment values and
+  secrets, typed confirmation, then live progress. A backup snapshot of the
+  target is taken first.
+- **Removals.** Delete items that exist only in the target, on purpose and
+  one by one, with warnings for anything that still uses them.
+- **History and restore.** Every event in plain words, with restore from a
+  backup.
+- **Environment values.** Attributes, space settings and handler settings
+  that must differ per environment stay as each environment has them.
+- **Secrets.** Passwords, tokens and secret handler settings live in your
+  system keychain. They are never exported, logged or shown again.
+
+## Requirements
+
+- **Node.js 20.6 or newer** (from `package.json` `engines`). Node 22 or 24
+  is recommended: Node 20 reached its end of life in April 2026.
+- **macOS** 12 or newer, **Windows** 10 or 11, or **Linux**. CI runs on
+  macOS, Windows and Ubuntu.
+- **Kinetic Platform 6.x or 7.x.** The version of each environment is
+  detected and shown.
+- A **space admin account with a password** for each environment. Spaces
+  that only sign in with single sign-on cannot be used.
+- To keep secrets between sessions: macOS Keychain, Windows Credential
+  Manager, or on Linux a Secret Service (such as GNOME Keyring) with
+  `secret-tool`. Without one, secrets are kept in memory until the app stops.
 
 ## Install
 
-Requires Node.js 20.6 or newer.
+From a copy of the source:
 
 ```
 npm install
 npm run build
+npm link        # optional: puts the kinetic-migrate command on your PATH
 ```
 
 `npm run build` bundles the server and the web app into `dist/`. The built
-app has no runtime dependencies.
+app has no runtime dependencies. Without `npm link`, run
+`node kinetic-migrate.mjs` from the source folder wherever these docs say
+`kinetic-migrate`.
 
-## Start the web UI
-
-```
-node kinetic-migrate.mjs ui [--workspace <dir>] [--port <n>] [--no-open]
-```
-
-(or `kinetic-migrate ui` when the package is linked or installed globally).
-
-This starts a local server on 127.0.0.1 and opens the browser at a one-time
-launch URL; the session key is in that URL only. Projects live in the
-workspace, `~/KineticMigrate` by default, each one a git repository of
-snapshots, changesets and run records. Passwords go to the system keychain
-(macOS Keychain, Windows Credential Manager, Secret Service on Linux); without
-one they are kept in memory until the server stops. Press Ctrl+C to stop.
-
-The server also writes a log file in the workspace,
-`.kinetic-migrate/logs/kinetic-migrate-<YYYY-MM-DD>.log` (one per day, the
-last 14 kept), with the same lines it prints to the terminal: unexpected
-errors and failed jobs (with the platform's error message and the names of
-the fields it complained about). Passwords, tokens and other secrets are
-never written to it. `ui` prints its path on start; the Projects page and
-Settings show it too.
-
-To try it without a Kinetic server, start it in fake mode:
+To install on another machine, build first, then pack and install the
+tarball there:
 
 ```
-node kinetic-migrate.mjs ui --fake
+npm run build
+npm pack                                    # writes kinetic-migrate-0.1.0.tgz
+npm install -g kinetic-migrate-0.1.0.tgz    # on the other machine
 ```
 
-(`npm run start:fake` does the same; `KINETIC_MIGRATE_FAKE=1` in the
-environment still works too.)
+## Start the web app
 
-Fake mode serves two synthetic spaces, `dev` and every other environment name
-(a copy of a `test` space), from memory. Any URL and password are accepted and
-applies change only the in-memory space. Nothing leaves your machine. The
-fake `dev` space reports Kinetic Platform 6.1.7 and the others 7.0.0-rc3, so
-Compare and Plan show the cross-version warning.
+```
+kinetic-migrate ui
+```
 
-## Supported platforms
+The server starts on `127.0.0.1` and your browser opens at a one-time launch
+link. Leave the terminal open; press Ctrl+C to stop.
 
-- **Kinetic Platform** 6.x and 7.x. The version of each environment is
-  detected and shown; what differs between versions (how the Integrator is
-  signed in to) is described in [docs/PROMOTING.md](docs/PROMOTING.md#platform-versions).
-- **macOS** 12 or newer (Apple silicon and Intel)
-- **Windows** 10 and 11 (x64 or Arm64)
-- **Linux** (tested on Ubuntu in CI; keychain needs a Secret Service such as
-  GNOME Keyring and `secret-tool`)
-- **Node.js** 20.6 or newer to run the app. Developing it (build and tests)
-  needs Node 20.19+ or 22.12+ (Vite's requirement). Node 20 reached its end of
-  life in April 2026; prefer Node 22 or 24.
+| Option | What it does |
+|--------|--------------|
+| `--workspace <dir>` | Where projects are kept. Default: `KineticMigrate` in your home folder (`%USERPROFILE%\KineticMigrate` on Windows). |
+| `--port <n>` | The port to listen on, 0 to 65535. Default: a free port chosen at start. |
+| `--no-open` | Do not open a browser. Open the printed address yourself. |
+| `--fake` | Demo mode: two synthetic spaces in memory, nothing leaves your machine. |
 
-CI runs every suite and a smoke test of the built app on macOS, Windows and
-Ubuntu with Node 20 and 22.
+To try it without a Kinetic server:
 
-### Windows notes
+```
+kinetic-migrate ui --fake
+```
 
-- Run it from Command Prompt, PowerShell or Windows Terminal:
-  `node kinetic-migrate.mjs ui` (or `npm run start`). Every npm script works
-  in cmd.exe and PowerShell; none needs a Unix shell or inline environment
-  variables (use `--fake`, not `KINETIC_MIGRATE_FAKE=1 …`).
-- The browser opens through Explorer (`explorer.exe <url>`, the default browser); with `--no-open`, copy the printed address.
-- Secrets are stored in **Windows Credential Manager** (Control Panel →
-  Credential Manager → Windows Credentials, entries named
-  `kinetic-migrate:…`), saved for your user on this computer and never
-  roamed. kinetic-migrate talks to it through one helper process running
-  the built-in Windows PowerShell 5.1
-  (`%SystemRoot%\System32\WindowsPowerShell\v1.0`), started on first use
-  and kept for as long as the app runs; nothing to install. Its first start
-  compiles a small helper and can take several seconds (longer under some
-  antivirus); later operations are quick. Secrets of any size are stored
-  (values longer than one Credential Manager entry holds are split across
-  `…#1`, `…#2` entries). Where Credential Manager cannot be used (for example
-  some remote or service sessions, or PowerShell blocked by policy), secrets
-  are kept in memory until the server stops and the app says so; they are
-  never written to disk in plain text.
-- The default workspace is `%USERPROFILE%\KineticMigrate` (not Documents,
-  which OneDrive often syncs). Avoid putting the workspace in a OneDrive,
-  Dropbox or other synced folder: syncing locks files mid-write. The app
-  warns when it is in one.
-- Paths with spaces and non-ASCII letters (`C:\Users\José Núñez\…`) are
-  fine. Long item names are shortened in file names (see
-  [`docs/PROMOTING.md`](docs/PROMOTING.md)); if you clone a project with Git
-  for Windows and still hit the 260-character path limit, enable
-  `git config --global core.longpaths true`.
-- Projects carry a `.gitattributes` that keeps LF line ends, so a clone with
-  Git for Windows (which defaults to CRLF) compares cleanly.
-- Ctrl+C stops the server.
+In fake mode an environment named `dev` is a synthetic Dev space on Kinetic
+Platform 6.1.7, and any other name is a copy of a Test space on 7.0.0-rc3.
+Any URL and password are accepted, and applies change only the in-memory
+space.
 
-## A short tour
+## Quickstart: your first promotion
 
-- **Projects.** Create a project, connect its first environment (Space URL,
-  username, password, *Test connection*) and take a snapshot. Mark an
-  environment *Protected* to make it read-only for kinetic-migrate.
-- **Overview.** The pipeline of environments, left to right: when each was last
-  snapshotted, what it holds, drift since the last promotion and the latest
-  promotion. Take or refresh snapshots here.
-- **Explore.** A tree of everything in one environment (space, teams, kapps,
-  forms, workflows, connections, handlers and more) with search, a readable
-  detail view, relationships and the raw JSON.
-- **Compare.** Pick a source and a target to see what is new or changed. Tick
-  items to add them to a changeset; kinetic-migrate suggests the dependencies
-  they need, such as the connection and operation a form calls. Save a
-  changeset to come back to it, or go straight to *Review plan*.
-- **Plan and apply.** A guided apply in four steps: *Review* what will be
-  created or updated and acknowledge anything that needs attention;
-  *Environment values* for settings that differ per environment and secrets for
-  new connections and handlers; *Confirm* by typing the target's name; *Apply*,
-  with live progress. A backup snapshot of the target is taken first.
-- **Changesets.** Saved selections, pinned to the snapshot they were built
-  from, with where they have been applied.
-- **History.** Every snapshot, promotion, backup, drift event and restore in
-  plain words, with restore from a backup.
-- **Settings.** Environments and their pipeline order, data and environment
-  values, and the project's git repository (a remote to push to).
+This takes about five minutes with two real spaces, or with `--fake`.
 
-Screenshots (to be added):
+1. **Create a project.** On the Projects page choose **Create your first
+   project** (or **New project**). Give it a name and choose **Next**.
+2. **Add the first environment.** Enter a name such as `dev`, the Space URL
+   (for example `https://dev.example.com`), a username and a password.
+   Choose **Test connection**. When it says **Connected**, choose **Next**.
+3. **Take a snapshot.** Choose **Take snapshot**. Optionally enter your name
+   and email for History, then choose **Open overview**.
+4. **Add the second environment.** Open **Settings**, choose **Add
+   environment**, enter `test` and its URL and credentials, **Test
+   connection**, then **Save**.
+5. **Snapshot it.** On **Overview**, choose **Take snapshot** on the Test
+   lane.
+6. **Compare.** Choose **Compare with Test** on the Dev lane. The tree shows
+   what is new or changed in Dev. Select an item to see its changes.
+7. **Build a changeset.** Tick the items to promote. Check the
+   **Suggested** list in the tray and choose **Add** (or **Add all**) for the
+   dependencies you need. Optionally choose **Save as changeset…**.
+8. **Plan.** Choose **Review plan**. Read the counts and the item list, and
+   tick each entry under **Needs attention**. Choose **Next: Environment
+   values**, fill in any value or secret it asks for, then **Next: Confirm**.
+9. **Apply.** Type the target's name (`test`) and choose **Apply to Test**.
+   A backup of Test is taken, then each change is shown as it is made.
+10. **Check History.** Choose **View in History** to see the backup and the
+    promotion. From there you can restore the backup if you need to.
 
-- Projects and the new-project wizard
-- Overview
-- Explore
-- Compare with a changeset and a suggestion
-- Plan: review, environment values, confirm, apply
-- History
+The [User guide](docs/USER-GUIDE.md) covers every screen in detail.
 
-## Command line
+## Safety model
 
-The same engine runs from the command line for scripted promotions:
-`init`, `export`, `plan`, `apply` and `compare`. See
-[`docs/PROMOTING.md`](docs/PROMOTING.md) for the project layout, environment
-values, secrets, handlers and the safety rules, and
-`node kinetic-migrate.mjs --help` for the options.
+- **Protected environments are read-only.** Snapshots, comparisons and plans
+  use a client that cannot send anything but read requests. Apply refuses a
+  Protected target.
+- **You confirm every apply** by typing the target environment's name.
+- **A backup comes first.** Before any write, a snapshot of the target is
+  taken and committed as a backup you can restore from.
+- **Drift protection.** An item changed in the target since it was last
+  promoted is not overwritten unless you choose **Overwrite** for it.
+- **Nothing is deleted unless you choose it.** Promoting only creates and
+  updates. Items only in the target are removed only when you mark each one
+  with **Remove from <target>** (or, on the command line, name it with
+  `--remove` or a type with `--prune`).
+- **Secrets are write-only.** Passwords, tokens and secret handler settings
+  are never exported, committed, logged or shown again. Existing connections
+  are never written, so their stored credentials are never touched.
+
+## Documentation
+
+| Guide | What it covers |
+|-------|----------------|
+| [User guide](docs/USER-GUIDE.md) | Every screen and flow of the web app |
+| [Concepts](docs/CONCEPTS.md) | Snapshots, changesets, plans, drift, environment values, secrets, what is promoted |
+| [Command line](docs/CLI.md) | Every command and flag, with examples |
+| [Promoting reference](docs/PROMOTING.md) | Detailed engine behaviour: file layout, overrides, handlers, reference data, removals |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Symptoms, causes and fixes; the log file |
+| [Development](docs/DEVELOPMENT.md) | Architecture, tests, adding an artifact type (source repository only) |
+| [Changelog](CHANGELOG.md) | What shipped, and known limitations |
+
+## Troubleshooting
+
+Start with [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md). The app
+writes a daily log file in the workspace,
+`.kinetic-migrate/logs/kinetic-migrate-<YYYY-MM-DD>.log`. Its path is
+printed when the app starts and shown on the Projects page and in Settings.
+Secrets are never written to it.
 
 ## Development
 
-```
-npm run dev          # web app with hot reload (Vite)
-npm run dev:server   # API server, restarts on change
-npm test             # engine tests
-npm run test:app     # server and web tests
-npm run typecheck
-npm run build
-npm run smoke        # starts the built app in fake mode and checks it answers
-npm run test:e2e     # builds, then runs the Playwright smoke test in fake mode
-```
-
-The end-to-end smoke test walks the main journey (create a project, add dev
-and test, snapshot both, compare, accept a suggestion, plan, apply, history)
-and writes a screenshot of each step to `e2e-artifacts/screenshots/`. The first
-run needs a browser: `npx playwright install chromium`.
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). In short: `npm run dev` for
+the web app with hot reload, `npm test` and `npm run test:app` for the
+tests.

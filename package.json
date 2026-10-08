@@ -12,8 +12,13 @@
     "lib/sync/**/*.mjs",
     "!lib/sync/**/*.test.mjs",
     "dist/",
+    "README.md",
+    "CHANGELOG.md",
+    "docs/USER-GUIDE.md",
+    "docs/CONCEPTS.md",
+    "docs/CLI.md",
     "docs/PROMOTING.md",
-    "README.md"
+    "docs/TROUBLESHOOTING.md"
   ],
   "engines": {
     "node": ">=20.6"

@@ -12,7 +12,7 @@ test('renders the projects launcher', async () => {
     'GET /api/projects': [],
   });
   render(<App />);
-  expect(screen.getByRole('link', { name: /Kinetic Migrate/ })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: /Kinetic Migrator/ })).toBeInTheDocument();
   expect(await screen.findByRole('heading', { name: 'Projects' })).toBeInTheDocument();
   expect(await screen.findByText('No projects yet')).toBeInTheDocument();
 });

@@ -725,7 +725,7 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
     } catch (err) {
       ctx.logger?.error('snapshot after apply', scrubError(err, known));
       step('snapshot', 'failed');
-      emit({ type: 'warning', message: `The apply finished, but kinetic-migrate could not take a new snapshot of ${To}. Take one before comparing.` });
+      emit({ type: 'warning', message: `The apply finished, but Kinetic Migrator could not take a new snapshot of ${To}. Take one before comparing.` });
     }
   }
   // A cancelled apply still reports what it did (the job keeps this result).

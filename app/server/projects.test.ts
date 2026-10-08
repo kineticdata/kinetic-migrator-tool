@@ -346,7 +346,7 @@ test('opening refuses folders that are not projects and repositories on another 
   await git.branch({ fs, dir: feature, ref: 'infra-work', checkout: true });
   const otherBranch = await call('POST', '/api/projects/open', { path: feature });
   assert.equal(otherBranch.status, 400);
-  assert.equal(otherBranch.json.error.message, 'This folder is a git repository on branch infra-work; kinetic-migrate manages projects on main.');
+  assert.equal(otherBranch.json.error.message, 'This folder is a git repository on branch infra-work; Kinetic Migrator manages projects on main.');
   assert.equal((await log(feature, { limit: 10 })).length, 1, 'nothing committed');
   assert.equal(existsSync(path.join(feature, 'kinetic-migrate.json')), false, 'nothing written');
 

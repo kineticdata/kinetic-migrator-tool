@@ -9,7 +9,7 @@ export function NotFoundPage({ inProject }: { inProject?: boolean }) {
     <EmptyState
       icon={<MapPinOff size={20} />}
       title="Page not found"
-      description="This address doesn’t match anything in kinetic-migrate."
+      description="This address doesn’t match anything in Kinetic Migrator."
       action={<LinkButton to={inProject ? 'overview' : '/'} variant="primary">{inProject ? 'Back to overview' : 'All projects'}</LinkButton>}
     />
   );

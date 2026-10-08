@@ -48,7 +48,7 @@ export function EnvironmentFields({ draft, onChange, nameLocked, credentials, sh
         checked={draft.readOnly}
         onCheckedChange={(readOnly) => set({ readOnly })}
         label="Protected"
-        description="kinetic-migrate only reads from a protected environment and never changes it."
+        description="Kinetic Migrator only reads from a protected environment and never changes it."
       />
       <div className="grid gap-4 border-t border-border pt-4 sm:grid-cols-2">
         <Field label="Username" aside={credentials.username ? <span className="text-xs text-muted">Saved</span> : undefined}>
