@@ -43,13 +43,13 @@ async function main(argv) {
   };
   switch (command) {
     case 'init': return runInit({ projectDir, log });
-    case 'export': return runExport({ projectDir, envName: need('env'), log });
-    case 'plan': return runPlan({ projectDir, envName: need('to'), overwriteDrift: values['overwrite-drift'], log });
-    case 'apply': return runApply({
+    case 'export': return (await runExport({ projectDir, envName: need('env'), log })).code;
+    case 'plan': return (await runPlan({ projectDir, envName: need('to'), overwriteDrift: values['overwrite-drift'], log })).code;
+    case 'apply': return (await runApply({
       projectDir, envName: need('to'), yes: values.yes, prune: values.prune ?? [],
       overwriteDrift: values['overwrite-drift'], log,
-    });
-    case 'compare': return runCompare({ projectDir, from: need('from'), to: need('to'), raw: values.raw, log });
+    })).code;
+    case 'compare': return (await runCompare({ projectDir, from: need('from'), to: need('to'), raw: values.raw, log })).code;
     default: throw new Error(`Unknown command "${command}"\n\n${USAGE}`);
   }
 }
