@@ -1,2 +1,138 @@
 @import 'tailwindcss';
 @config '../../../tailwind.config.ts';
+
+/* Design tokens. Light by default; dark when <html data-theme="dark"> (set
+   from the OS preference or the manual toggle, see lib/theme.ts). */
+:root {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f1f3f6;
+  --surface-3: #e8ebf0;
+  --border: #e3e6eb;
+  --border-strong: #cfd4dc;
+  --fg: #14171c;
+  --muted: #5b6270;
+  --subtle: #8a909c;
+  --accent: #3b5bdb;
+  --accent-hover: #3250c7;
+  --accent-fg: #ffffff;
+  --accent-soft: #edf1ff;
+  --ring: #3b5bdb55;
+
+  --added: #19753c;
+  --added-soft: #e8f6ed;
+  --changed: #1f5fbf;
+  --changed-soft: #e9f1fd;
+  --removed: #5f6672;
+  --removed-soft: #eef0f3;
+  --drift: #a35a00;
+  --drift-soft: #fdf3e2;
+  --danger: #b42323;
+  --danger-hover: #9e1d1d;
+  --danger-soft: #fdecec;
+
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 0.05);
+  --shadow-md: 0 1px 2px rgb(16 24 40 / 0.04), 0 4px 12px rgb(16 24 40 / 0.06);
+  --shadow-lg: 0 12px 32px rgb(16 24 40 / 0.14), 0 2px 6px rgb(16 24 40 / 0.06);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --surface: #161920;
+  --surface-2: #1c2029;
+  --surface-3: #252a35;
+  --border: #272c37;
+  --border-strong: #353b48;
+  --fg: #e8eaee;
+  --muted: #a2a8b4;
+  --subtle: #757c89;
+  --accent: #7c95ff;
+  --accent-hover: #93a7ff;
+  --accent-fg: #0f1115;
+  --accent-soft: #1d2440;
+  --ring: #7c95ff66;
+
+  --added: #5cc98a;
+  --added-soft: #15291e;
+  --changed: #75a7ff;
+  --changed-soft: #172338;
+  --removed: #a2a8b4;
+  --removed-soft: #20242d;
+  --drift: #f0b35c;
+  --drift-soft: #2e2414;
+  --danger: #ff7b7b;
+  --danger-hover: #ff9494;
+  --danger-soft: #331a1c;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-md: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 14px rgb(0 0 0 / 0.25);
+  --shadow-lg: 0 16px 40px rgb(0 0 0 / 0.5);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-ring: var(--ring);
+  --color-added: var(--added);
+  --color-added-soft: var(--added-soft);
+  --color-changed: var(--changed);
+  --color-changed-soft: var(--changed-soft);
+  --color-removed: var(--removed);
+  --color-removed-soft: var(--removed-soft);
+  --color-drift: var(--drift);
+  --color-drift-soft: var(--drift-soft);
+  --color-danger: var(--danger);
+  --color-danger-hover: var(--danger-hover);
+  --color-danger-soft: var(--danger-soft);
+  --shadow-card: var(--shadow-sm);
+  --shadow-raised: var(--shadow-md);
+  --shadow-overlay: var(--shadow-lg);
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+@layer base {
+  html,
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    min-height: 100vh;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+@keyframes km-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes km-pop-in {
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.97); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes km-slide-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

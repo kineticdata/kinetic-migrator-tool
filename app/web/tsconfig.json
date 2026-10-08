@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "composite": true, "emitDeclarationOnly": true, "noEmit": false, "outDir": "../../node_modules/.tmp/web", "tsBuildInfoFile": "../../node_modules/.tmp/web.tsbuildinfo", "jsx": "react-jsx", "lib": ["ES2022", "DOM", "DOM.Iterable"], "types": ["vite/client", "vitest/globals"] },
-  "include": ["./**/*.ts", "./**/*.tsx"]
+  "compilerOptions": { "composite": true, "emitDeclarationOnly": true, "noEmit": false, "rootDir": "..", "outDir": "../../node_modules/.tmp/web", "tsBuildInfoFile": "../../node_modules/.tmp/web.tsbuildinfo", "jsx": "react-jsx", "lib": ["ES2022", "DOM", "DOM.Iterable"], "types": ["vite/client", "vitest/globals"] },
+  "include": ["./**/*.ts", "./**/*.tsx", "../shared/**/*.ts", "../server/config.ts"]
 }

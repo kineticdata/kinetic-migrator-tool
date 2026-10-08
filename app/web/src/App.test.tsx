@@ -1,9 +1,18 @@
-// Scaffold smoke test: proves Vitest + jsdom + Testing Library work.
+// Smoke test: the full app (providers, router, routes) renders the launcher.
 import { render, screen } from '@testing-library/react';
-import { expect, test } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 import { App } from './App';
+import { mockApi } from './test/mock-api';
 
-test('renders the app shell', () => {
+afterEach(() => vi.unstubAllGlobals());
+
+test('renders the projects launcher', async () => {
+  mockApi({
+    'GET /api/session': { version: '0.1.0', workspace: '/workspace', keychain: { available: true } },
+    'GET /api/projects': [],
+  });
   render(<App />);
-  expect(screen.getByRole('heading', { name: 'kinetic-migrate' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: /kinetic-migrate/ })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: 'Projects' })).toBeInTheDocument();
+  expect(await screen.findByText('No projects yet')).toBeInTheDocument();
 });
