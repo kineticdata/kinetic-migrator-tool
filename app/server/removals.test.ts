@@ -176,7 +176,7 @@ test('a removal changed in the target since review is kept and the run is partia
     { key: LEGACY, status: 'skipped', message: 'Already gone from Test.' },
     { key: OLD, status: 'skipped', message: 'Changed in Test since you reviewed it — not removed.' },
   ]);
-  assert.match((await log(h.dir, { limit: 3 })).map((e) => e.message).join('\n'), /^Partly removed 2 items from Test/m);
+  assert.match((await log(h.dir, { limit: 3 })).map((e) => e.message).join('\n'), /^Removed nothing from Test \(2 items skipped\)/m);
 });
 
 test('a plan can promote and remove together; a never-removable key is refused', async (t) => {
@@ -200,7 +200,9 @@ test('run titles name removals and History reads them as applies', () => {
   assert.equal(runTitle('apply', 'failed', 'x', 'Prod', 0, 1), 'Failed to remove 1 item from Prod');
   assert.equal(runTitle('apply', 'applied', 'Q4', 'Prod', 3, 0), "Applied 'Q4' to Prod");
   assert.equal(runTitle('restore', 'applied', 'x', 'Prod', 3, 0), 'Restored Prod from a backup');
-  for (const t of ['Removed 2 items from Prod', 'Partly removed 2 items from Prod', 'Failed to remove 1 item from Prod', 'Cancelled removing 1 item from Prod']) {
+  assert.equal(runTitle('apply', 'partial', 'x', 'Prod', 0, 0, 2), 'Removed nothing from Prod (2 items skipped)');
+  assert.equal(runTitle('apply', 'partial', 'x', 'Prod', 0, 1, 2), 'Partly removed 1 item from Prod');
+  for (const t of ['Removed nothing from Prod (2 items skipped)', 'Removed 2 items from Prod', 'Partly removed 2 items from Prod', 'Failed to remove 1 item from Prod', 'Cancelled removing 1 item from Prod']) {
     assert.equal(typeOf(t), 'applied', t);
   }
 });
@@ -300,4 +302,14 @@ test('I4: a child still in the target after its kapp was removed, and that canno
   assert.match(String(result.error), /still in Test/);
   const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${result.runId}.json`), 'utf8')) as RunRecord;
   assert.deepEqual(run.items.map((i) => [i.key, i.status]), [['kapps/legacy/forms/old-form/form', 'failed'], [LEGACY, 'done']]);
+});
+
+test('a restore planned from a changeset never plans its removals', async (t) => {
+  const h = await harness(t);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  withExtras(h);
+  const cs = (await h.call('POST', `${P}/changesets`, { name: 'Tidy', from: 'dev', keys: ['teams/Ops'], remove: [OLD], removeFrom: 'test' })).json as Changeset;
+  const p = await plan(h, { to: 'test', changesetId: cs.id, restore: true });
+  assert.deepEqual([p.remove, p.removals, p.counts.delete], [[], [], 0]);
+  assert.equal((await h.call('POST', `${P}/plans`, { to: 'test', from: 'test', selected: ['teams/Ops'], restore: true, remove: [OLD] })).status, 400);
 });

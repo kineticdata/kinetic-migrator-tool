@@ -138,6 +138,7 @@ const scopeOf = (path: string): string | undefined => {
   m = /^\/kapps\/([^/]+)\/forms\/([^/]+)\/workflows$/.exec(path);
   return m ? `form:${decodeURIComponent(m[1])}/${decodeURIComponent(m[2])}` : undefined;
 };
+const workflowTitle = (w: { id: string; name: string }) => `Kinetic Request CE :: ${w.id} :: ${w.name}`;
 const itemType = (scope: string) => (scope === 'space' ? 'Space' : scope.startsWith('kapp:') ? 'Kapp' : 'Form');
 const enc = encodeURIComponent;
 
@@ -151,7 +152,10 @@ function routes(s: FakeSpace): Obj {
     'GET core/kapps': { kapps: s.kapps.map((k) => ({ slug: k.slug, name: k.name })) },
     'GET integrator/connections': s.connections.map((c) => ({ id: c.id, name: c.name })),
     'GET task/trees': ({ query }: { query?: Obj }) => {
-      const trees = s.routines.filter((t) => !query?.type || t.type === query.type).map(clone);
+      // Workflows' trees too: a kapp or form delete leaves them (as the
+      // platform does); deleting the workflow through Core removes its tree.
+      const flows = s.workflows.map((w) => ({ name: w.name, title: workflowTitle(w), sourceName: 'Kinetic Request CE', sourceGroup: w.id, type: 'Tree' }));
+      const trees = [...s.routines, ...flows].filter((t) => !query?.type || t.type === query.type).map(clone);
       const offset = Number(query?.offset ?? 0);
       const limit = Number(query?.limit ?? 100);
       return { trees: trees.slice(offset, offset + limit), count: trees.length };
@@ -270,7 +274,10 @@ function write(s: FakeSpace, catalog: FakeSpace, api: string, method: string, pa
         Object.assign(cur, changes, { versionId: String(Number(versionId) + 1) });
         return { tree: cur };
       }
-      if (method === 'DELETE') s.routines = s.routines.filter((t) => t !== cur);
+      if (method === 'DELETE') {
+        s.routines = s.routines.filter((t) => t !== cur);
+        s.workflows = s.workflows.filter((w) => workflowTitle(w) !== title);
+      }
       return {};
     }
     if (method === 'POST' && path === '/handlers') {
