@@ -214,3 +214,22 @@ test('a refused Integrator sign-in fails the snapshot loudly, and Test connectio
   const r = (await h.call('POST', `${P}/environments/test/test`)).json as ConnectionTestResult;
   assert.equal(r.steps.find((s) => s.step === 'integrator')!.message, 'The Integrator rejected the sign-in (401): check the username and password.');
 });
+
+test('a reviewed connection removal dropped at apply because the target\'s connections can no longer be read says so (not "changed")', async (t) => {
+  const h = await harness(t);
+  h.spaces.test = devRoutes; // Test has the connection; Dev's snapshot does not
+  h.spaces.dev = () => ({ ...devRoutes(), 'GET integrator/connections': [] });
+  await snapshot(h, 'dev');
+  const planned = await h.job('POST', `${P}/plans`, { to: 'test', from: 'dev', selected: [], remove: [CONN] });
+  assert.equal(planned.status, 'succeeded', JSON.stringify(planned.error));
+  const p = planned.result as PlanResult;
+  assert.ok(p.removals.some((r) => r.key === CONN && r.action === 'delete'), JSON.stringify(p.removals));
+  h.integratorDown.add('test');
+  const applied = await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: p.needsAttention.map((n) => n.id), confirm: 'test' });
+  assert.equal(applied.status, 'succeeded', JSON.stringify(applied.error));
+  const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${applied.result.runId}.json`), 'utf8'));
+  const o = run.items.find((i: { key: string }) => i.key === CONN);
+  assert.equal(o?.status, 'skipped');
+  assert.equal(o?.message, "Not removed: Test's connections couldn't be checked.");
+  assert.equal(h.calls.some((c) => c.env === 'test' && c.api === 'integrator' && c.method === 'DELETE'), false);
+});

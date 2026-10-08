@@ -81,7 +81,11 @@ Core and Task API calls use the username and password (Basic auth) on both.
 When the version cannot be read, the implicit grant is tried first and the
 7.x sign-in after it on a 404. A 7.x space that signs people in only with
 single sign-on (OpenID Connect or SAML) cannot be used: the tool needs a
-local account with a password, and says so.
+local account with a password, and says so. A 403 from the 7.x sign-in page
+is reported as a refusal (check the username and password, or the space's
+sign-in settings). A sign-in step answering 5xx or 429, or not answering, is
+tried up to 3 times (waiting as `Retry-After` says, at most 10 seconds) before
+the run fails with `The Integrator sign-in failed (<status>) after 3 attempts`.
 
 Promoting between environments on different major versions is allowed;
 Compare and Plan show a warning in their header (`Dev runs 6.1.7 and Prod

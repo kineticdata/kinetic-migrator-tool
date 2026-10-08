@@ -628,7 +628,11 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
         onEvent({ type: 'item', key: reviewed.key, status: 'skipped', message: `Already gone from ${To}.` });
       } else if (now !== 'delete') {
         skipped.push(reviewed.key);
-        onEvent({ type: 'item', key: reviewed.key, status: 'skipped', message: `Changed in ${To} since you reviewed it — not removed.` });
+        // Left out of the apply's plan (connections couldn't be read) is not "changed".
+        const unchecked = now === undefined && isOmittedKey(reviewed.key.split('#')[0], new Set(applyPlan.omitted ?? []), (x) => moduleFor(x)?.type);
+        onEvent({ type: 'item', key: reviewed.key, status: 'skipped', message: unchecked
+          ? `Not removed: ${To}'s connections couldn't be checked.`
+          : `Changed in ${To} since you reviewed it — not removed.` });
       }
     }
   };
