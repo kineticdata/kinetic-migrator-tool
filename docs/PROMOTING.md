@@ -437,8 +437,10 @@ routines, kapps, forms, webapis, workflows and data.
 
 Routines are exported with their inputs and outputs (the Task API returns
 them only when asked: `include=treeJson,details,inputs,outputs`); a snapshot
-taken before this version stores them empty, so take a new snapshot of the
-source before promoting routines.
+taken before this version stores them empty. An empty list is never sent
+(a routine's interface also lives in its tree, which is promoted), and it
+is no difference when the tree's own interface matches the target's; take a
+new snapshot of the source to compare the lists themselves.
 
 Global routines are created and updated through the Task API's component
 path (`/app/components/task/app/api/v2/trees`; the `/kinetic-task` path
