@@ -136,3 +136,23 @@ test('an expanded node whose children are loading says so', () => {
   render(<ObjectTree label="Items" rows={rows} selectedKey={null} onSelect={() => {}} onToggle={() => {}} />);
   expect(screen.getByRole('treeitem', { name: /Kapps/ })).toHaveAttribute('aria-busy', 'true');
 });
+
+test('Space continues a type-ahead word instead of selecting', () => {
+  let now = 10_000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const onSelect = vi.fn();
+  render(<Harness onSelect={onSelect} />);
+  const tree = screen.getByRole('tree');
+  tree.focus();
+  for (const key of ['ArrowDown', 'ArrowRight', 'ArrowRight', 'ArrowRight', 'ArrowRight', 'Home']) fireEvent.keyDown(tree, { key });
+  for (const key of 'leave r') {
+    now += 50;
+    fireEvent.keyDown(tree, { key });
+  }
+  expect(active()).toContain('Leave request');
+  expect(onSelect).not.toHaveBeenCalled();
+  // After a pause, Space selects again.
+  now += 2000;
+  fireEvent.keyDown(tree, { key: ' ' });
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ key: 'kapps/hr/forms/leave/form' }));
+});

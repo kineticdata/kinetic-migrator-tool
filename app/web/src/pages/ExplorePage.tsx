@@ -39,6 +39,29 @@ export function sectionOf(key: string): string {
   return groups[head] ?? 'group:other';
 }
 
+// The tree nodes above an item, root first (mirrors the server's tree
+// layout), so an item opened by link can be revealed.
+export function ancestorsOf(key: string): string[] {
+  const p = key.split('/');
+  if (key === 'space') return [];
+  if (p[0] === 'workflows') return ['space', 'group:space/workflows'];
+  if (p[0] === 'webapis') return ['space', 'group:space/webapis'];
+  if (p[0] === 'kapps' && p.length >= 3) {
+    const kapp = ['group:kapps'];
+    if (p[2] === 'kapp') return kapp;
+    kapp.push(`kapps/${p[1]}/kapp`);
+    if (p[2] === 'forms' && p.length >= 5) {
+      const forms = [...kapp, `group:kapps/${p[1]}/forms`];
+      return p[4] === 'form' ? forms : [...forms, `kapps/${p[1]}/forms/${p[3]}/form`];
+    }
+    if (p[2] === 'workflows' || p[2] === 'webapis') return [...kapp, `group:kapps/${p[1]}/${p[2]}`];
+  }
+  if (p[0] === 'connections' && p.length >= 3) {
+    return p[2] === 'operations' ? ['group:connections', `connections/${p[1]}/connection`] : ['group:connections'];
+  }
+  return [sectionOf(key)];
+}
+
 // Where a search result lives, in a few words.
 function whereOf(r: SearchResult): string {
   if (r.match === 'field' && r.field) return `field ${r.field}`;
@@ -165,6 +188,13 @@ function TreePanel({ projectId, env, commit, selectedKey, onSelect }: {
     else next.delete(id);
     return next;
   });
+  // Reveal the selected item: open every node above it.
+  useEffect(() => {
+    if (!selectedKey) return;
+    const above = ancestorsOf(selectedKey);
+    setExpanded((s) => (above.every((id) => s.has(id)) ? s : new Set([...s, ...above])));
+  }, [selectedKey]);
+
   const select = (node: TreeNode) => node.key && onSelect(node.key);
   const changeFilter = (value: string) => {
     setFilter(value);
@@ -175,8 +205,9 @@ function TreePanel({ projectId, env, commit, selectedKey, onSelect }: {
   if (root.isPending) body = <LoadingState label="Loading items…" />;
   else if (root.isError) body = <ErrorState title="Could not load the items" error={root.error} onRetry={() => root.refetch()} />;
   else if (searching) {
-    if (search.isPending || query !== text.trim()) body = <LoadingState label="Searching…" />;
-    else if (search.isError) body = <ErrorState title="Search failed" error={search.error} onRetry={() => search.refetch()} />;
+    // Earlier results stay up while the next query settles.
+    if (!search.data && search.isError) body = <ErrorState title="Search failed" error={search.error} onRetry={() => search.refetch()} />;
+    else if (!search.data) body = <LoadingState label="Searching…" />;
     else if (!results.length) body = <EmptyState icon={<SearchX size={20} />} title="No matches" description="Try part of a name, a slug or a field name." className="py-10" />;
     else {
       body = (
@@ -208,7 +239,7 @@ function TreePanel({ projectId, env, commit, selectedKey, onSelect }: {
           />
           {text && (
             <span className="absolute top-1/2 right-1 -translate-y-1/2">
-              {search.isFetching ? <span className="flex size-8 items-center justify-center text-subtle"><Spinner size={14} /></span> : <IconButton label="Clear search" icon={<X size={14} aria-hidden />} onClick={() => setText('')} />}
+              {search.isFetching || query !== text.trim() ? <span className="flex size-8 items-center justify-center text-subtle"><Spinner size={14} /></span> : <IconButton label="Clear search" icon={<X size={14} aria-hidden />} onClick={() => setText('')} />}
             </span>
           )}
         </div>
@@ -245,7 +276,7 @@ function ItemPanel({ projectId, env, commit, itemKey, onOpen }: { projectId: str
     const gone = item.error instanceof ApiError && item.error.status === 404;
     return <ErrorState title={gone ? 'Not in this snapshot' : 'Could not load the item'} error={item.error} onRetry={gone ? undefined : () => item.refetch()} />;
   }
-  return <DetailPane item={item.data} events={history} onOpen={onOpen} />;
+  return <DetailPane key={item.data.key} item={item.data} events={history} onOpen={onOpen} />;
 }
 
 export function ExplorePage() {
@@ -270,10 +301,10 @@ export function ExplorePage() {
   const commit = env.lastSnapshot?.commit;
 
   return (
-    <div className="flex flex-col lg:h-[calc(100vh-93px)] lg:min-h-[520px]">
-      <SnapshotBar projectId={project.id} env={env} />
+    <div className="flex flex-col lg:h-full lg:min-h-[520px]">
+      <SnapshotBar key={env.name} projectId={project.id} env={env} />
       {commit ? (
-        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(300px,380px)_1fr]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(300px,380px)_1fr] lg:grid-rows-[minmax(0,1fr)]">
           <TreePanel key={env.name} projectId={project.id} env={env.name} commit={commit} selectedKey={itemKey} onSelect={open} />
           <div className="min-h-0 overflow-hidden">
             <ItemPanel projectId={project.id} env={env.name} commit={commit} itemKey={itemKey} onOpen={open} />

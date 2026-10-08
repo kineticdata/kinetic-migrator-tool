@@ -107,10 +107,15 @@ export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, rende
     virtualizer.scrollToIndex(indexById.get(row.node.id)!, { align: 'auto' });
   };
 
-  // Keep the selected item in view when it changes from outside.
+  // Bring a newly selected item into view (and make it the active row) once
+  // its row exists: it may appear only after its ancestors have loaded.
+  const revealed = useRef<string | null>(null);
   useEffect(() => {
-    if (selectedIndex >= 0) virtualizer.scrollToIndex(selectedIndex, { align: 'auto' });
-  }, [selectedKey]);
+    if (!selectedKey || selectedIndex < 0 || revealed.current === selectedKey) return;
+    revealed.current = selectedKey;
+    setActiveId(rows[selectedIndex].node.id);
+    virtualizer.scrollToIndex(selectedIndex, { align: 'auto' });
+  }, [selectedKey, selectedIndex, rows, virtualizer]);
 
   // Enter/Space: select an item, toggle a group.
   const activate = (row: TreeRow) => {
@@ -125,9 +130,32 @@ export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, rende
     if (row.node.key && row.node.hasChildren && !row.expanded) onToggle(row.node.id, true);
   };
 
+  // Jumps to the next row whose label starts with what was typed.
+  const typeAhead = (ch: string) => {
+    const now = Date.now();
+    const t = typed.current;
+    t.text = now - t.at > TYPE_AHEAD_MS ? ch.toLowerCase() : t.text + ch.toLowerCase();
+    t.at = now;
+    // Search after the active row for a new word, from it while extending one.
+    const start = t.text.length === 1 ? activeIndex + 1 : activeIndex;
+    for (let i = 0; i < rows.length; i++) {
+      const idx = (start + i) % rows.length;
+      if (rows[idx].node.label.toLowerCase().startsWith(t.text)) {
+        moveTo(idx);
+        return;
+      }
+    }
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (!activeRow) return;
     const { node } = activeRow;
+    // Once a word is being typed, Space is part of it.
+    if (e.key === ' ' && typed.current.text && Date.now() - typed.current.at <= TYPE_AHEAD_MS) {
+      typeAhead(' ');
+      e.preventDefault();
+      return;
+    }
     switch (e.key) {
       case 'ArrowDown': moveTo(activeIndex + 1); break;
       case 'ArrowUp': moveTo(activeIndex - 1); break;
@@ -145,23 +173,10 @@ export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, rende
       case ' ':
         activate(activeRow);
         break;
-      default: {
+      default:
         if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
-        const now = Date.now();
-        const t = typed.current;
-        t.text = now - t.at > TYPE_AHEAD_MS ? e.key.toLowerCase() : t.text + e.key.toLowerCase();
-        t.at = now;
-        // Search after the active row for a new word, from it while extending one.
-        const start = t.text.length === 1 ? activeIndex + 1 : activeIndex;
-        for (let i = 0; i < rows.length; i++) {
-          const idx = (start + i) % rows.length;
-          if (rows[idx].node.label.toLowerCase().startsWith(t.text)) {
-            moveTo(idx);
-            break;
-          }
-        }
+        typeAhead(e.key);
         break;
-      }
     }
     e.preventDefault();
   };

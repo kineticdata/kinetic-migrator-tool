@@ -30,8 +30,8 @@ export function AppFrame({ project, activeEnv, drift, children }: AppFrameProps)
     { to: `${base}/settings/environments${q}`, label: 'Settings', match: `${base}/settings` },
   ];
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-30 border-b border-border bg-surface/90 backdrop-blur">
+    <div className="flex h-screen flex-col">
+      <header className="z-30 shrink-0 border-b border-border bg-surface/90 backdrop-blur">
         <div className="flex h-14 items-center gap-4 px-6">
           <BrandMark />
           <span aria-hidden className="text-border-strong">/</span>
@@ -63,7 +63,7 @@ export function AppFrame({ project, activeEnv, drift, children }: AppFrameProps)
           })}
         </nav>
       </header>
-      <main className="flex-1">{children}</main>
+      <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
     </div>
   );
 }

@@ -227,3 +227,72 @@ test('an environment without a snapshot offers to take one', async () => {
   expect(await screen.findByText('No snapshot of Prod yet')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Take snapshot' })).toBeInTheDocument();
 });
+
+test('switching environment during a snapshot shows that environment’s own state', async () => {
+  // The job keeps running: progress arrives over SSE and no end follows.
+  const user = userEvent.setup();
+  const running = { id: 'snap1', kind: 'snapshot', status: 'running', createdAt: 'x' };
+  mockApi({
+    'GET /api/projects/:p': project(),
+    'GET /api/projects/:p/history': [],
+    'GET /api/projects/:p/explore/:env/tree': (call: { search: string }) => TREE[new URLSearchParams(call.search).get('parent') ?? ''] ?? [],
+    'POST /api/projects/:p/snapshots': { status: 202, json: { jobId: 'snap1' } },
+    'GET /api/jobs/snap1/events': { sse: sse([{ type: 'progress', data: { type: 'progress', phase: 'export', done: 1, total: 4 } }], null) },
+    'GET /api/jobs/snap1': running,
+  });
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/explore/dev' });
+  await screen.findByRole('tree', { name: 'Items in Dev' });
+  await user.click(screen.getByRole('button', { name: 'Refresh snapshot' }));
+  // Live progress from the SSE events.
+  expect(await screen.findByText('1 of 4')).toBeInTheDocument();
+  expect(screen.getByRole('progressbar', { name: 'Snapshot of Dev' })).toHaveAttribute('aria-valuenow', '25');
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+
+  await user.click(within(screen.getByRole('navigation', { name: 'Environments' })).getByRole('link', { name: /Test/ }));
+  expect(await screen.findByRole('heading', { name: 'Explore Test' })).toBeInTheDocument();
+  expect(screen.queryByRole('progressbar')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Refresh snapshot' })).toBeInTheDocument();
+});
+
+test('a child list that fails to load says "Could not load"', async () => {
+  setup();
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/explore/dev' });
+  const tree = await screen.findByRole('tree', { name: 'Items in Dev' });
+  await user.click(within(tree).getByText('Connections'));
+  await user.click(await within(tree).findByText('Tickets'));
+  expect(await within(tree).findByText('Could not load')).toBeInTheDocument();
+});
+
+test('a stale ?item= says it is not in this snapshot', async () => {
+  setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/explore/dev?item=kapps%2Fgone%2Fkapp' });
+  expect(await screen.findByText('Not in this snapshot')).toBeInTheDocument();
+  expect(screen.getByText('No such item in this snapshot.')).toBeInTheDocument();
+});
+
+test('an item opened by link is revealed in the tree', async () => {
+  setup();
+  renderWithApp(<AppRoutes />, { route: `/p/acme-demo/explore/dev?item=${encodeURIComponent(FORM.key)}` });
+  const tree = await screen.findByRole('tree', { name: 'Items in Dev' });
+  const row = await within(tree).findByRole('treeitem', { name: /Leave request/ });
+  expect(row).toHaveAttribute('aria-selected', 'true');
+  expect(row).toHaveAttribute('aria-level', '4');
+  expect(tree.getAttribute('aria-activedescendant')).toBe(row.id);
+});
+
+test('previous search results stay visible while typing more', async () => {
+  setup();
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/explore/dev' });
+  await screen.findByRole('tree', { name: 'Items in Dev' });
+  const box = screen.getByRole('searchbox', { name: 'Search items' });
+  await user.type(box, 'start');
+  const results = await screen.findByRole('tree', { name: 'Search results' });
+  expect(await within(results).findByText('Leave request')).toBeInTheDocument();
+  await user.type(box, 'x');
+  expect(screen.queryByText('Searching…')).toBeNull();
+  expect(within(screen.getByRole('tree', { name: 'Search results' })).getByText('Leave request')).toBeInTheDocument();
+  expect(await screen.findByText('No matches')).toBeInTheDocument();
+});
