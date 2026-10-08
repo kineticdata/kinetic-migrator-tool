@@ -245,6 +245,11 @@ export interface EnvironmentValue {
   origin: 'override' | 'environment' | 'attribute' | 'setting';
   // Missing in the target with no override: a value must be given.
   required: boolean;
+  // A kept space setting the target has no value for: the source's value,
+  // offered for the user to take on purpose (never applied by itself).
+  suggested?: unknown;
+  // Linked settings offered together (e.g. "displayType+displayValue").
+  pair?: string;
 }
 
 export interface SecretNeeded {

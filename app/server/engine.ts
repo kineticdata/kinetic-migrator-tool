@@ -69,5 +69,8 @@ export const stableStringify: (value: unknown) => string = normalizeModule.stabl
 export const GITATTRIBUTES: string = commandsModule.GITATTRIBUTES;
 export const envBoundAttributesError: (value: unknown) => string | null = envBoundModule.envBoundAttributesError;
 export const envBoundSpaceFieldsError: (value: unknown) => string | null = envBoundModule.envBoundSpaceFieldsError;
+export const canonicalSpaceFields: (list: string[]) => string[] = envBoundModule.canonicalSpaceFields;
+// The linked pair a space setting belongs to (displayType+displayValue, allowedIps+allowedIpsEnabled), or null.
+export const spaceFieldPair: (field: string) => string[] | null = envBoundModule.pairOf;
 export const envBoundNamesFor: (eba: EnvBoundAttributes, scope: string | null, key: string, data?: unknown) => Set<string> = envBoundModule.envBoundNamesFor;
 export const dataConfigError: (entries: unknown) => string | null = dataModule.dataConfigError;

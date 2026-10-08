@@ -109,8 +109,9 @@ export const buildRelationships: (artifacts: Array<{ key: string; data: unknown 
 export const suggest: (opts: { selected: Set<string>; relationships: Relationships; changedKeys: Set<string> }) => Suggestion[] = relationshipsModule.suggest;
 export const summarize: (key: string, data: unknown, type: string, extra?: Record<string, unknown>) => Summary = summariesModule.summarize;
 export const compareText: (a: string, b: string) => number = normalizeModule.compareText;
-export const hashOf: (value: unknown) => string = normalizeModule.hashOf;
-export const withoutEnvBound: (scope: string | null, data: unknown, eba?: EnvBoundAttributes, key?: string, spaceFields?: string[]) => unknown = normalizeModule.withoutEnvBound;
+// No hashOf/withoutEnvBound here on purpose: compare a target with its
+// state/<env>.json entry through driftedFrom (the space's entry records the
+// field set it was hashed with), never by hashing directly.
 export const ENV_BOUND_FIELDS: Record<string, string[]> = normalizeModule.ENV_BOUND_FIELDS;
 // The fixed environment-bound fields of a scope plus, for the space, the chosen settings.
 export const envBoundFields: (scope: string | null, spaceFields?: string[]) => string[] = normalizeModule.envBoundFields;

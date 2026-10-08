@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, wri
 import path from 'node:path';
 import type { ProjectConfig, ProjectDetail, ProjectSummary } from '../shared/api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
-import { createClient, dataConfigError, envBoundAttributesError, envBoundSpaceFieldsError, loadConfig, runInit, stableStringify, type ClientFactory } from './engine.ts';
+import { canonicalSpaceFields, createClient, dataConfigError, envBoundAttributesError, envBoundSpaceFieldsError, loadConfig, runInit, stableStringify, type ClientFactory } from './engine.ts';
 import { isReservedDeviceName } from './engine-sync.ts';
 import {
   checkEnvName, credentialsStatus, deleteEnvironment, environmentExists, pipelineOrder, putEnvironment, putOverrides,
@@ -238,7 +238,7 @@ function validateConfig(body: unknown): Partial<ProjectConfig> {
   if ('envBoundSpaceFields' in body) {
     const problem = envBoundSpaceFieldsError(body.envBoundSpaceFields);
     if (problem) throw badRequest(problem);
-    out.envBoundSpaceFields = [...new Set(body.envBoundSpaceFields as string[])];
+    out.envBoundSpaceFields = canonicalSpaceFields(body.envBoundSpaceFields as string[]);
   }
   return out;
 }

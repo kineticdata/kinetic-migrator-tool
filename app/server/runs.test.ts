@@ -315,33 +315,45 @@ test('environment values follow scoped attribute rules: only the matching form a
   assert.equal(labels.includes('Owner'), false);
 });
 
-test('environment values offer the kept space settings the target has no value for, and honour overrides and the configured list', async (t) => {
+test('environment values offer (never apply) the source value of a kept space setting the target has none for, pairs whole, and honour overrides and the list', async (t) => {
   const h = await harness(t);
   const withSpace = (original: () => Record<string, unknown>, extra: Record<string, unknown>) => () => {
     const routes = original();
     const space = (routes['GET core/space'] as { space: Record<string, unknown> }).space;
     return { ...routes, 'GET core/space': { space: { ...space, ...extra } } };
   };
-  h.spaces.dev = withSpace(h.spaces.dev, { displayValue: 'https://dev.example.com/app', defaultLocale: 'fr' });
-  h.spaces.test = withSpace(h.spaces.test, { displayValue: null, defaultLocale: 'en' });
+  h.spaces.dev = withSpace(h.spaces.dev, {
+    displayType: 'Custom', displayValue: 'https://dev.example.com/app', defaultLocale: 'fr', trustedFrameDomains: ['localhost:3000'], allowedIps: '10.0.0.0/8', allowedIpsEnabled: true, bundlePath: 'dev-bundle',
+  });
+  h.spaces.test = withSpace(h.spaces.test, { displayValue: null, defaultLocale: 'en', trustedFrameDomains: ['test.example.com'], allowedIpsEnabled: false, bundlePath: '' });
   for (const env of ['dev', 'test']) assert.equal((await h.job('POST', `${P}/snapshots`, { env })).status, 'succeeded');
-  const spaceValues = async () => (await plan(h, { to: 'test', from: 'dev', selected: ['space'] })).environmentValues
-    .filter((v) => v.key === 'space').map((v) => [v.label, v.origin, v.from, v.to, v.required]);
+  const result = async () => plan(h, { to: 'test', from: 'dev', selected: ['space'] });
+  const rows = (p: PlanResult) => p.environmentValues.filter((v) => v.key === 'space' && !['name', 'slug', 'bundlePath'].includes(v.label))
+    .map((v) => [v.label, v.origin, v.from, v.to, v.suggested, v.pair]);
 
-  // Defaults: displayValue is kept per environment and empty in Test, so it starts from Dev's value, offered to change.
-  // displayType is the same on both sides; defaultLocale is promoted.
-  assert.deepEqual((await spaceValues()).filter(([label]) => label !== 'name' && label !== 'slug'), [
-    ['displayValue', 'environment', 'https://dev.example.com/app', 'https://dev.example.com/app', false],
+  const first = await result();
+  assert.deepEqual(rows(first), [
+    // The display pair: Test has a type but no value, so the pair is offered whole.
+    ['displayType', 'environment', 'Custom', 'Display Page', 'Custom', 'displayType+displayValue'],
+    ['displayValue', 'environment', 'https://dev.example.com/app', null, 'https://dev.example.com/app', 'displayType+displayValue'],
+    // Test has its own list: kept, nothing offered.
+    ['trustedFrameDomains', 'environment', ['localhost:3000'], ['test.example.com'], undefined, undefined],
+    ['allowedIps', 'environment', '10.0.0.0/8', null, '10.0.0.0/8', 'allowedIps+allowedIpsEnabled'],
+    ['allowedIpsEnabled', 'environment', true, false, true, 'allowedIps+allowedIpsEnabled'],
   ]);
+  // Nothing is copied unless chosen: the plan keeps Test's values.
+  assert.deepEqual(first.items.find((i) => i.key === 'space')!.diff.map((d) => d.path), ['defaultLocale']);
+  // Fixed fields (an empty bundlePath here) are kept as always, with nothing offered.
+  const bundle = first.environmentValues.find((v) => v.label === 'bundlePath')!;
+  assert.deepEqual([bundle.to, 'suggested' in bundle], ['', false]);
+
   // An override is listed as such, once.
   assert.equal((await h.call('PUT', `${P}/overrides/test`, { artifacts: { space: { displayValue: 'https://cdn.example.com/test' } }, replace: [] })).status, 200);
-  assert.deepEqual((await spaceValues()).filter(([label]) => label === 'displayValue'), [
-    ['displayValue', 'override', 'https://dev.example.com/app', 'https://cdn.example.com/test', false],
-  ]);
+  assert.deepEqual((await result()).environmentValues.filter((v) => v.label === 'displayValue').map((v) => [v.origin, v.to]), [['override', 'https://cdn.example.com/test']]);
   assert.equal((await h.call('PUT', `${P}/overrides/test`, { artifacts: {}, replace: [] })).status, 200);
-  // Unticked: promoted like any other setting, no longer an environment value.
+  // Unticked: promoted like any other setting, no longer offered.
   assert.equal((await h.call('PUT', `${P}/config`, { envBoundSpaceFields: ['defaultLocale'] })).status, 200);
-  const unticked = await spaceValues();
-  assert.equal(unticked.some(([label]) => label === 'displayValue'), false);
-  assert.deepEqual(unticked.find(([label]) => label === 'defaultLocale'), ['defaultLocale', 'environment', 'fr', 'en', false]);
+  const unticked = await result();
+  assert.equal(unticked.environmentValues.some((v) => v.label === 'displayValue'), false);
+  assert.deepEqual(rows(unticked).find(([label]) => label === 'defaultLocale'), ['defaultLocale', 'environment', 'fr', 'en', undefined, undefined]);
 });

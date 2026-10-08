@@ -20,7 +20,7 @@ import type {
   RunItemOutcome, RunRecord, RunStatus, SecretNeeded,
 } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound, toApiError } from './errors.ts';
-import { envBoundNamesFor, envKey, loadConfig, loadOverrides, stableStringify, type EngineEnv } from './engine.ts';
+import { envBoundNamesFor, envKey, loadConfig, spaceFieldPair, loadOverrides, stableStringify, type EngineEnv } from './engine.ts';
 import {
   computePlan, envBoundFields, isEmptyValue, isSecretName, isSecretProperty, parsePath, readTree, runApply, segmentLabel, stamp, type EnginePlan, type PlanItem,
 } from './engine-sync.ts';
@@ -122,10 +122,17 @@ function environmentValues(projectDir: string, to: string, items: PlanItem[], ex
       if (f in own) continue;
       const from = obj(exp)[f];
       const to = obj(i.desired)[f];
-      // A chosen space setting the target has no value for (a space not set
-      // up yet) starts from the source value: offered to fill instead.
-      const unset = chosen.has(f) && Boolean(i.existing) && isEmptyValue(obj(i.existing?.data)[f]) && !isEmptyValue(from);
-      if (unset || !same(from, to)) push({ key: i.key, path: escapeSeg(f), label: f, from: from ?? null, to: to ?? null, origin: 'environment', required: false });
+      if (same(from, to)) continue;
+      // A kept space setting is never copied. When the target has no value
+      // (for a pair: either half) and the source has one, the source value is
+      // offered for the user to take on purpose; a pair is offered whole.
+      const pair = chosen.has(f) ? spaceFieldPair(f) : null;
+      const members = pair ?? [f];
+      const unset = chosen.has(f) && members.some((m) => isEmptyValue(obj(i.desired)[m])) && members.some((m) => !isEmptyValue(obj(exp)[m]));
+      push({
+        key: i.key, path: escapeSeg(f), label: f, from: from ?? null, to: to ?? null, origin: 'environment', required: false,
+        ...(unset ? { suggested: from ?? null } : {}), ...(unset && pair ? { pair: pair.join('+') } : {}),
+      });
     }
     for (const name of envBoundNamesFor(eba, i.scope, i.key, i.desired)) {
       const p = `attributes.${escapeSeg(name)}`;
