@@ -8,7 +8,7 @@ import type { CompareItem, CompareResult, CompareTreeNode, SuggestionOut } from 
 import { AppRoutes } from '../routes';
 import { mockApi, sse, type MockCall } from '../test/mock-api';
 import { currentLocation, renderWithApp } from '../test/render';
-import { project } from '../test/fixtures';
+import { historyEvent, project } from '../test/fixtures';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
@@ -41,6 +41,7 @@ function tree(withLeave: boolean): Record<string, CompareTreeNode[]> {
     '': [
       group('group:kapps', 'Kapps', formCounts),
       group('group:connections', 'Connections', { new: 1 }),
+      group('group:handlers', 'Handlers', { drifted: 1 }),
       group('group:teams', 'Teams', { 'only-target': 1 }),
       group('group:models', 'Models', { same: 1 }),
     ],
@@ -54,6 +55,7 @@ function tree(withLeave: boolean): Record<string, CompareTreeNode[]> {
     ],
     'group:connections': [n('connections/tickets/connection', 'Tickets', { kind: 'connection', status: 'same', hasChildren: true, counts: { new: 1 } })],
     'connections/tickets/connection': [n(CREATE_OP, 'Create ticket', { kind: 'operation', status: 'new' })],
+    'group:handlers': [n('handlers/mail/handler', 'Mail', { kind: 'handler', status: 'drifted' })],
     'group:teams': [n('teams/ops', 'Operations', { kind: 'team', status: 'only-target' })],
     'group:models': [n('models/people', 'People', { kind: 'model', status: 'same' })],
   };
@@ -66,12 +68,14 @@ const result = (compareId: string, withLeave = true): CompareResult => ({
 
 const ITEMS: Record<string, CompareItem> = {
   [TRAVEL]: {
-    key: TRAVEL, type: 'form', label: 'Travel request', status: 'changed', diff: [],
+    key: TRAVEL, type: 'form', label: 'Travel request', status: 'changed',
+    diff: [{ path: 'pages[Details].elements[Priority].required', from: false, to: true }],
     current: { name: 'Travel request', pages: [{ name: 'Details', elements: [{ name: 'Priority', required: false }] }] },
     incoming: { name: 'Travel request', pages: [{ name: 'Details', elements: [{ name: 'Priority', required: true }] }] },
   },
   [APPROVAL]: {
-    key: APPROVAL, type: 'form', label: 'Approval', status: 'drifted', diff: [],
+    key: APPROVAL, type: 'form', label: 'Approval', status: 'drifted',
+    diff: [{ path: 'description', from: 'edited in test', to: 'v1' }, { path: 'status', from: undefined, to: 'Inactive' }],
     current: { name: 'Approval', description: 'edited in test' },
     incoming: { name: 'Approval', description: 'v1', status: 'Inactive' },
     threeWay: {
@@ -87,19 +91,27 @@ const SUGGESTION: SuggestionOut = {
   reason: 'Travel request calls operation "Create ticket" on connection "Tickets", which is new in Dev',
 };
 
-function setup() {
+function setup(opts: { expireC1?: boolean } = {}) {
   let runs = 0;
   const m = mockApi({
     'GET /api/projects/:p': project(),
-    'GET /api/projects/:p/history': [],
+    'GET /api/projects/:p/history': [historyEvent({ commit: 'abc1234def', type: 'backup', env: 'test', at: '2026-10-08T09:30:00Z' })],
+    'POST /api/projects/:p/restore': { status: 202, json: { jobId: 'rst1' } },
     'POST /api/projects/:p/compare': () => ({ status: 202, json: { jobId: `cmp${++runs}` } }),
     'GET /api/jobs/:id/events': { sse: sse([{ type: 'progress', data: { type: 'progress', phase: 'compare', done: 1, total: 2 } }]) },
     'GET /api/jobs/:id': (_c: MockCall, { id }: Record<string, string>) => {
       if (id === 'plan1') return { id, kind: 'plan', status: 'succeeded', createdAt: 'x', result: { planId: 'pl1' } };
+      if (id === 'rst1') {
+        return {
+          id, kind: 'compare', status: 'succeeded', createdAt: 'x',
+          result: { ...result('c1'), from: 'test', fromName: 'the backup of 2026-10-08 09:30', sourceCommit: 'abc1234def', preselected: [TRAVEL, APPROVAL] },
+        };
+      }
       return { id, kind: 'compare', status: 'succeeded', createdAt: 'x', result: id === 'cmp1' ? result('c1') : result('c2', false) };
     },
     'GET /api/projects/:p/compare/:id/tree': (call: MockCall, { id }: Record<string, string>) => {
       const parent = new URLSearchParams(call.search).get('parent') ?? '';
+      if (opts.expireC1 && id === 'c1' && parent) return { status: 404, json: { error: { code: 'not_found', message: 'This comparison has expired; run it again.' } } };
       return tree(id === 'c1')[parent] ?? { status: 404, json: { error: { code: 'not_found', message: 'No such tree node.' } } };
     },
     'GET /api/projects/:p/compare/:id/item': (call: MockCall) => ITEMS[new URLSearchParams(call.search).get('key') ?? ''] ?? { status: 404, json: { error: { code: 'not_found', message: 'No such item.' } } },
@@ -263,4 +275,103 @@ test('Save as changeset names the selection and pins it to the compared snapshot
   });
   const tray = screen.getByRole('complementary', { name: /Changeset/ });
   expect(await within(tray).findByRole('link', { name: 'Q4 forms' })).toHaveAttribute('href', '/p/acme-demo/changesets/q4-abc123');
+});
+
+test('Clear empties the tray and its suggestions', async () => {
+  setup();
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare' });
+  await openForms(user);
+  await tick(user, 'Travel request');
+  const tray = screen.getByRole('complementary', { name: /Changeset/ });
+  expect(await within(tray).findByText(/which is new in Dev/)).toBeInTheDocument();
+  await user.click(within(tray).getByRole('button', { name: 'Clear' }));
+  expect(within(tray).getByText('Nothing selected yet')).toBeInTheDocument();
+  expect(within(tray).queryByText(/which is new in Dev/)).toBeNull();
+  expect(screen.queryByRole('region', { name: /Suggested/ })).toBeNull();
+});
+
+test('a parent with only drifted items below has a disabled checkbox', async () => {
+  setup();
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare' });
+  await screen.findByRole('tree', { name: /Differences/ });
+  const handlers = row('Handlers');
+  expect(handlers).toHaveAttribute('aria-checked', 'false');
+  expect(handlers).toHaveAttribute('aria-description', expect.stringMatching(/review each one/));
+  await tick(user, 'Handlers');
+  expect(row('Handlers')).toHaveAttribute('aria-checked', 'false');
+  expect(within(screen.getByRole('complementary', { name: /Changeset/ })).getByText('Nothing selected yet')).toBeInTheDocument();
+});
+
+test('ticking a parent whose children are not loaded yet loads them and selects new and changed items', async () => {
+  setup();
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare' });
+  await screen.findByRole('tree', { name: /Differences/ });
+  await tick(user, 'Kapps');
+  const tray = screen.getByRole('complementary', { name: /Changeset/ });
+  expect(await within(tray).findByText('Leave request')).toBeInTheDocument();
+  expect(within(tray).getByText('Travel request')).toBeInTheDocument();
+  expect(within(tray).queryByText('Approval')).toBeNull();
+  expect(await screen.findByText('Added 2 items to the changeset')).toBeInTheDocument();
+  expect(row('Kapps')).toHaveAttribute('aria-checked', 'true');
+});
+
+test('a parent tick honours the status filter', async () => {
+  setup();
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare' });
+  await screen.findByRole('tree', { name: /Differences/ });
+  await user.click(within(screen.getByRole('group', { name: 'Differences by status' })).getByRole('button', { name: /1 changed/ }));
+  await tick(user, 'Kapps');
+  const tray = screen.getByRole('complementary', { name: /Changeset/ });
+  expect(await within(tray).findByText('Travel request')).toBeInTheDocument();
+  expect(within(tray).queryByText('Leave request')).toBeNull();
+});
+
+test('an expired comparison runs again by itself', async () => {
+  const m = setup({ expireC1: true });
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare' });
+  const t = await screen.findByRole('tree', { name: /Differences/ });
+  await user.click(within(t).getByText('Kapps'));
+  await waitFor(() => expect(m.callsTo('POST', '/api/projects/acme-demo/compare')).toHaveLength(2));
+  await openForms(user).catch(() => undefined);
+  expect(await screen.findByText('Travel request')).toBeInTheDocument();
+});
+
+test('the mode is a radio group moved with the arrow keys', async () => {
+  const m = setup();
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare' });
+  await screen.findByRole('tree', { name: /Differences/ });
+  const preview = screen.getByRole('radio', { name: 'Preview' });
+  expect(preview).toHaveAttribute('tabindex', '0');
+  expect(screen.getByRole('radio', { name: 'Raw' })).toHaveAttribute('tabindex', '-1');
+  preview.focus();
+  await user.keyboard('{ArrowRight}');
+  expect(screen.getByRole('radio', { name: 'Raw' })).toHaveAttribute('aria-checked', 'true');
+  expect(screen.getByRole('radio', { name: 'Raw' })).toHaveFocus();
+  await waitFor(() => expect(m.callsTo('POST', '/api/projects/acme-demo/compare').at(-1)!.body).toEqual({ from: 'dev', to: 'test', mode: 'raw' }));
+});
+
+test('restore: the backup as From, the live environment as To, touched items preselected by their real status', async () => {
+  const m = setup();
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare?restore=abc1234def&to=test' });
+  await screen.findByRole('tree', { name: /Differences/ });
+  expect(m.callsTo('POST', '/api/projects/acme-demo/restore')[0].body).toEqual({ commit: 'abc1234def', mode: 'preview' });
+  expect(m.callsTo('POST', '/api/projects/acme-demo/compare')).toHaveLength(0);
+  expect(screen.getByTestId('restore-from')).toHaveTextContent(/^Backup of Test \(Oct 8, 2026/);
+  const tray = screen.getByRole('complementary', { name: /Changeset/ });
+  expect(await within(tray).findByText('Travel request')).toBeInTheDocument();
+  // Approval is drifted: it waits for a decision.
+  expect(within(tray).queryByText('Approval')).toBeNull();
+  expect(screen.queryByRole('button', { name: /Save as changeset/ })).toBeNull();
+  await user.click(screen.getByRole('button', { name: /Review plan/ }));
+  await waitFor(() => expect(currentLocation()).toBe('/p/acme-demo/plan/pl1'));
+  expect(m.callsTo('POST', '/api/projects/acme-demo/plans')[0].body).toEqual({
+    to: 'test', from: 'test', selected: [TRAVEL], sourceCommit: 'abc1234def', restore: true,
+  });
 });

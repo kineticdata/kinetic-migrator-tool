@@ -3,7 +3,7 @@
 import { expect, test } from 'vitest';
 import type { CompareTreeNode } from '../../../shared/sync-api';
 import {
-  checkStateOf, emptySelection, pruneSelection, selectedKeys, setResolution, toggleItem, toggleNode, underCounts, type Selection,
+  checkStateOf, emptySelection, pruneSelection, selectedKeys, setResolution, tickKind, toggleItem, toggleNode, underCounts, type Selection,
 } from './selection';
 
 const node = (id: string, over: Partial<CompareTreeNode> = {}): CompareTreeNode => ({
@@ -55,12 +55,19 @@ test('a partly selected parent is mixed; ticking it completes it, unticking a fu
   expect(state(FORMS, sel)).toBe('mixed');
 });
 
-test('a parent with only drifted items below ticks them as overwrites', () => {
-  const group = node('group:teams', { key: undefined, kind: 'group', hasChildren: true, count: 1, counts: { drifted: 1 } });
-  const sel = toggleNode(emptySelection(), group, [{ key: 'teams/ops', status: 'drifted' }], 'unchecked');
-  expect(selectedKeys(sel)).toEqual(['teams/ops']);
-  expect(sel.resolutions['teams/ops']).toBe('overwrite');
-  expect(state(group, sel)).toBe('checked');
+test('a parent with only drifted items below cannot tick them: each needs its own decision', () => {
+  const grp = node('group:teams', { key: undefined, kind: 'group', hasChildren: true, count: 1, counts: { drifted: 1 } });
+  expect(tickKind(grp)).toBe('disabled');
+  let sel = toggleNode(emptySelection(), grp, [{ key: 'teams/ops', status: 'drifted' }], 'unchecked');
+  expect(selectedKeys(sel)).toEqual([]);
+  expect(state(grp, sel)).toBe('unchecked');
+  // Ticked one by one, the parent reflects them.
+  sel = toggleItem(sel, 'teams/ops', 'drifted');
+  expect(state(grp, sel)).toBe('checked');
+  // A drifted item with children ticks only itself.
+  const form = node(APPROVAL.key!, { status: 'drifted', hasChildren: true, counts: { same: 2 } });
+  expect(tickKind(form)).toBe('self');
+  expect(selectedKeys(toggleNode(emptySelection(), form, [], 'unchecked'))).toEqual([APPROVAL.key]);
 });
 
 test('Keep target unticks a drifted item; Overwrite ticks it', () => {

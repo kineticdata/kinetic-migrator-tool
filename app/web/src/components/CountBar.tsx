@@ -11,7 +11,7 @@ export const STATUS_ORDER: CompareStatus[] = ['new', 'changed', 'drifted', 'manu
 const meta: Record<CompareStatus, { symbol: string; text: string; on: string }> = {
   new: { symbol: '+', text: 'text-added', on: 'bg-added-soft border-added/40' },
   changed: { symbol: '~', text: 'text-changed', on: 'bg-changed-soft border-changed/40' },
-  drifted: { symbol: '!', text: 'text-drift', on: 'bg-drift-soft border-drift/40' },
+  drifted: { symbol: '⚠', text: 'text-drift', on: 'bg-drift-soft border-drift/40' },
   manual: { symbol: '•', text: 'text-muted', on: 'bg-surface-2 border-border-strong' },
   'only-target': { symbol: '−', text: 'text-removed', on: 'bg-removed-soft border-border-strong' },
   same: { symbol: '=', text: 'text-subtle', on: 'bg-surface-2 border-border-strong' },

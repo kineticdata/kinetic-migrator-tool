@@ -5,11 +5,12 @@
 // Rules:
 // - New and changed items can be ticked, singly or through a parent.
 // - A drifted item is ticked only on purpose (its own checkbox, or Overwrite
-//   in the detail pane), which records an "overwrite" decision. A parent never
-//   ticks drifted items, unless drifted items are all there is below it.
-// - A parent is checked when everything a tick would select is selected,
-//   mixed when only some of it is, and has no checkbox when nothing below it
-//   can be promoted.
+//   in the detail pane), which records an "overwrite" decision. A parent
+//   never ticks drifted items; when drift is all there is below it, its
+//   checkbox is disabled (each drifted item needs its own decision).
+// - A parent is checked when every new and changed item below it is
+//   selected, mixed when only some selection is, and has no checkbox when
+//   nothing below it can be promoted.
 // - After a compare refresh, keys that no longer differ (or that became
 //   drifted with no decision) are pruned.
 import type { CompareStatus, CompareTreeNode, Resolution } from '../../../shared/sync-api';
@@ -62,18 +63,33 @@ export function underCounts(sel: Selection): Map<string, Under> {
 
 const sum = (counts: CompareTreeNode['counts'], set: ReadonlySet<CompareStatus>) => [...set].reduce((n, s) => n + (counts[s] ?? 0), 0);
 
+// What a node's checkbox does: tick the new and changed items it holds
+// ('bulk'), tick the node itself (a drifted item with nothing new or changed
+// below), nothing because only drifted items are below ('disabled'), or there
+// is no checkbox ('none').
+export type TickKind = 'bulk' | 'self' | 'disabled' | 'none';
+
+export function tickKind(node: CompareTreeNode): TickKind {
+  const ownBulk = Boolean(node.key && node.status && BULK.has(node.status));
+  if (sum(node.counts, BULK) + (ownBulk ? 1 : 0) > 0) return 'bulk';
+  if (node.key && node.status === 'drifted') return 'self';
+  if ((node.counts.drifted ?? 0) > 0) return 'disabled';
+  return 'none';
+}
+
 export function checkStateOf(node: CompareTreeNode, sel: Selection, under: Map<string, Under>): CheckState {
-  const own = node.key && isSelectable(node.status) ? node.status! : null;
-  const ownSelected = Boolean(node.key && sel.items[node.key]);
+  const kind = tickKind(node);
+  const ownStatus = node.key ? sel.items[node.key] : undefined;
   const u = under.get(node.id) ?? { all: 0, bulk: 0 };
-  const totalAll = sum(node.counts, SELECTABLE) + (own ? 1 : 0);
-  const totalBulk = sum(node.counts, BULK) + (own && BULK.has(own) ? 1 : 0);
-  if (totalAll === 0) return ownSelected ? 'checked' : 'none';
-  const selAll = u.all + (ownSelected ? 1 : 0);
-  const selBulk = u.bulk + (ownSelected && BULK.has(sel.items[node.key!]) ? 1 : 0);
+  const selAll = u.all + (ownStatus ? 1 : 0);
+  if (kind === 'none') return ownStatus ? 'checked' : 'none';
   if (selAll === 0) return 'unchecked';
-  const full = (totalBulk > 0 ? selBulk >= totalBulk : selAll >= totalAll) && (!own || ownSelected);
-  return full ? 'checked' : 'mixed';
+  if (kind === 'self') return ownStatus ? 'checked' : 'mixed';
+  if (kind === 'disabled') return selAll >= sum(node.counts, SELECTABLE) ? 'checked' : 'mixed';
+  const ownBulk = Boolean(node.key && node.status && BULK.has(node.status));
+  const totalBulk = sum(node.counts, BULK) + (ownBulk ? 1 : 0);
+  const selBulk = u.bulk + (ownStatus && BULK.has(ownStatus) ? 1 : 0);
+  return selBulk >= totalBulk ? 'checked' : 'mixed';
 }
 
 function add(sel: Selection, list: KeyStatus[]): Selection {
@@ -105,16 +121,16 @@ export function toggleItem(sel: Selection, key: string, status: CompareStatus): 
   return sel.items[key] ? removeKeys(sel, [key]) : add(sel, [{ key, status }]);
 }
 
-// A parent's checkbox (or an item with children). `below` lists the
-// selectable items under it; `current` is its state before the click.
+// A parent's checkbox (or an item with children). `below` lists selectable
+// items under it (for an untick, the selected ones); `current` is its state
+// before the click. Drifted items below are never ticked here.
 export function toggleNode(sel: Selection, node: CompareTreeNode, below: KeyStatus[], current: CheckState): Selection {
+  const kind = tickKind(node);
+  if (kind === 'self') return toggleItem(sel, node.key!, node.status!);
+  if (kind !== 'bulk') return sel;
   const own: KeyStatus[] = node.key && isSelectable(node.status) ? [{ key: node.key, status: node.status! }] : [];
   if (current === 'checked') return removeKeys(sel, [...own, ...below].map((i) => i.key));
-  const all = [...own, ...below].filter((i) => isSelectable(i.status));
-  const bulk = all.filter((i) => BULK.has(i.status));
-  // An item's own drifted status was clicked on purpose; drifted children were not.
-  const ownDrifted = own.filter((i) => i.status === 'drifted');
-  return add(sel, bulk.length ? [...bulk, ...ownDrifted] : all);
+  return add(sel, [...own, ...below].filter((i) => BULK.has(i.status)));
 }
 
 // Overwrite ticks a drifted item; Keep target unticks it and records that.

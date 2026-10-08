@@ -83,6 +83,8 @@ export interface ObjectTreeProps {
   // Selection mode: each row's checkbox state ('none' = no checkbox).
   checkState?: (row: TreeRow) => CheckState;
   onCheck?: (row: TreeRow) => void;
+  // Why a row's checkbox is disabled (null when it is enabled).
+  checkHint?: (row: TreeRow) => string | null;
   // Item counts on parent rows (Compare shows rolled-up statuses instead).
   showCounts?: boolean;
   className?: string;
@@ -93,20 +95,22 @@ export type CheckState = 'checked' | 'unchecked' | 'mixed' | 'none';
 const ariaChecked = (s: CheckState) => (s === 'none' ? undefined : s === 'mixed' ? 'mixed' : s === 'checked');
 
 // The visual checkbox; the treeitem itself carries aria-checked.
-function CheckBox({ state, onClick }: { state: CheckState; onClick: () => void }) {
+function CheckBox({ state, hint, onClick }: { state: CheckState; hint: string | null; onClick: () => void }) {
   if (state === 'none') return <span aria-hidden className="size-4 shrink-0" />;
   const on = state !== 'unchecked';
   return (
     <span
       aria-hidden
       data-check
+      title={hint ?? undefined}
       onClick={(e) => {
         e.stopPropagation();
-        onClick();
+        if (!hint) onClick();
       }}
       className={cn(
-        'flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-[4px] border transition-colors',
-        on ? 'border-accent bg-accent text-accent-fg' : 'border-border-strong bg-surface hover:border-accent',
+        'flex size-4 shrink-0 items-center justify-center rounded-[4px] border transition-colors',
+        hint ? 'cursor-not-allowed border-dashed opacity-60' : 'cursor-pointer',
+        on ? 'border-accent bg-accent text-accent-fg' : cn('border-border-strong bg-surface', !hint && 'hover:border-accent'),
       )}
     >
       {state === 'checked' && <Check size={11} strokeWidth={3} />}
@@ -115,7 +119,7 @@ function CheckBox({ state, onClick }: { state: CheckState; onClick: () => void }
   );
 }
 
-export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, renderAside, checkState, onCheck, showCounts = true, className }: ObjectTreeProps) {
+export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, renderAside, checkState, onCheck, checkHint, showCounts = true, className }: ObjectTreeProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const typed = useRef({ text: '', at: 0 });
@@ -205,7 +209,7 @@ export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, rende
         break;
       case ' ':
         if (checkState) {
-          if (checkState(activeRow) !== 'none') onCheck?.(activeRow);
+          if (checkState(activeRow) !== 'none' && !checkHint?.(activeRow)) onCheck?.(activeRow);
           break;
         }
         activate(activeRow);
@@ -240,6 +244,7 @@ export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, rende
           const selected = Boolean(node.key && node.key === selectedKey);
           const isActive = v.index === activeIndex;
           const check = checkState ? checkState(row) : null;
+          const hint = check && check !== 'none' ? checkHint?.(row) ?? null : null;
           return (
             <div
               key={node.id}
@@ -251,6 +256,7 @@ export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, rende
               aria-expanded={node.hasChildren ? row.expanded : undefined}
               aria-selected={selected}
               aria-checked={check ? ariaChecked(check) : undefined}
+              aria-description={hint ?? undefined}
               aria-busy={row.loading || undefined}
               onClick={() => click(row)}
               style={{ position: 'absolute', top: 0, left: 0, right: 0, height: v.size, transform: `translateY(${v.start}px)`, paddingLeft: 8 + row.depth * 16 }}
@@ -272,7 +278,7 @@ export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, rende
               >
                 {row.loading ? <Spinner size={12} /> : node.hasChildren && <ChevronRight size={14} className={cn('transition-transform', row.expanded && 'rotate-90')} />}
               </span>
-              {check && <CheckBox state={check} onClick={() => { setActiveId(node.id); onCheck?.(row); }} />}
+              {check && <CheckBox state={check} hint={hint} onClick={() => { setActiveId(node.id); onCheck?.(row); }} />}
               <KindIcon kind={node.kind} className={selected ? 'text-accent' : 'text-subtle'} />
               <span className={cn('min-w-0 truncate', !node.key && 'font-medium')} title={node.label}>{node.label}</span>
               {row.detail && <span className="min-w-0 truncate text-xs text-subtle">{row.detail}</span>}

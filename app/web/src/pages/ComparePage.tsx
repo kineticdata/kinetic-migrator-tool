@@ -9,16 +9,17 @@
 // and a new snapshot means a new comparison. The selection is kept per
 // From → To pair for the browser session and is pruned to what still differs
 // whenever the comparison changes.
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeftRight, ArrowRight, Camera, ChevronsDownUp, ChevronsUpDown, GitCompare, MousePointerClick, RotateCcw, Search, X,
 } from 'lucide-react';
+import type { JobStarted } from '../../../shared/api';
 import type {
   CompareItem, CompareMode, CompareResult, CompareStatus, CompareTreeNode, PlanResult, Resolution, SuggestionOut,
 } from '../../../shared/sync-api';
-import { ApiError } from '../api/client';
+import { ApiError, api, projectPath } from '../api/client';
 import {
   compareChildrenQuery, qk, startCompare, startPlan, useCompareChildren, useCompareItem, useCreateChangeset, useSuggestions,
 } from '../api/queries';
@@ -37,16 +38,18 @@ import { Switch, inputClasses } from '../components/ui/Field';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs';
 import { useToast } from '../components/ui/Toast';
 import { cn } from '../components/ui/cn';
-import { diffValues } from '../lib/diff';
-import { envLabel, plural } from '../lib/format';
-import { useProjectContext } from '../lib/project';
+import { envLabel, formatDateTime, plural } from '../lib/format';
+import { newestFirst, useProjectContext } from '../lib/project';
 import {
   SELECTABLE, addItems, checkStateOf, emptySelection, isSelectable, planResolutions, pruneSelection, removeKeys, selectedKeys,
-  setResolution, toggleItem, toggleNode, underCounts, type CheckState, type KeyStatus, type Selection,
+  setResolution, tickKind, toggleItem, toggleNode, underCounts, type CheckState, type KeyStatus, type Selection,
 } from '../lib/selection';
 import { ancestorsOf, kindOfKey, nameOfKey } from '../lib/tree-layout';
 
 const ALL = 'all';
+
+// The server forgot this comparison (it keeps the latest few, in memory).
+const isExpired = (err: unknown) => err instanceof ApiError && err.status === 404 && /expired/i.test(err.message);
 const MAX_EXPAND = 1500;
 
 // ---- Selection, kept per From → To pair for the session -----------------------
@@ -86,13 +89,20 @@ function useSelection(p: string, from: string, to: string) {
 
 // ---- Running the comparison ---------------------------------------------------
 
-function useCompareRun(p: string, opts: { from: string; to: string; mode: CompareMode; live: boolean; fromCommit?: string; toCommit?: string }) {
-  const { from, to, mode, live, fromCommit, toCommit } = opts;
+// `toVersion` identifies the target's state: its snapshot commit, or for a
+// live target the project's newest history commit (a snapshot or an apply
+// adds one, so the live comparison runs again afterwards).
+// `restore` (a backup or snapshot commit) compares that backup with the live
+// environment instead, through the server's restore endpoint.
+function useCompareRun(p: string, opts: { from: string; to: string; mode: CompareMode; live: boolean; fromCommit?: string; toVersion?: string; restore?: string | null }) {
+  const { from, to, mode, live, fromCommit, toVersion, restore } = opts;
   const qc = useQueryClient();
-  const queryKey = qk.compareRun(p, from, to, mode, live, fromCommit ?? '', toCommit ?? '');
+  const queryKey = restore
+    ? qk.compareRun(p, `restore:${restore}`, to, mode, true, restore, toVersion ?? '')
+    : qk.compareRun(p, from, to, mode, live, fromCommit ?? '', toVersion ?? '');
   const keyStr = JSON.stringify(queryKey);
   const cached = useQuery<CompareResult>({ queryKey, enabled: false, staleTime: Infinity, gcTime: Infinity, queryFn: () => Promise.reject(new Error('not run')) });
-  const ready = Boolean(fromCommit && (toCommit || (mode === 'preview' && live)) && from !== to);
+  const ready = restore ? Boolean(to) : Boolean(fromCommit && (toVersion || (mode === 'preview' && live)) && from !== to);
   const [run, setRun] = useState<{ jobId: string; key: string } | null>(null);
   const [startError, setStartError] = useState<{ key: string; error: unknown } | null>(null);
   const started = useRef<string | null>(null);
@@ -108,12 +118,14 @@ function useCompareRun(p: string, opts: { from: string; to: string; mode: Compar
     setStartError(null);
     try {
       const body = mode === 'preview' ? { from, to, mode, useSnapshots: !live } : { from, to, mode };
-      const { jobId } = await startCompare(p, body);
+      const { jobId } = restore
+        ? await api.post<JobStarted>(projectPath(p, 'restore'), { commit: restore, mode })
+        : await startCompare(p, body);
       setRun({ jobId, key: keyStr });
     } catch (error) {
       setStartError({ key: keyStr, error });
     }
-  }, [p, from, to, mode, live, keyStr]);
+  }, [p, from, to, mode, live, keyStr, restore]);
 
   useEffect(() => {
     if (ready && !cached.data && started.current !== keyStr) start();
@@ -121,7 +133,13 @@ function useCompareRun(p: string, opts: { from: string; to: string; mode: Compar
 
   const running = Boolean(run && run.key === keyStr && job.status === 'running');
   const error = startError?.key === keyStr ? startError.error : (run?.key === keyStr && (job.status === 'failed' || job.status === 'cancelled') ? job.error ?? 'The comparison was cancelled.' : null);
-  return { result: cached.data, ready, running, job, error, rerun: start };
+  // The server no longer has the cached comparison: forget it and run again.
+  const expire = useCallback(() => {
+    if (qc.getQueryData(JSON.parse(keyStr)) === undefined) return;
+    started.current = null;
+    qc.resetQueries({ queryKey: JSON.parse(keyStr), exact: true });
+  }, [qc, keyStr]);
+  return { result: cached.data, ready, running, job, error, rerun: start, expire };
 }
 
 // ---- Tree ---------------------------------------------------------------------
@@ -146,14 +164,18 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
-// Item keys below `node` that a parent tick may select (loads what it needs).
-async function collectBelow(qc: ReturnType<typeof useQueryClient>, p: string, id: string, node: CompareTreeNode): Promise<KeyStatus[]> {
+// Items below `node` that a parent tick may select (loads what it needs),
+// limited to what the current filters show.
+async function collectBelow(
+  qc: ReturnType<typeof useQueryClient>, p: string, id: string, node: CompareTreeNode, shown: (n: CompareTreeNode) => boolean,
+): Promise<KeyStatus[]> {
   const out: KeyStatus[] = [];
   let level = [node];
   while (level.length) {
     const lists = await Promise.all(level.map((n) => qc.fetchQuery(compareChildrenQuery(p, id, n.id))));
     level = [];
     for (const c of lists.flat()) {
+      if (!shown(c)) continue;
       if (c.key && isSelectable(c.status)) out.push({ key: c.key, status: c.status! });
       if (c.hasChildren && selectableBelow(c)) level.push(c);
     }
@@ -161,7 +183,9 @@ async function collectBelow(qc: ReturnType<typeof useQueryClient>, p: string, id
   return out;
 }
 
-function CompareTree({ projectId, result, sel, setSel, selectedKey, onSelect, filters, setFilters }: {
+const DRIFT_HINT = 'Only drifted items are below: review each one and choose Overwrite or Keep.';
+
+function CompareTree({ projectId, result, sel, setSel, selectedKey, onSelect, filters, setFilters, onAdded, onExpired }: {
   projectId: string;
   result: CompareResult;
   sel: Selection;
@@ -170,6 +194,10 @@ function CompareTree({ projectId, result, sel, setSel, selectedKey, onSelect, fi
   onSelect: (key: string) => void;
   filters: TreeFilters;
   setFilters: (f: Partial<TreeFilters>) => void;
+  // Keys a parent tick added.
+  onAdded: (keys: string[]) => void;
+  // The server no longer has this comparison.
+  onExpired: () => void;
 }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -263,11 +291,22 @@ function CompareTree({ projectId, result, sel, setSel, selectedKey, onSelect, fi
 
   const under = useMemo(() => underCounts(sel), [sel]);
   const checkState = useCallback((row: TreeRow): CheckState => checkStateOf(row.node as CompareTreeNode, sel, under), [sel, under]);
+  const checkHint = useCallback((row: TreeRow) => (tickKind(row.node as CompareTreeNode) === 'disabled' ? DRIFT_HINT : null), []);
 
+  // The comparison expired on the server (for example after a restart).
+  const expired = queries.some((q) => q.isError && isExpired(q.error));
+  useEffect(() => {
+    if (expired) onExpired();
+  }, [expired]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // One parent tick at a time: clicks while one is loading are ignored.
+  const pending = useRef(false);
   const onCheck = async (row: TreeRow) => {
     const node = row.node as CompareTreeNode;
     const state = checkState(row);
-    if (node.key && !selectableBelow(node)) {
+    const kind = tickKind(node);
+    if (pending.current || kind === 'disabled' || kind === 'none') return;
+    if (kind === 'self' || (node.key && !selectableBelow(node))) {
       setSel((s) => toggleItem(s, node.key!, node.status!));
       return;
     }
@@ -276,11 +315,19 @@ function CompareTree({ projectId, result, sel, setSel, selectedKey, onSelect, fi
       setSel((s) => toggleNode(s, node, below, 'checked'));
       return;
     }
+    pending.current = true;
     try {
-      const below = await collectBelow(qc, projectId, id, node);
+      const shown = (n: CompareTreeNode) => visible(n) && (!matching || matching.has(n.id));
+      const below = await collectBelow(qc, projectId, id, node, shown);
+      const before = new Set(selectedKeys(sel));
+      const next = toggleNode(sel, node, below, state);
       setSel((s) => toggleNode(s, node, below, state));
+      const added = selectedKeys(next).filter((k) => !before.has(k));
+      if (added.length) onAdded(added);
     } catch (err) {
       toast.show({ tone: 'error', title: 'Could not select the items', description: err instanceof Error ? err.message : undefined });
+    } finally {
+      pending.current = false;
     }
   };
 
@@ -296,6 +343,7 @@ function CompareTree({ projectId, result, sel, setSel, selectedKey, onSelect, fi
 
   let body;
   if (!rootQuery || rootQuery.isPending) body = <LoadingState label="Loading differences…" />;
+  else if (expired) body = <LoadingState label="Running the comparison again…" />;
   else if (rootQuery.isError) body = <ErrorState title="Could not load the differences" error={rootQuery.error} onRetry={() => rootQuery.refetch()} />;
   else if (!rows.length) {
     body = (
@@ -315,6 +363,7 @@ function CompareTree({ projectId, result, sel, setSel, selectedKey, onSelect, fi
         onToggle={toggle}
         renderAside={aside}
         checkState={checkState}
+        checkHint={checkHint}
         onCheck={onCheck}
         showCounts={false}
         className="min-h-0 flex-1 py-1"
@@ -360,7 +409,7 @@ function CompareTree({ projectId, result, sel, setSel, selectedKey, onSelect, fi
 
 // ---- Detail -------------------------------------------------------------------
 
-function ItemDetail({ projectId, result, itemKey, sel, setSel, suggestions, onAddSuggestion }: {
+function ItemDetail({ projectId, result, itemKey, sel, setSel, suggestions, onAddSuggestion, onExpired }: {
   projectId: string;
   result: CompareResult;
   itemKey: string | null;
@@ -368,14 +417,19 @@ function ItemDetail({ projectId, result, itemKey, sel, setSel, suggestions, onAd
   setSel: (fn: (s: Selection) => Selection) => void;
   suggestions: SuggestionOut[];
   onAddSuggestion: (s: SuggestionOut) => void;
+  onExpired: () => void;
 }) {
   const item = useCompareItem(projectId, result.compareId, itemKey);
+  const expired = item.isError && isExpired(item.error);
+  useEffect(() => {
+    if (expired) onExpired();
+  }, [expired]); // eslint-disable-line react-hooks/exhaustive-deps
   const [view, setView] = useState('changes');
   const headingId = useId();
   if (!itemKey) {
     return <EmptyState icon={<MousePointerClick size={20} />} title="Select an item" description="Pick something in the tree to see exactly what promoting it would change." className="h-full" />;
   }
-  if (item.isPending) return <LoadingState label="Loading item…" />;
+  if (item.isPending || expired) return <LoadingState label="Loading item…" />;
   if (item.isError) {
     const gone = item.error instanceof ApiError && item.error.status === 404;
     return <ErrorState title={gone ? 'Not in this comparison' : 'Could not load the item'} error={item.error} onRetry={gone ? undefined : () => item.refetch()} />;
@@ -385,7 +439,7 @@ function ItemDetail({ projectId, result, itemKey, sel, setSel, suggestions, onAd
   const to = result.to;
   const selected = Boolean(sel.items[it.key]);
   const resolution: Resolution | null = selected ? 'overwrite' : sel.resolutions[it.key] === 'keep' ? 'keep' : null;
-  const diff = diffValues(it.current ?? undefined, it.incoming ?? undefined);
+  const diff = it.diff;
   const mine = suggestions.filter((s) => s.forKey === it.key);
 
   let changes;
@@ -415,7 +469,7 @@ function ItemDetail({ projectId, result, itemKey, sel, setSel, suggestions, onAd
       </div>
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 pb-8">
         {it.status === 'drifted' && it.threeWay && (
-          <ThreeWayDiff threeWay={it.threeWay} from={from} to={to} resolution={resolution} onResolve={(r) => setSel((s) => setResolution(s, it.key, it.status, r))} />
+          <ThreeWayDiff threeWay={it.threeWay} incoming={it.diff} from={from} to={to} resolution={resolution} onResolve={(r) => setSel((s) => setResolution(s, it.key, it.status, r))} />
         )}
         {mine.length > 0 && <SuggestionsList title="This item needs" suggestions={mine} onAdd={onAddSuggestion} />}
         <Tabs value={view} onValueChange={setView}>
@@ -459,15 +513,33 @@ function EnvSelect({ label, value, options, onChange }: { label: string; value: 
   );
 }
 
+// A radio group of buttons. One tab stop; the arrow keys move the choice.
 function Segmented<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<{ value: T; label: string; disabled?: boolean; title?: string }>; onChange: (v: T) => void }) {
+  const refs = useRef<Array<HTMLButtonElement | null>>([]);
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const at = options.findIndex((o) => o.value === value);
+    for (let i = 1; i <= options.length; i++) {
+      const idx = (at + step * i + options.length * 2) % options.length;
+      if (!options[idx].disabled) {
+        onChange(options[idx].value);
+        refs.current[idx]?.focus();
+        return;
+      }
+    }
+  };
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
-      {options.map((o) => (
+    <div role="radiogroup" aria-label={label} onKeyDown={onKeyDown} className="inline-flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
+      {options.map((o, i) => (
         <button
           key={o.value}
+          ref={(el) => { refs.current[i] = el; }}
           type="button"
           role="radio"
           aria-checked={value === o.value}
+          tabIndex={value === o.value ? 0 : -1}
           disabled={o.disabled}
           title={o.title}
           onClick={() => onChange(o.value)}
@@ -502,7 +574,7 @@ function useSelectionLookup(projectId: string, compareId: string | undefined, ke
         const node = q.data.find((nd) => nd.key === key);
         if (node) nodes.set(key, node);
         found.set(key, node?.status ?? null);
-      } else if (q?.isError && rootsOk && q.error instanceof ApiError && q.error.status === 404) {
+      } else if (q?.isError && rootsOk && !isExpired(q.error) && q.error instanceof ApiError && q.error.status === 404) {
         // The node above it is gone from a comparison that still exists.
         found.set(key, null);
       }
@@ -512,17 +584,23 @@ function useSelectionLookup(projectId: string, compareId: string | undefined, ke
 }
 
 export function ComparePage() {
-  const { project, activeEnv } = useProjectContext();
+  const { project, activeEnv, history } = useProjectContext();
   const navigate = useNavigate();
   const toast = useToast();
+  const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
   const names = project.environments.map((e) => e.name);
   const pick = (v: string | null) => (v && names.includes(v) ? v : null);
-  const from = pick(params.get('from')) ?? activeEnv ?? names[0] ?? '';
+  // Restore: the backup (or snapshot) at ?restore=<commit> as From, the live
+  // environment ?to= as To.
+  const restoreParam = params.get('restore');
+  const restore = restoreParam && /^[0-9a-f]{4,40}$/i.test(restoreParam) ? restoreParam : null;
+  const restoreTo = pick(params.get('to')) ?? activeEnv ?? names[0] ?? '';
+  const from = restore ? restoreTo : pick(params.get('from')) ?? activeEnv ?? names[0] ?? '';
   const fromIndex = names.indexOf(from);
-  const to = pick(params.get('to')) ?? names[fromIndex + 1] ?? names.find((x) => x !== from) ?? '';
+  const to = restore ? restoreTo : pick(params.get('to')) ?? names[fromIndex + 1] ?? names.find((x) => x !== from) ?? '';
   const mode: CompareMode = params.get('mode') === 'raw' ? 'raw' : 'preview';
-  const live = mode === 'preview' && params.get('live') === '1';
+  const live = Boolean(restore) || (mode === 'preview' && params.get('live') === '1');
   const itemKey = params.get('item');
   const fromEnv = project.environments.find((e) => e.name === from);
   const toEnv = project.environments.find((e) => e.name === to);
@@ -536,9 +614,14 @@ export function ComparePage() {
     return next;
   });
 
-  const run = useCompareRun(project.id, { from, to, mode, live, fromCommit: fromEnv?.lastSnapshot?.commit, toCommit: toEnv?.lastSnapshot?.commit });
-  const result = run.result;
-  const [sel, setSel] = useSelection(project.id, from, to);
+  const newest = useMemo(() => newestFirst(history)[0]?.commit ?? '', [history]);
+  const run = useCompareRun(project.id, {
+    from, to, mode, live, fromCommit: fromEnv?.lastSnapshot?.commit, toVersion: live ? `live:${newest}` : toEnv?.lastSnapshot?.commit, restore,
+  });
+  const restoreAt = restore ? history.find((e) => e.commit.startsWith(restore) || restore.startsWith(e.commit))?.at : undefined;
+  const fromLabel = restore ? `Backup of ${envLabel(to)}${restoreAt ? ` (${formatDateTime(restoreAt)})` : ''}` : envLabel(from);
+  const result = useMemo(() => (run.result && restore ? { ...run.result, fromName: fromLabel } : run.result), [run.result, restore, fromLabel]);
+  const [sel, setSel] = useSelection(project.id, restore ? `restore:${restore}` : from, to);
   const keys = useMemo(() => selectedKeys(sel), [sel]);
   const [filters, setFilterState] = useState<TreeFilters>({ onlyDiff: true, status: null, section: ALL, text: '' });
   const setFilters = (f: Partial<TreeFilters>) => setFilterState((cur) => ({ ...cur, ...f }));
@@ -546,35 +629,76 @@ export function ComparePage() {
   // Preselected items (a restore) are ticked once per comparison.
   const preselectedFor = useRef<string | null>(null);
   const lookup = useSelectionLookup(project.id, result?.compareId, keys);
+  // Their statuses come from the comparison's tree; drifted ones are left
+  // for a decision.
   useEffect(() => {
-    if (!result || preselectedFor.current === result.compareId) return;
+    if (!result || preselectedFor.current === result.compareId || !result.preselected.length) return;
     preselectedFor.current = result.compareId;
-    if (result.preselected.length) setSel((s) => addItems(s, result.preselected.filter((k) => !s.items[k]).map((key) => ({ key, status: 'changed' as CompareStatus }))));
-  }, [result, setSel]);
+    const wanted = result.preselected;
+    const parents = [...new Set(wanted.map((k) => ancestorsOf(k).at(-1) ?? ''))];
+    Promise.all(parents.map((parent) => qc.fetchQuery(compareChildrenQuery(project.id, result.compareId, parent)).catch(() => [] as CompareTreeNode[])))
+      .then((lists) => {
+        const status = new Map(lists.flat().filter((nd) => nd.key).map((nd) => [nd.key!, nd.status]));
+        const items = wanted.flatMap((key): KeyStatus[] => {
+          const st = status.get(key);
+          return st && st !== 'drifted' && isSelectable(st) ? [{ key, status: st }] : [];
+        });
+        if (items.length) setSel((cur) => addItems(cur, items.filter((i) => !cur.items[i.key])));
+      });
+  }, [result, setSel, qc, project.id]);
 
   // Keep the tray to what still differs in the current comparison.
   useEffect(() => {
     if (!lookup.found.size) return;
     const { removed } = pruneSelection(sel, lookup.found);
     setSel((cur) => pruneSelection(cur, lookup.found).selection);
-    if (removed.length) {
+    const label = (k: string) => lookup.nodes.get(k)?.label ?? nameOfKey(k);
+    const drifted = removed.filter((k) => lookup.found.get(k) === 'drifted');
+    const gone = removed.filter((k) => lookup.found.get(k) !== 'drifted');
+    if (gone.length) {
       toast.show({
         tone: 'info',
-        title: removed.length === 1 ? `${nameOfKey(removed[0])} no longer differs` : `${removed.length} items no longer differ`,
+        title: gone.length === 1 ? `${label(gone[0])} no longer differs` : `${gone.length} items no longer differ`,
         description: 'Taken out of the changeset.',
+      });
+    }
+    if (drifted.length) {
+      toast.show({
+        tone: 'info',
+        title: drifted.length === 1 ? `${label(drifted[0])} is now changed in ${envLabel(to)}: review it` : `${drifted.length} items are now changed in ${envLabel(to)}: review them`,
+        description: 'Taken out of the changeset until you choose Overwrite.',
       });
     }
   }, [lookup.found]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const suggestionsQuery = useSuggestions(project.id, result?.compareId, keys);
-  const suggestions = useMemo(() => (suggestionsQuery.data ?? []).filter((s) => !sel.items[s.key]), [suggestionsQuery.data, sel]);
+  // With nothing selected there is nothing to suggest (the query keeps its
+  // previous data as a placeholder even while disabled).
+  const suggestionData = keys.length ? suggestionsQuery.data : undefined;
+  const suggestionsExpired = suggestionsQuery.isError && isExpired(suggestionsQuery.error);
+  useEffect(() => {
+    if (suggestionsExpired) run.expire();
+  }, [suggestionsExpired]); // eslint-disable-line react-hooks/exhaustive-deps
+  const suggestions = useMemo(() => (suggestionData ?? []).filter((s) => !sel.items[s.key]), [suggestionData, sel]);
+
+  // Items a parent tick just added are highlighted in the tray for a moment.
+  const [recent, setRecent] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    if (!recent.size) return undefined;
+    const t = setTimeout(() => setRecent(new Set()), 2500);
+    return () => clearTimeout(t);
+  }, [recent]);
+  const onAdded = (added: string[]) => {
+    setRecent(new Set(added));
+    toast.show({ tone: 'success', title: `Added ${plural(added.length, 'item')} to the changeset` });
+  };
 
   const addSuggestion = (s: SuggestionOut) => setSel((cur) => addItems(cur, [{ key: s.key, status: s.status }]));
   const addAll = () => setSel((cur) => addItems(cur, uniqueSuggestions(suggestions).map((s) => ({ key: s.key, status: s.status }))));
 
   const trayItems: TrayItem[] = keys.map((key) => {
     const node = lookup.nodes.get(key);
-    const sug = suggestionsQuery.data?.find((s) => s.key === key);
+    const sug = suggestionData?.find((s) => s.key === key);
     return { key, label: node?.label ?? sug?.label ?? nameOfKey(key), kind: node?.kind ?? kindOfKey(key), status: sel.items[key] };
   });
 
@@ -594,6 +718,7 @@ export function ComparePage() {
       const { jobId } = await startPlan(project.id, {
         to, from, selected: keys,
         ...(result?.sourceCommit ? { sourceCommit: result.sourceCommit } : {}),
+        ...(restore ? { restore: true } : {}),
         ...(Object.keys(resolutions).length ? { resolutions } : {}),
       });
       setPlanJob(jobId);
@@ -613,7 +738,7 @@ export function ComparePage() {
 
   const open = (key: string) => setParam({ item: key });
 
-  if (names.length < 2) {
+  if (names.length < 2 && !restore) {
     return (
       <div className="mx-auto max-w-3xl px-6 py-10">
         <Card><EmptyState icon={<GitCompare size={20} />} title="Add a second environment" description="Compare needs two environments, for example Dev and Test." action={<LinkButton to={`/p/${project.id}/settings/environments`} variant="primary">Environments</LinkButton>} /></Card>
@@ -621,17 +746,27 @@ export function ComparePage() {
     );
   }
 
-  const missing = [fromEnv, ...(live ? [] : [toEnv])].filter((e) => e && !e.lastSnapshot).map((e) => e!.name);
+  const missing = restore ? [] : [fromEnv, ...(live ? [] : [toEnv])].filter((e) => e && !e.lastSnapshot).map((e) => e!.name);
 
   return (
     <div className="flex flex-col lg:h-full lg:min-h-[560px]">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-border bg-surface px-6 py-3">
         <h1 className="text-base font-semibold tracking-tight text-fg">Compare</h1>
-        <div className="flex items-center gap-2">
-          <EnvSelect label="From" value={from} options={names} onChange={(v) => setParam({ from: v, to: v === to ? from : to, item: null })} />
-          <IconButton label="Swap" icon={<ArrowLeftRight size={14} aria-hidden />} onClick={() => setParam({ from: to, to: from, item: null })} />
-          <EnvSelect label="To" value={to} options={names.filter((x) => x !== from)} onChange={(v) => setParam({ to: v, item: null })} />
-        </div>
+        {restore ? (
+          <p className="flex items-center gap-2 text-sm">
+            <span className="text-xs font-medium text-muted">From</span>
+            <span className="rounded-md bg-surface-2 px-2 py-1 font-medium text-fg" data-testid="restore-from">{fromLabel}</span>
+            <ArrowRight size={14} aria-hidden className="text-subtle" />
+            <span className="text-xs font-medium text-muted">To</span>
+            <span className="rounded-md bg-surface-2 px-2 py-1 font-medium text-fg">{envLabel(to)} (live)</span>
+          </p>
+        ) : (
+          <div className="flex items-center gap-2">
+            <EnvSelect label="From" value={from} options={names} onChange={(v) => setParam({ from: v, to: v === to ? from : to, item: null })} />
+            <IconButton label="Swap" icon={<ArrowLeftRight size={14} aria-hidden />} onClick={() => setParam({ from: to, to: from, item: null })} />
+            <EnvSelect label="To" value={to} options={names.filter((x) => x !== from)} onChange={(v) => setParam({ to: v, item: null })} />
+          </div>
+        )}
         <Segmented<CompareMode>
           label="Mode"
           value={mode}
@@ -641,15 +776,17 @@ export function ComparePage() {
             { value: 'raw', label: 'Raw', title: 'Every difference between the two snapshots' },
           ]}
         />
-        <Segmented<'snap' | 'live'>
-          label="Target"
-          value={live ? 'live' : 'snap'}
-          onChange={(v) => setParam({ live: v === 'live' ? '1' : null })}
-          options={[
-            { value: 'snap', label: 'Latest snapshots (instant)' },
-            { value: 'live', label: 'Check live target', disabled: mode === 'raw', title: mode === 'raw' ? 'Raw compares the two snapshots' : `Reads ${envLabel(to)} now` },
-          ]}
-        />
+        {!restore && (
+          <Segmented<'snap' | 'live'>
+            label="Target"
+            value={live ? 'live' : 'snap'}
+            onChange={(v) => setParam({ live: v === 'live' ? '1' : null })}
+            options={[
+              { value: 'snap', label: 'Latest snapshots (instant)' },
+              { value: 'live', label: 'Check live target', disabled: mode === 'raw', title: mode === 'raw' ? 'Raw compares the two snapshots' : `Reads ${envLabel(to)} now` },
+            ]}
+          />
+        )}
         <div className="ml-auto flex items-center gap-3">
           {run.running && <div className="w-48"><JobProgress job={run.job} label="Comparing" /></div>}
           {run.running
@@ -703,6 +840,8 @@ export function ComparePage() {
               onSelect={open}
               filters={filters}
               setFilters={setFilters}
+              onAdded={onAdded}
+              onExpired={run.expire}
             />
             <div className="min-h-0 overflow-hidden">
               <ItemDetail
@@ -714,6 +853,7 @@ export function ComparePage() {
                 setSel={setSel}
                 suggestions={suggestions}
                 onAddSuggestion={addSuggestion}
+                onExpired={run.expire}
               />
             </div>
             <ChangesetTray
@@ -722,8 +862,10 @@ export function ComparePage() {
               items={trayItems}
               resolutions={sel.resolutions}
               suggestions={suggestions}
-              suggestionsLoading={suggestionsQuery.isFetching && !suggestionsQuery.data}
-              suggestionsError={suggestionsQuery.error}
+              suggestionsLoading={keys.length > 0 && suggestionsQuery.isFetching && !suggestionsQuery.data}
+              suggestionsError={keys.length ? suggestionsQuery.error : null}
+              highlight={recent}
+              overwrites={Object.values(sel.items).filter((st) => st === 'drifted').length}
               onOpen={open}
               onRemove={(key) => setSel((s) => removeKeys(s, [key]))}
               onClear={() => setSel(() => emptySelection())}
@@ -733,6 +875,8 @@ export function ComparePage() {
               reviewing={plan.status === 'running'}
               reviewError={planError}
               onSave={save}
+              canSave={!restore}
+              fromLabel={fromLabel}
               saved={savedNow}
             />
           </div>

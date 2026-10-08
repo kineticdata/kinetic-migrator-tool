@@ -49,9 +49,19 @@ export interface ChangesetTrayProps {
   onSave: (v: { name: string; description: string }) => Promise<unknown>;
   // The changeset this selection was last saved as.
   saved: { id: string; name: string; href: string } | null;
+  // Keys to highlight (just added by a parent tick).
+  highlight?: Set<string>;
+  // Selected drifted items (their Overwrite decisions are not saved).
+  overwrites?: number;
+  // Hide Save as changeset… (a restore is a one-off).
+  canSave?: boolean;
+  // How to name the source (defaults to the From environment).
+  fromLabel?: string;
 }
 
-function SaveDialog({ open, onOpenChange, count, onSave }: { open: boolean; onOpenChange: (o: boolean) => void; count: number; onSave: ChangesetTrayProps['onSave'] }) {
+function SaveDialog({ open, onOpenChange, count, overwrites, onSave }: {
+  open: boolean; onOpenChange: (o: boolean) => void; count: number; overwrites: number; onSave: ChangesetTrayProps['onSave'];
+}) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [error, setError] = useState<unknown>(null);
@@ -95,6 +105,12 @@ function SaveDialog({ open, onOpenChange, count, onSave }: { open: boolean; onOp
           <Field label="Description" hint="Optional. What this changeset is for.">
             {(p) => <textarea {...p} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={2000} rows={3} className={cn(inputClasses, 'h-auto py-2')} />}
           </Field>
+          {overwrites > 0 && (
+            <p className="rounded-lg bg-drift-soft px-3 py-2 text-xs text-fg">
+              <span aria-hidden className="text-drift">⚠ </span>
+              The Overwrite decision for {overwrites === 1 ? 'the drifted item' : `${overwrites} drifted items`} is not saved: you will be asked again when you plan this changeset.
+            </p>
+          )}
           <InlineError error={error} />
         </form>
       </DialogContent>
@@ -120,7 +136,7 @@ export function ChangesetTray(props: ChangesetTrayProps) {
           {items.length > 0 && <Button size="sm" variant="ghost" className="h-7 px-2" onClick={onClear}>Clear</Button>}
         </div>
         <p className="mt-1 text-xs text-muted">
-          {saved ? <>Saved as <Link to={saved.href} className="font-medium text-accent hover:underline">{saved.name}</Link></> : 'Unsaved'} · {envLabel(from)} → {envLabel(to)}
+          {saved ? <>Saved as <Link to={saved.href} className="font-medium text-accent hover:underline">{saved.name}</Link></> : 'Unsaved'} · {props.fromLabel ?? envLabel(from)} → {envLabel(to)}
         </p>
       </div>
 
@@ -137,7 +153,7 @@ export function ChangesetTray(props: ChangesetTrayProps) {
                 <h3 className="px-2 pb-1 text-[11px] font-semibold tracking-wide text-subtle uppercase">{g.title} <span className="tabular-nums">{g.list.length}</span></h3>
                 <ul>
                   {g.list.map((i) => (
-                    <li key={i.key} className="group flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-surface-2">
+                    <li key={i.key} data-recent={props.highlight?.has(i.key) || undefined} className={cn('group flex items-center gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-surface-2', props.highlight?.has(i.key) && 'bg-accent-soft')}>
                       <KindIcon kind={i.kind} className="text-subtle" />
                       <button type="button" onClick={() => onOpen(i.key)} className="min-w-0 flex-1 truncate text-left text-[13px] text-fg hover:underline" title={i.key}>
                         {i.label}
@@ -179,11 +195,11 @@ export function ChangesetTray(props: ChangesetTrayProps) {
         <Button variant="primary" className="w-full" disabled={!items.length} loading={reviewing} onClick={onReview}>
           {reviewing ? 'Preparing plan…' : <>Review plan <ArrowRight size={15} aria-hidden /></>}
         </Button>
-        <Button variant="ghost" size="sm" className="w-full" disabled={!items.length} icon={<Save size={14} aria-hidden />} onClick={() => setSaving(true)}>
+        {props.canSave !== false && <Button variant="ghost" size="sm" className="w-full" disabled={!items.length} icon={<Save size={14} aria-hidden />} onClick={() => setSaving(true)}>
           Save as changeset…
-        </Button>
+        </Button>}
       </div>
-      <SaveDialog open={saving} onOpenChange={setSaving} count={items.length} onSave={props.onSave} />
+      <SaveDialog open={saving} onOpenChange={setSaving} count={items.length} overwrites={props.overwrites ?? 0} onSave={props.onSave} />
     </aside>
   );
 }

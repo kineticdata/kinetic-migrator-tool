@@ -35,6 +35,19 @@ function setup() {
     'GET /api/jobs/plan9/events': { sse: sse([]) },
     'GET /api/jobs/plan9': { id: 'plan9', kind: 'plan', status: 'succeeded', createdAt: 'x', result: { planId: 'pl9' } },
     'DELETE /api/projects/:p/changesets/:id': { deleted: CS.id },
+    'POST /api/projects/:p/compare': { status: 202, json: { jobId: 'cmp9' } },
+    'GET /api/jobs/cmp9/events': { sse: sse([]) },
+    'GET /api/jobs/cmp9': {
+      id: 'cmp9', kind: 'compare', status: 'succeeded', createdAt: 'x',
+      result: { compareId: 'cz', from: 'dev', fromName: 'Dev', to: 'test', mode: 'preview', sourceCommit: 'c-pinned', counts: {}, preselected: [] },
+    },
+    'GET /api/projects/:p/compare/cz/item': (call: { search: string }) => {
+      const key = new URLSearchParams(call.search).get('key');
+      if (key === CS.keys[0]) {
+        return { key, type: 'form', label: 'Leave request', status: 'changed', diff: [{ path: 'description', from: 'old', to: 'new' }], current: {}, incoming: {} };
+      }
+      return { key, type: 'operation', label: 'Create ticket', status: 'same', diff: [], current: {}, incoming: {} };
+    },
   });
 }
 
@@ -77,4 +90,19 @@ test('an empty list points to Compare', async () => {
   renderWithApp(<AppRoutes />, { route: '/p/acme-demo/changesets' });
   expect(await screen.findByText('No saved changesets yet')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Compare environments' })).toHaveAttribute('href', '/p/acme-demo/compare');
+});
+
+test('Compare with… shows how the pinned items differ from an environment', async () => {
+  const m = setup();
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: `/p/acme-demo/changesets/${CS.id}` });
+  await screen.findByRole('heading', { name: 'Q4 forms' });
+  await user.selectOptions(screen.getByLabelText('Compare with'), 'test');
+  await user.click(screen.getByRole('button', { name: 'Compare' }));
+  const list = await screen.findByRole('list', { name: 'Differences from Test' });
+  expect(await within(list).findByText('Leave request')).toBeInTheDocument();
+  expect(within(list).getByText('Create ticket')).toBeInTheDocument();
+  expect(m.callsTo('POST', '/api/projects/acme-demo/compare')[0].body).toEqual({ from: 'dev', to: 'test', mode: 'preview', useSnapshots: true, sourceCommit: 'c-pinned' });
+  await user.click(within(list).getByText('Leave request'));
+  expect(await screen.findByRole('table', { name: 'Changes' })).toHaveTextContent('Description');
 });

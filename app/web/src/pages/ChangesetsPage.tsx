@@ -6,11 +6,15 @@
 import { useId, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ArrowLeft, ArrowRight, CheckCircle2, GitCompare, Layers, Lock, Trash2 } from 'lucide-react';
-import type { Changeset, NodeKind, PlanResult } from '../../../shared/sync-api';
-import { ApiError } from '../api/client';
-import { startPlan, useChangeset, useChangesets, useDeleteChangeset } from '../api/queries';
+import { useQueries } from '@tanstack/react-query';
+import type { Changeset, CompareItem, CompareResult, NodeKind, PlanResult } from '../../../shared/sync-api';
+import { ApiError, api, projectPath } from '../api/client';
+import { qk, startCompare, startPlan, useChangeset, useChangesets, useDeleteChangeset } from '../api/queries';
 import { useJob } from '../api/useJob';
+import { ItemStatus } from '../components/CountBar';
+import { FieldDiffTable } from '../components/FieldDiffTable';
 import { KindIcon } from '../components/ObjectTree';
+import { Spinner } from '../components/ui/Spinner';
 import { Badge } from '../components/ui/Badge';
 import { Button, LinkButton } from '../components/ui/Button';
 import { Card, CardHeader } from '../components/ui/Card';
@@ -195,6 +199,85 @@ function PlanAgainst({ projectId, cs }: { projectId: string; cs: Changeset }) {
   );
 }
 
+// Compare with…: the pinned items against an environment (its newest
+// snapshot, or live when it has none), limited to the changeset's items.
+function CompareWith({ projectId, cs }: { projectId: string; cs: Changeset }) {
+  const { project } = useProjectContext();
+  const selectId = useId();
+  const targets = project.environments.filter((e) => e.name !== cs.from);
+  const names = project.environments.map((e) => e.name);
+  const [to, setTo] = useState(() => (targets.find((e) => names.indexOf(e.name) > names.indexOf(cs.from)) ?? targets[0])?.name ?? '');
+  const [run, setRun] = useState<{ jobId: string; to: string } | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  const job = useJob<CompareResult>(run?.jobId ?? null);
+  const compareId = job.status === 'succeeded' ? job.result?.compareId : undefined;
+  const items = useQueries({
+    queries: cs.keys.map((key) => ({
+      queryKey: qk.compareItem(projectId, compareId ?? '', key),
+      enabled: Boolean(compareId),
+      staleTime: Infinity,
+      retry: false,
+      queryFn: () => api.get<CompareItem>(`${projectPath(projectId, 'compare', compareId ?? '', 'item')}?key=${encodeURIComponent(key)}`),
+    })),
+  });
+  const start = async () => {
+    setError(null);
+    setOpen(null);
+    const env = project.environments.find((e) => e.name === to);
+    try {
+      const { jobId } = await startCompare(projectId, { from: cs.from, to, mode: 'preview', useSnapshots: Boolean(env?.lastSnapshot), sourceCommit: cs.sourceCommit });
+      setRun({ jobId, to });
+    } catch (err) {
+      setError(err);
+    }
+  };
+  if (!targets.length) return null;
+  return (
+    <Card>
+      <CardHeader title="Compare with…" description="How these items, as pinned, differ from an environment now." />
+      <div className="space-y-3 px-5 py-4">
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-40 flex-1 space-y-1.5">
+            <label htmlFor={selectId} className="text-[13px] font-medium text-fg">Compare with</label>
+            <select id={selectId} value={to} onChange={(e) => setTo(e.target.value)} className={inputClasses}>
+              {targets.map((e) => <option key={e.name} value={e.name}>{envLabel(e.name)}</option>)}
+            </select>
+          </div>
+          <Button loading={job.status === 'running'} disabled={!to} onClick={start}>Compare</Button>
+        </div>
+        <InlineError error={error ?? (job.status === 'failed' || job.status === 'cancelled' ? job.error ?? 'The comparison did not finish.' : null)} />
+        {compareId && run && (
+          <ul aria-label={`Differences from ${envLabel(run.to)}`} className="divide-y divide-border rounded-xl border border-border">
+            {cs.keys.map((key, i) => {
+              const q = items[i];
+              const it = q?.data;
+              return (
+                <li key={key}>
+                  <button
+                    type="button"
+                    aria-expanded={open === key}
+                    disabled={!it || !it.diff.length}
+                    onClick={() => setOpen(open === key ? null : key)}
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-surface-2 disabled:hover:bg-transparent"
+                  >
+                    <KindIcon kind={kindOfKey(key)} className="text-subtle" />
+                    <span className="min-w-0 flex-1 truncate text-sm text-fg">{it?.label ?? nameOfKey(key)}</span>
+                    {q?.isPending && <Spinner size={12} />}
+                    {q?.isError && <span className="text-xs text-danger">Could not load</span>}
+                    {it && <ItemStatus status={it.status} to={run.to} />}
+                  </button>
+                  {open === key && it && <div className="px-3 pb-3"><FieldDiffTable diff={it.diff} from={envLabel(cs.from)} to={run.to} /></div>}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 export function ChangesetDetailPage() {
   const { project } = useProjectContext();
   const { changesetId = '' } = useParams();
@@ -217,8 +300,12 @@ export function ChangesetDetailPage() {
   }
   const c = cs.data;
   const remove = async () => {
-    await del.mutateAsync(c.id);
-    navigate(`/p/${project.id}/changesets`);
+    try {
+      await del.mutateAsync(c.id);
+      navigate(`/p/${project.id}/changesets`);
+    } catch {
+      // Shown in the dialog (del.error).
+    }
   };
 
   return (
@@ -238,6 +325,7 @@ export function ChangesetDetailPage() {
             <CardHeader title="Promote" description="Ships the items exactly as they were in the pinned snapshot." />
             <div className="px-5 py-4"><PlanAgainst projectId={project.id} cs={c} /></div>
           </Card>
+          <CompareWith projectId={project.id} cs={c} />
           <Card>
             <dl className="divide-y divide-border text-sm">
               {[

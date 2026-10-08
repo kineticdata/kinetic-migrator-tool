@@ -1,42 +1,8 @@
-// Field-level differences for Compare. diffValues follows the engine's rules
-// (lib/sync/plan.mjs): named lists match by name, a reorder is one entry, and
-// `from` is the first argument. Compare passes the target first and the
-// incoming item second, whatever the comparison mode.
+// Field-level differences for Compare: readable labels for the server's diff
+// paths (`a.b`, `list[name]`, `list.0`) and the three-way rows of a drifted
+// item. Diff entries come from the server with `from` = the target's value and
+// `to` = the incoming one.
 import type { DiffEntry } from '../../../shared/sync-api';
-
-const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object';
-const join = (path: string, seg: string | number) => (path ? `${path}.${seg}` : String(seg));
-
-function sortKeys(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(sortKeys);
-  if (!isObj(v)) return v;
-  return Object.fromEntries(Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => [k, sortKeys(v[k])]));
-}
-
-const isEqual = (a: unknown, b: unknown) => JSON.stringify(sortKeys(a ?? null)) === JSON.stringify(sortKeys(b ?? null));
-const named = (x: unknown): x is { name: unknown } => isObj(x) && 'name' in x;
-
-export function diffValues(from: unknown, to: unknown, path = ''): DiffEntry[] {
-  if (isEqual(from, to)) return [];
-  const here = [{ path: path || '(root)', from, to }];
-  if (!isObj(from) || !isObj(to) || Array.isArray(from) !== Array.isArray(to)) return here;
-  if (Array.isArray(from) && Array.isArray(to)) {
-    if ([...from, ...to].every(named)) {
-      const fromNames = from.map((x) => (x as { name: unknown }).name);
-      const toNames = to.map((x) => (x as { name: unknown }).name);
-      if (new Set(fromNames).size !== fromNames.length || new Set(toNames).size !== toNames.length) return here;
-      const names = [...new Set([...fromNames, ...toNames])].map(String).sort();
-      const reordered: DiffEntry[] = fromNames.length === toNames.length && fromNames.every((n) => toNames.includes(n)) && !fromNames.every((n, i) => n === toNames[i])
-        ? [{ path: path || '(root)', from: fromNames as unknown, to: toNames as unknown }] : [];
-      const find = (list: unknown[], n: string) => list.find((x) => String((x as { name: unknown }).name) === n);
-      return reordered.concat(names.flatMap((n) => diffValues(find(from, n), find(to, n), `${path}[${n}]`)));
-    }
-    if (from.length !== to.length) return here;
-    return from.flatMap((v, i) => diffValues(v, to[i], join(path, i)));
-  }
-  const keys = [...new Set([...Object.keys(from), ...Object.keys(to)])].sort();
-  return keys.flatMap((k) => diffValues((from as Record<string, unknown>)[k], (to as Record<string, unknown>)[k], join(path, k)));
-}
 
 // Singular names for lists whose entries are matched by name.
 const SINGULAR: Record<string, string> = {
@@ -52,29 +18,48 @@ export function humanize(key: string): string {
   return words ? words[0].toUpperCase() + words.slice(1) : key;
 }
 
+// Splits a diff path into keys and bracketed names. A name runs to the "]"
+// that ends the path or is followed by "." or "[", so names containing "."
+// or "]" stay whole.
+export function pathSegments(path: string): Array<{ key: string } | { name: string }> {
+  const out: Array<{ key: string } | { name: string }> = [];
+  let i = 0;
+  while (i < path.length) {
+    if (path[i] === '.') {
+      i++;
+      continue;
+    }
+    if (path[i] === '[') {
+      let j = i + 1;
+      while (j < path.length && !(path[j] === ']' && (j + 1 === path.length || path[j + 1] === '.' || path[j + 1] === '['))) j++;
+      out.push({ name: path.slice(i + 1, j) });
+      i = j + 1;
+      continue;
+    }
+    let j = i;
+    while (j < path.length && path[j] !== '.' && path[j] !== '[') j++;
+    out.push({ key: path.slice(i, j) });
+    i = j;
+  }
+  return out;
+}
+
 // "pages[Details].elements[Priority].required" →
 // "Page “Details” › Element “Priority” › Required".
 export function pathLabel(path: string): string {
   if (path === '(root)' || path === '') return 'Whole item';
+  const segs = pathSegments(path);
   const parts: string[] = [];
-  const re = /\[([^\]]*)\]|([^.[]+)/g;
-  let m: RegExpExecArray | null;
-  let pendingKey: string | null = null;
-  const flush = () => {
-    if (pendingKey !== null) parts.push(/^\d+$/.test(pendingKey) ? `#${Number(pendingKey) + 1}` : humanize(pendingKey));
-    pendingKey = null;
-  };
-  while ((m = re.exec(path))) {
-    if (m[1] !== undefined) {
-      const list = pendingKey;
-      pendingKey = null;
-      parts.push(`${list ? SINGULAR[list] ?? humanize(list) : 'Entry'} “${m[1]}”`);
-    } else {
-      flush();
-      pendingKey = m[2];
+  segs.forEach((seg, i) => {
+    const next = segs[i + 1];
+    if ('name' in seg) {
+      const prev = segs[i - 1];
+      const list = prev && 'key' in prev ? prev.key : null;
+      parts.push(`${list ? SINGULAR[list] ?? humanize(list) : 'Entry'} “${seg.name}”`);
+    } else if (!(next && 'name' in next)) {
+      parts.push(/^\d+$/.test(seg.key) ? `#${Number(seg.key) + 1}` : humanize(seg.key));
     }
-  }
-  flush();
+  });
   return parts.join(' › ');
 }
 
@@ -101,15 +86,16 @@ export interface ThreeWayRow {
   drifted: boolean;
 }
 
-// Rows for a drifted item: everything that changed in the target since the
-// last promotion, and everything the incoming item would change.
-export function threeWayRows(last: unknown, target: unknown, incoming: unknown): ThreeWayRow[] {
+// Rows for a drifted item: what changed in the target since the last
+// promotion (`targetChanges`: last promoted → target now) and what the
+// incoming item would change (`incoming`: target now → incoming).
+export function threeWayRows(targetChanges: DiffEntry[], incoming: DiffEntry[]): ThreeWayRow[] {
   const rows = new Map<string, ThreeWayRow>();
-  for (const d of diffValues(last, target)) rows.set(d.path, { path: d.path, last: d.from, target: d.to, incoming: d.to, drifted: true });
-  for (const d of diffValues(target, incoming)) {
+  for (const d of targetChanges) rows.set(d.path, { path: d.path, last: d.from, target: d.to, incoming: d.to, drifted: true });
+  for (const d of incoming) {
     const row = rows.get(d.path);
     if (row) row.incoming = d.to;
     else rows.set(d.path, { path: d.path, last: d.from, target: d.from, incoming: d.to, drifted: false });
   }
-  return [...rows.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return [...rows.values()].sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
 }

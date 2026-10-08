@@ -57,6 +57,8 @@ export function FieldDiffTable({ diff, from, to }: { diff: DiffEntry[]; from: st
 
 export interface ThreeWayDiffProps {
   threeWay: ThreeWay;
+  // The item's diff: target now → incoming.
+  incoming: DiffEntry[];
   from: string;
   to: string;
   // The decision so far (none until one is made).
@@ -64,9 +66,9 @@ export interface ThreeWayDiffProps {
   onResolve: (r: Resolution) => void;
 }
 
-export function ThreeWayDiff({ threeWay, from, to, resolution, onResolve }: ThreeWayDiffProps) {
+export function ThreeWayDiff({ threeWay, incoming, from, to, resolution, onResolve }: ThreeWayDiffProps) {
   const known = threeWay.lastPromoted !== null && threeWay.lastPromoted !== undefined;
-  const rows = threeWayRows(known ? threeWay.lastPromoted : threeWay.target, threeWay.target, threeWay.incoming);
+  const rows = threeWayRows(known ? threeWay.targetChanges ?? [] : [], incoming);
   const lost = rows.filter((r) => r.drifted).length;
   return (
     <section aria-label="Drift" className="overflow-hidden rounded-xl border border-drift/40 bg-surface">
@@ -108,7 +110,7 @@ export function ThreeWayDiff({ threeWay, from, to, resolution, onResolve }: Thre
               <tr key={r.path} className="align-top">
                 <th scope="row" className="px-4 py-2.5 text-left font-normal text-fg">
                   <span className="block break-words">{pathLabel(r.path)}</span>
-                  {r.drifted && known && <span className="mt-1 inline-flex items-center gap-1 rounded bg-drift-soft px-1.5 py-px text-[11px] font-medium text-drift"><span aria-hidden>!</span>changed in {envLabel(to)}</span>}
+                  {r.drifted && known && <span className="mt-1 inline-flex items-center gap-1 rounded bg-drift-soft px-1.5 py-px text-[11px] font-medium text-drift"><span aria-hidden>⚠</span>changed in {envLabel(to)}</span>}
                 </th>
                 {known && <td className="px-4 py-2.5"><Value value={r.last} /></td>}
                 <td className={cn('px-4 py-2.5', r.drifted && known && 'bg-drift-soft/50')}><Value value={r.target} strong={r.drifted && known} /></td>
