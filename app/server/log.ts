@@ -18,7 +18,11 @@ export function rememberSecrets(values: Iterable<string | null | undefined>): vo
   for (const v of values) if (typeof v === 'string' && v.length >= 4) known.add(v);
 }
 
-export const redact = (text: string): string => makeScrubber(known)(engineText(text));
+// Also tokens in any shape a future error text might carry them: JWTs and
+// access_token=… parameters.
+const JWT = /\beyJ[\w-]+\.[\w-]+\.[\w-]+/g;
+const ACCESS_TOKEN = /(access_token=)[^&\s"']+/gi;
+export const redact = (text: string): string => makeScrubber(known)(engineText(text)).replace(JWT, '[REDACTED]').replace(ACCESS_TOKEN, '$1[REDACTED]');
 
 export interface Logger {
   error(context: string, err: unknown): void;
@@ -111,10 +115,11 @@ export function fileSink(workspace: string, opts: { now?: () => Date; keep?: num
     const target = file();
     try {
       const opened = target !== current;
-      if (opened) mkdirSync(path.dirname(target), { recursive: true });
+      // Only this user may read the logs (modes are ignored on Windows).
+      if (opened) mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
       const at = now().toISOString();
       const stamped = text.replace(/\n$/, '').split('\n').map((l) => `${at} ${l}`).join('\n');
-      appendFileSync(target, `${stamped}\n`);
+      appendFileSync(target, `${stamped}\n`, { mode: 0o600 });
       if (opened) {
         current = target;
         pruneLogs(path.dirname(target), opts.keep ?? KEEP_DAYS);

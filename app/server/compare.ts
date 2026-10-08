@@ -135,8 +135,8 @@ async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
   const sourceOmitted = opts.source.artifacts.omitted ?? [];
   const sourceList = [...opts.source.artifacts].map(([key, data]) => ({ key, data }));
   // Types either side left out (see lib/sync/omitted.mjs), and why.
-  const between = (target: Omission[] | undefined) => omittedBetween([
-    { name: opts.fromName, omitted: sourceOmitted }, { name: displayName(opts.to), omitted: target },
+  const between = (target: Omission[] | undefined, live: boolean) => omittedBetween([
+    { name: opts.fromName, omitted: sourceOmitted }, { name: displayName(opts.to), omitted: target, live },
   ]);
   let omitted = new Set<string>();
   let notes: string[] = [];
@@ -145,7 +145,7 @@ async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
     if (opts.useSnapshots) {
       progress(emit, 1, 2, 'snapshot');
       const target = await loadSnapshot(ref, opts.to);
-      ({ types: omitted, notes } = between(target.artifacts.omitted));
+      ({ types: omitted, notes } = between(target.artifacts.omitted, false));
       const plan = buildPlan({
         modules: MODULES, exported: withoutOmitted(opts.source.artifacts, omitted, typeOf), config: loadConfig(ref.dir),
         target: new Map([...withoutOmitted(target.artifacts, omitted, typeOf)].map(([key, data]) => [key, { key, data }])),
@@ -159,7 +159,7 @@ async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
       const { plan, targetList } = await computePlan({
         projectDir: ref.dir, envName: opts.to, env: env!, sourceArtifacts: sourceList, sourceUnresolved: opts.source.artifacts.unresolved, sourceOmitted, sourceName: opts.from, onEvent, signal, clientFactory: deps.clientFactory,
       });
-      ({ types: omitted, notes } = between(targetList.omitted));
+      ({ types: omitted, notes } = between(targetList.omitted, true));
       items = previewItems(plan);
     }
   } else {
@@ -177,7 +177,7 @@ async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
       right = new Map([...target.artifacts].map(([k, data]) => [k, { data }]));
       targetOmitted = target.artifacts.omitted;
     }
-    ({ types: omitted, notes } = between(targetOmitted));
+    ({ types: omitted, notes } = between(targetOmitted, Boolean(opts.liveTarget)));
     right = withoutOmitted(right, omitted, typeOf);
     progress(emit, 2, 3, 'target');
     const left = withoutOmitted(new Map(sourceList.map((a) => [a.key, { data: a.data }])), omitted, typeOf);

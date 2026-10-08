@@ -1,7 +1,7 @@
 // Logger: unexpected errors reach stderr (redacted); clients get a generic body.
 import { test, after, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { PlanResult } from '../shared/sync-api.ts';
@@ -136,4 +136,28 @@ test('secrets given to the server (password, handler secret for one run, tokens)
   for (const secret of [PLANTED_PASSWORD, PLANTED_RUN, TOKEN]) assert.ok(!text.includes(secret), `${secret} reached the log file:\n${text}`);
   const session = (await h.call('GET', '/api/session')).json;
   assert.equal(session.logFile, logger.file!());
+});
+
+test('the log folder and files are private to this user, and JWTs or access_token parameters are masked', { skip: process.platform === 'win32' }, () => {
+  const ws = mkdtempSync(path.join(tmpdir(), 'km-log-mode-'));
+  const logger = workspaceLogger(ws, { stderr: () => {} });
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl';
+  logger.error('ctx', new Error(`redirect https://x/#access_token=tok-123abc&expires_in=1 and ${jwt}`));
+  assert.equal(statSync(logDir(ws)).mode & 0o777, 0o700);
+  const file = logger.file!()!;
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  const text = readFileSync(file, 'utf8');
+  assert.ok(!text.includes('tok-123abc') && !text.includes(jwt), text);
+  assert.match(text, /access_token=\[REDACTED\]&expires_in=1/);
+});
+
+test('a secret saved through Settings is masked in the log from then on', async (t) => {
+  const SAVED = 'Saved-Password-r5Tn77';
+  const lines: string[] = [];
+  const h = await harness(t, { dev: true, test: false, prod: true }, { logger: createLogger((x) => lines.push(x)) });
+  await h.call('PUT', `${P}/environments/test/credentials`, { password: SAVED });
+  h.server.router.get('/api/test-saved-boom', () => { throw new Error(`boom ${SAVED}`); });
+  await h.call('GET', '/api/test-saved-boom');
+  assert.ok(lines.some((l) => l.includes('boom')));
+  assert.ok(!lines.join('').includes(SAVED));
 });

@@ -4,7 +4,7 @@
 // when its body has them (names, not values; redacted and capped). URLs and
 // the rest of the body stay server-side.
 import type { ApiErrorBody } from '../shared/api.ts';
-import { describePlatformError, integratorAuthText } from './engine-sync.ts';
+import { describePlatformError, integratorAuthText, integratorSignInText } from './engine-sync.ts';
 
 export class ApiError extends Error {
   status: number;
@@ -37,9 +37,13 @@ export function toApiError(err: unknown): ApiError {
       return new ApiError(403, 'read_only', 'This environment is read-only.');
     case 'IntegratorAuthUnavailable': {
       // Rebuilt from its fields (never its message), worded as the snapshot warning.
-      const i = err as { status?: number | null; version?: string | null; host?: string | null; unsupported?: boolean };
-      const text = integratorAuthText({ status: i.status, version: i.version, host: i.host, unsupported: i.unsupported });
+      const i = err as { status?: number | null; version?: string | null; host?: string | null };
+      const text = integratorAuthText({ status: i.status, version: i.version, host: i.host });
       return new ApiError(502, 'integrator_unavailable', `Connections and operations were left out: ${text}`);
+    }
+    case 'IntegratorSignInFailed': {
+      const i = err as { status?: number | null; redirected?: boolean };
+      return new ApiError(502, 'integrator_sign_in', integratorSignInText({ status: typeof i.status === 'number' ? i.status : null, redirected: i.redirected === true }));
     }
     case 'HttpError':
       return new ApiError(502, 'upstream_error', describePlatformError({ status: e.status, method: e.method, body: e.body }));

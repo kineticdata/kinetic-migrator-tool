@@ -78,8 +78,10 @@ export interface EnginePlan {
   removals: EngineRemoval[];
   errors: string[];
   warnings: string[];
-  // Types left out of the plan because either side's export left them out.
+  // Types left out of the plan because either side's export left them out,
+  // and by which side, why.
   omitted?: string[];
+  omissions?: Array<{ name: string; live: boolean; message: string; types: string[] }>;
 }
 
 // What a caller knows about the target beyond its export (see lib/sync/artifacts/handlers.mjs).
@@ -139,7 +141,7 @@ export const rekeyTree: (raw: Map<string, unknown>, layout: number, omitted?: Om
 // What an export left out and why (see lib/sync/omitted.mjs).
 export interface Omission { types: string[]; reason: string; status: number | null; version: string | null; message: string }
 export const markerOmitted: (text: string | undefined) => Omission[] = omittedModule.markerOmitted;
-export const omittedBetween: (sides: Array<{ name?: string; omitted?: Omission[] }>) => { types: Set<string>; notes: string[] } = omittedModule.omittedBetween;
+export const omittedBetween: (sides: Array<{ name?: string; omitted?: Omission[]; live?: boolean }>) => { types: Set<string>; notes: string[]; by: Array<{ name: string; live: boolean; message: string; types: string[] }> } = omittedModule.omittedBetween;
 export const withoutOmitted: <M extends Map<string, any>>(map: M, types: Set<string>, typeOf?: (key: string) => string | undefined) => M = omittedModule.withoutOmitted;
 export const isOmittedKey: (key: string, types: Set<string>, typeOf?: (key: string) => string | undefined) => boolean = omittedModule.isOmittedKey;
 export const omissionWarning: (o: Omission) => string = omittedModule.omissionWarning;
@@ -176,7 +178,9 @@ export const isSecretProperty: (p: unknown) => boolean = secretsModule.isSecretP
 export const describePlatformError: (e: { status?: number; method?: string; body?: unknown }) => string = httpModule.describePlatformError;
 // Why the Integrator could not be signed in to, in plain words (built from
 // the status, platform version and host only).
-export const integratorAuthText: (e: { status?: number | null; version?: string | null; host?: string | null; unsupported?: boolean }) => string = httpModule.integratorAuthText;
+export const integratorAuthText: (e: { status?: number | null; version?: string | null; host?: string | null }) => string = httpModule.integratorAuthText;
+// A refused or failed Integrator sign-in (never degrades), in plain words.
+export const integratorSignInText: (e: { status?: number | null; redirected?: boolean }) => string = httpModule.integratorSignInText;
 export const describeFailureMessage: (message: unknown) => string | null = httpModule.describeFailureMessage;
 // Required handler properties that would be empty after apply (see lib/sync/artifacts/handlers.mjs).
 export const missingRequired: (desired: unknown, existing: TargetArtifact | null, has: (name: string) => boolean, hints?: EngineHints['handlers']) => string[] = handlersModule.missingRequired;

@@ -92,8 +92,9 @@ export interface Call { env: string; method: string; path: string; body?: unknow
 export const FALLBACK = Symbol('fallback');
 
 // Environments named in `integratorDown` answer the Integrator sign-in with
-// 404, as Kinetic Platform 7.0.0-rc3 does.
-export function fakeFactory(spaces: Record<string, () => Record<string, unknown>>, calls: Call[], envs: EngineEnv[] = [], integratorDown: Set<string> = new Set()): ClientFactory {
+// 404, as Kinetic Platform 7.0.0-rc3 does; `integratorErrors` gives an
+// environment's Integrator calls any other error (a refused sign-in).
+export function fakeFactory(spaces: Record<string, () => Record<string, unknown>>, calls: Call[], envs: EngineEnv[] = [], integratorDown: Set<string> = new Set(), integratorErrors: Map<string, Error> = new Map()): ClientFactory {
   return ({ env, mode }) => {
     envs.push(env);
     if (mode === 'write' && env.readOnly) {
@@ -105,7 +106,7 @@ export function fakeFactory(spaces: Record<string, () => Record<string, unknown>
     if (!routes) throw new Error(`no fake space for ${env.name}`);
     const recorded: Array<Omit<Call, 'env'>> = [];
     const { [FALLBACK]: fallback, ...table } = routes() as Record<string | symbol, unknown>;
-    const integratorAuth = integratorDown.has(env.name) ? integratorAuthUnavailable({ host: new URL(env.url).host }) : undefined;
+    const integratorAuth = integratorErrors.get(env.name) ?? (integratorDown.has(env.name) ? integratorAuthUnavailable({ host: new URL(env.url).host }) : undefined);
     const client = fakeClient(table, { mode, calls: recorded, fallback, integratorAuth });
     const push = recorded.push.bind(recorded);
     recorded.push = (...items: Array<Omit<Call, 'env'>>) => {
@@ -126,6 +127,8 @@ export interface Harness {
   envs: EngineEnv[];
   // Environments whose Integrator sign-in answers 404 (add or remove any time).
   integratorDown: Set<string>;
+  // Environments whose Integrator calls throw the given error.
+  integratorErrors: Map<string, Error>;
   // Text the server logged.
   logged: string[];
   bodies: string[];
@@ -145,7 +148,8 @@ export async function harness(t: { after: (fn: () => Promise<void> | void) => vo
   const logged: string[] = [];
   const logger: Logger = { error: (context, err) => logged.push(formatError(context, err)) };
   const integratorDown = new Set<string>();
-  const server = await startTestServer({ secrets: store, clientFactory: fakeFactory(spaces, calls, seen, integratorDown), logger, ...opts });
+  const integratorErrors = new Map<string, Error>();
+  const server = await startTestServer({ secrets: store, clientFactory: fakeFactory(spaces, calls, seen, integratorDown, integratorErrors), logger, ...opts });
   t.after(() => server.cleanup());
   const bodies: string[] = [];
   const call = async (method: string, pathname: string, body?: unknown) => {
@@ -175,7 +179,7 @@ export async function harness(t: { after: (fn: () => Promise<void> | void) => vo
     await call('PUT', `/api/projects/sync-test/environments/${name}/credentials`, { username: 'admin', password: PLANTED });
   }
   const writes = (env?: string) => calls.filter((c) => c.method !== 'GET' && (!env || c.env === env)).map((c) => `${c.method} ${c.path}`);
-  return { server, store, calls, spaces, envs: seen, integratorDown, logged, bodies, dir, call, job, writes };
+  return { server, store, calls, spaces, envs: seen, integratorDown, integratorErrors, logged, bodies, dir, call, job, writes };
 }
 
 export function assertNoSecret(h: Harness, extra: string[] = []): void {

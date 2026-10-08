@@ -14,6 +14,8 @@ import { eventsFor } from './history.ts';
 import { commitMessage } from './trailers.ts';
 // @ts-expect-error -- untyped engine module
 import { integratorAuthUnavailable } from '../../lib/sync/fake-client.mjs';
+// @ts-expect-error -- untyped engine module
+import { IntegratorSignInFailed } from '../../lib/sync/http.mjs';
 import { assertNoSecret, devRoutes, harness, type Harness } from './sync-fixtures.ts';
 
 const P = '/api/projects/sync-test';
@@ -80,7 +82,8 @@ test('compare into a target without connections: none are new, a note says why, 
     assert.equal(r.counts.new, 1, `${label}: only the handler is new (${JSON.stringify(r.counts)})`);
     assert.deepEqual(await connectionNodes(h, r), [], label);
     assert.equal(r.notes?.length, 1, label);
-    assert.match(r.notes![0], /^Connections and operations are left out of this comparison: Test has none recorded\. test\.example\.com runs Kinetic Platform 7\.0\.0-rc3/);
+    const what = (body as { useSnapshots?: boolean }).useSnapshots || body.mode === 'raw' ? "Test's snapshot has none recorded" : "Test's connections couldn't be read";
+    assert.equal(r.notes![0].startsWith(`Connections and operations are left out of this comparison: ${what}. test.example.com runs Kinetic Platform 7.0.0-rc3`), true, r.notes![0]);
     const sug = (await h.call('POST', `${P}/compare/${r.compareId}/suggestions`, { selected: [FORM] })).json as SuggestionOut[];
     assert.deepEqual(sug.map((s) => [s.key, s.unchecked]), [[CONN, true], [OP, true]], label);
     assert.match(sug.find((s) => s.key === OP)!.reason, /calls operation "Create Ticket".*; it couldn't be checked, because connections and operations were left out of this comparison$/);
@@ -99,7 +102,7 @@ test('a source snapshot without connections never shows the target\'s connection
     const r = await compare(h, body);
     assert.equal(r.counts['only-target'] ?? 0, 0, JSON.stringify(body));
     assert.deepEqual(await connectionNodes(h, r), []);
-    assert.match(r.notes?.[0] ?? '', /Dev has none recorded/);
+    assert.match(r.notes?.[0] ?? '', /Dev's snapshot has none recorded/);
   }
 });
 
@@ -113,7 +116,7 @@ test('a plan into a target without connections has no connection items or errors
   assert.equal(plan.items.some((i) => i.key.startsWith('connections/')), false);
   assert.equal(plan.removals.length, 0);
   assert.deepEqual(plan.errors, []);
-  assert.ok(plan.warnings.some((w) => /left out of this comparison: test has none recorded/.test(w)), JSON.stringify(plan.warnings));
+  assert.ok(plan.warnings.some((w) => /left out of this comparison: test's connections couldn't be read/.test(w)), JSON.stringify(plan.warnings));
   assert.ok(plan.warnings.some((w) => /couldn't be checked, because connections were left out: kapps\/services\/forms\/it-request\/form/.test(w)));
   assert.ok(plan.items.some((i) => i.key === FORM && i.action === 'update'));
 });
@@ -144,4 +147,68 @@ test('History reads drift and the not-captured note from one snapshot commit bod
   assert.deepEqual(snap.drifted, ['teams/Ops']);
   assert.deepEqual(snap.notes, [`Connections and operations weren't captured in this snapshot: ${WHY}`]);
   assert.equal(drift.type, 'drift');
+});
+
+async function changesetRun(h: Harness, integratorBackAtApply: boolean) {
+  await snapshot(h, 'dev');
+  const cs = await h.call('POST', `${P}/changesets`, { name: 'Ticketing', from: 'dev', keys: [CONN, OP, 'teams/Ops'] });
+  assert.equal(cs.status, 201, cs.body);
+  h.integratorDown.add('test');
+  const planned = await h.job('POST', `${P}/plans`, { to: 'test', changesetId: cs.json.id });
+  assert.equal(planned.status, 'succeeded', JSON.stringify(planned.error));
+  const p = planned.result as PlanResult;
+  assert.deepEqual(p.errors, []);
+  if (integratorBackAtApply) h.integratorDown.delete('test');
+  const applied = await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: p.needsAttention.map((n) => n.id), confirm: 'test' });
+  assert.equal(applied.status, 'succeeded', JSON.stringify(applied.error));
+  const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${applied.result.runId}.json`), 'utf8'));
+  const changeset = (await h.call('GET', `${P}/changesets/${cs.json.id}`)).json;
+  return { result: applied.result, run, changeset };
+}
+
+test('a changeset whose connection items were left out runs partial, reports them skipped with why, and is not recorded as applied', async (t) => {
+  const h = await harness(t);
+  const { result, run, changeset } = await changesetRun(h, false);
+  assert.equal(result.status, 'partial');
+  for (const k of [CONN, OP]) {
+    const o = run.items.find((i: { key: string }) => i.key === k);
+    assert.equal(o?.status, 'skipped', k);
+    assert.equal(o?.message, `Not applied: Test's connections couldn't be read — ${WHY}`);
+  }
+  assert.ok(h.writes('test').some((w) => w.includes('/teams')), JSON.stringify(h.writes('test')));
+  assert.deepEqual(changeset.appliedTo, []);
+});
+
+test('items left out at plan time are never written unreviewed, even when the Integrator is back at apply', async (t) => {
+  const h = await harness(t);
+  const { result } = await changesetRun(h, true);
+  assert.equal(result.status, 'partial');
+  assert.equal(h.calls.some((c) => c.env === 'test' && c.api === 'integrator' && c.method !== 'GET'), false);
+});
+
+test('a removal of a connection is refused when the newest source snapshot left connections out', async (t) => {
+  const h = await harness(t);
+  h.spaces.test = devRoutes; // Test has the connection; it is to be removed
+  await snapshot(h, 'dev');
+  const pinned = (await log(h.dir, { limit: 1 }))[0].oid;
+  // A newer snapshot of Dev that could not read connections.
+  h.spaces.dev = () => ({ ...devRoutes(), 'GET core/teams': { teams: [] } });
+  h.integratorDown.add('dev');
+  await snapshot(h, 'dev');
+  const job = await h.job('POST', `${P}/plans`, { to: 'test', from: 'dev', sourceCommit: pinned, selected: [], remove: [CONN] });
+  assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
+  const plan = job.result as PlanResult;
+  assert.deepEqual(plan.removals, []);
+  assert.ok(plan.errors.includes(`${CONN}: not removed — couldn't check Dev's connections: dev.example.com runs Kinetic Platform 7.0.0-rc3, which doesn't offer the sign-in this tool uses for the Integrator yet.`), JSON.stringify(plan.errors));
+});
+
+test('a refused Integrator sign-in fails the snapshot loudly, and Test connection says to check the credentials', async (t) => {
+  const h = await harness(t);
+  h.integratorErrors.set('test', new IntegratorSignInFailed({ status: 401 }));
+  const job = await h.job('POST', `${P}/snapshots`, { env: 'test' });
+  assert.equal(job.status, 'failed');
+  assert.deepEqual(job.error, { code: 'integrator_sign_in', message: 'The Integrator rejected the sign-in (401): check the username and password.' });
+  h.spaces.test = () => ({ ...devRoutes(), 'GET core/me': { username: 'admin' } });
+  const r = (await h.call('POST', `${P}/environments/test/test`)).json as ConnectionTestResult;
+  assert.equal(r.steps.find((s) => s.step === 'integrator')!.message, 'The Integrator rejected the sign-in (401): check the username and password.');
 });
