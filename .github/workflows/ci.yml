@@ -39,6 +39,11 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:app
+      # Also inside test:app; run on its own so a Credential Manager failure
+      # is easy to spot. Real CredWrite/CredRead through the PowerShell helper.
+      - name: Windows Credential Manager round-trip (real keychain)
+        if: runner.os == 'Windows'
+        run: node --import tsx --test app/server/secrets-windows-real.test.ts
       - run: npm run build
       - name: Smoke test the built app (fake mode)
         run: npm run smoke

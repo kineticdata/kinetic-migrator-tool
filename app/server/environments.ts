@@ -159,10 +159,13 @@ async function writeIndex(store: SecretStore, sid: string, env: string, names: s
 export async function setEnvSecret(store: SecretStore, ref: ProjectRef, env: string, scope: SecretScope, name: string, value: string): Promise<void> {
   const sid = await secretsId(ref);
   await withSecretsLock(ref, async () => {
-    await store.set(accountFor(sid, env, scope, name), value);
+    // Index first: a value that fails to store leaves at most an index entry
+    // for nothing, never a stored secret no index lists (which deleting the
+    // environment could not find).
     const entry = `${scope}/${name}`;
     const index = await readIndex(store, sid, env);
     if (!index.includes(entry)) await writeIndex(store, sid, env, [...index, entry]);
+    await store.set(accountFor(sid, env, scope, name), value);
   });
 }
 

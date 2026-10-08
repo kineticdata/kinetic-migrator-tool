@@ -3,6 +3,7 @@
 // Values are passed to keychain tools on stdin (never argv), are never logged,
 // and keychain errors never include tool output (it can echo the input).
 import { execFile } from 'node:child_process';
+import { PowerShellHelper, WinCredentials } from './secrets-windows.ts';
 
 export interface SecretStore {
   get(account: string): Promise<string | undefined>;
@@ -11,6 +12,8 @@ export interface SecretStore {
   has(account: string): Promise<boolean>;
   // True when backed by the OS keychain rather than session memory.
   readonly persistent?: boolean;
+  // Stops any helper process the store runs.
+  close?(): void;
 }
 
 export const SERVICE = 'kinetic-migrate';
@@ -68,115 +71,18 @@ class KeychainError extends Error {
 // `security -i` reads commands from stdin; arguments are double-quoted.
 const quoteForSecurity = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
-// Windows: generic credentials in the Windows Credential Manager (target
-// `kinetic-migrate:<account>`), through CredWriteW / CredReadW / CredDeleteW
-// in advapi32 called from the built-in Windows PowerShell 5.1 (Add-Type
-// compiles the small P/Invoke class with the .NET Framework that ships with
-// Windows 10 and 11; no module or download). Persisted per user on this
-// machine (CRED_PERSIST_LOCAL_MACHINE: never roamed). Not the WinRT
-// PasswordVault: it holds at most 20 credentials per app and roams them with
-// a Microsoft account.
-//
-// The script is fixed and passed with -EncodedCommand (UTF-16LE base64), so no
-// quoting rules apply. The request ({ op, target, account, value }) goes on
-// stdin as one line of ASCII-only JSON (non-ASCII as \u escapes), so the
-// console code page cannot change it; the value is `b64:` + base64 anyway.
-// stdout carries only the stored ASCII value. Exit codes: 0 ok, 44 not found
-// (as macOS `security`), 1 any other failure.
-export const WIN_TARGET_PREFIX = `${SERVICE}:`;
-// CRED_MAX_CREDENTIAL_BLOB_SIZE: the stored (encoded) value, in bytes.
-export const WIN_MAX_STORED = 5 * 512;
-
-export const WIN_SCRIPT = String.raw`$ErrorActionPreference = 'Stop'
-trap { exit 1 }
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
-public static class KineticMigrateCred {
-  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-  struct CREDENTIAL {
-    public int Flags; public int Type; public string TargetName; public string Comment;
-    public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
-    public int CredentialBlobSize; public IntPtr CredentialBlob; public int Persist;
-    public int AttributeCount; public IntPtr Attributes; public string TargetAlias; public string UserName;
-  }
-  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-  static extern bool CredWriteW(ref CREDENTIAL credential, int flags);
-  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-  static extern bool CredReadW(string target, int type, int flags, out IntPtr credential);
-  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-  static extern bool CredDeleteW(string target, int type, int flags);
-  [DllImport("advapi32.dll")]
-  static extern void CredFree(IntPtr buffer);
-  public static int LastError;
-  public static int Write(string target, string user, string value) {
-    byte[] bytes = Encoding.UTF8.GetBytes(value);
-    CREDENTIAL c = new CREDENTIAL();
-    c.Type = 1; c.TargetName = target; c.UserName = user; c.Persist = 2;
-    c.CredentialBlobSize = bytes.Length;
-    c.CredentialBlob = Marshal.AllocHGlobal(Math.Max(bytes.Length, 1));
-    try {
-      Marshal.Copy(bytes, 0, c.CredentialBlob, bytes.Length);
-      return CredWriteW(ref c, 0) ? 0 : Marshal.GetLastWin32Error();
-    } finally {
-      Marshal.FreeHGlobal(c.CredentialBlob);
-    }
-  }
-  public static string Read(string target) {
-    IntPtr p;
-    LastError = 0;
-    if (!CredReadW(target, 1, 0, out p)) { LastError = Marshal.GetLastWin32Error(); return null; }
-    try {
-      CREDENTIAL c = (CREDENTIAL)Marshal.PtrToStructure(p, typeof(CREDENTIAL));
-      byte[] bytes = new byte[c.CredentialBlobSize];
-      if (bytes.Length > 0) Marshal.Copy(c.CredentialBlob, bytes, 0, bytes.Length);
-      return Encoding.UTF8.GetString(bytes);
-    } finally {
-      CredFree(p);
-    }
-  }
-  public static int Delete(string target) {
-    return CredDeleteW(target, 1, 0) ? 0 : Marshal.GetLastWin32Error();
-  }
-}
-'@
-$req = [Console]::In.ReadToEnd() | ConvertFrom-Json
-switch ($req.op) {
-  'probe' { [void][KineticMigrateCred]::Read($req.target); if ([KineticMigrateCred]::LastError -eq 0 -or [KineticMigrateCred]::LastError -eq 1168) { exit 0 }; exit 1 }
-  'set' { if ([KineticMigrateCred]::Write($req.target, $req.account, $req.value) -eq 0) { exit 0 }; exit 1 }
-  'get' {
-    $v = [KineticMigrateCred]::Read($req.target)
-    if ($null -eq $v) { if ([KineticMigrateCred]::LastError -eq 1168) { exit 44 }; exit 1 }
-    [Console]::Out.Write($v); exit 0
-  }
-  'delete' { $e = [KineticMigrateCred]::Delete($req.target); if ($e -eq 0) { exit 0 }; if ($e -eq 1168) { exit 44 }; exit 1 }
-}
-exit 1`;
-
-export const winPowerShell = (env: Record<string, string | undefined> = process.env): string => {
-  // The system copy by full path: a powershell.exe earlier on PATH (or in the
-  // current folder) is never run.
-  const root = env.SystemRoot ?? env.SYSTEMROOT;
-  return root ? `${root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : 'powershell.exe';
-};
-
-export const winArgs = (): string[] => [
-  '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(WIN_SCRIPT, 'utf16le').toString('base64'),
-];
-
-// JSON with every non-ASCII character as a \u escape.
-export const asciiJson = (value: unknown): string => JSON.stringify(value).replace(/[\u0080-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
-
-// PowerShell output may carry a byte-order mark or a trailing newline.
-const cleanOutput = (s: string) => s.replace(/^﻿/, '').replace(/\r?\n$/, '');
+// Windows: see secrets-windows.ts (Credential Manager through one long-lived
+// PowerShell helper, values split into parts past the 2560-byte limit).
+export { WIN_HELPER_SCRIPT, WIN_PART_CHARS, asciiJson, winArgs, winPowerShell } from './secrets-windows.ts';
 
 export interface KeychainOptions {
   platform?: NodeJS.Platform | string;
   run?: CommandRunner;
   service?: string;
-  // Windows: the powershell.exe to run (defaults to the system copy).
+  // Windows: the powershell.exe to run (defaults to the system copy), or a
+  // helper to use instead of starting one (tests).
   powershell?: string;
+  winHelper?: Pick<PowerShellHelper, 'request'> & { close?: () => void };
 }
 
 export class KeychainStore implements SecretStore {
@@ -184,20 +90,35 @@ export class KeychainStore implements SecretStore {
   private platform: string;
   private run: CommandRunner;
   private service: string;
-  private powershell: string;
+  private helper: (Pick<PowerShellHelper, 'request'> & { close?: () => void }) | null = null;
+  private winOpts: KeychainOptions;
+  private winStore: WinCredentials | null = null;
 
   constructor(opts: KeychainOptions = {}) {
     this.platform = opts.platform ?? process.platform;
     this.run = opts.run ?? execFileRunner;
     this.service = opts.service ?? SERVICE;
-    this.powershell = opts.powershell ?? winPowerShell();
+    this.winOpts = opts;
   }
 
-  private win(op: 'probe' | 'set' | 'get' | 'delete', account: string, value?: string): Promise<CommandResult> {
-    const target = `${this.service}:${account}`;
-    // The user name is only a label in Credential Manager (at most 513 characters).
-    const req = { op, target, account: account.slice(0, 256), ...(value === undefined ? {} : { value }) };
-    return this.run(this.powershell, winArgs(), asciiJson(req));
+  // Windows: the helper is started on first use and kept for the server's life.
+  private get win(): WinCredentials {
+    if (!this.winStore) {
+      this.helper = this.winOpts.winHelper ?? new PowerShellHelper({ powershell: this.winOpts.powershell });
+      this.winStore = new WinCredentials(this.helper, this.service);
+    }
+    return this.winStore;
+  }
+
+  close(): void {
+    this.helper?.close?.();
+  }
+
+  // 'timeout' (Windows only): the helper is still starting (a slow first
+  // compile), which is not the same as no keychain.
+  async availability(): Promise<'available' | 'unavailable' | 'timeout'> {
+    if (this.platform === 'win32') return this.win.probe();
+    return (await this.available()) ? 'available' : 'unavailable';
   }
 
   async available(): Promise<boolean> {
@@ -212,8 +133,8 @@ export class KeychainStore implements SecretStore {
         }
         // Compiles the helper and reads a credential that does not exist: fails
         // where Credential Manager is unusable (no user profile loaded, as in
-        // some service or remote sessions).
-        case 'win32': return (await this.win('probe', `${this.service}-probe`)).code === 0;
+        // some service or remote sessions, or PowerShell locked down).
+        case 'win32': return (await this.win.probe()) === 'available';
         default: return false;
       }
     } catch {
@@ -239,9 +160,8 @@ export class KeychainStore implements SecretStore {
         r = await this.run('secret-tool', ['store', `--label=${this.service} ${account}`, 'service', this.service, 'account', account], value);
         break;
       case 'win32':
-        if (Buffer.byteLength(value) > WIN_MAX_STORED) throw new Error('This secret is too long for Windows Credential Manager.');
-        r = await this.win('set', account, value);
-        break;
+        await this.win.set(account, value);
+        return;
       default:
         throw new Error('No system keychain on this platform.');
     }
@@ -263,17 +183,21 @@ export class KeychainStore implements SecretStore {
         // An empty lookup (exit 0 or 1, no output at all) is "not found".
         if ((r.code === 0 || r.code === 1) && r.stdout === '' && r.stderr.trim() === '') return undefined;
         throw new KeychainError('read', r.code);
-      case 'win32':
-        r = await this.win('get', account);
-        if (r.code === NOT_FOUND) return undefined;
-        if (r.code !== 0) throw new KeychainError('read', r.code);
-        return decodeStored(cleanOutput(r.stdout));
+      case 'win32': {
+        const stored = await this.win.get(account);
+        if (stored === undefined) return undefined;
+        // Windows never stored values before the b64: marker: anything else
+        // is not a value of ours.
+        if (!/^b64:[A-Za-z0-9+/=]*$/.test(stored)) throw new KeychainError('read', 1);
+        return decodeStored(stored);
+      }
       default:
         throw new Error('No system keychain on this platform.');
     }
   }
 
   async has(account: string): Promise<boolean> {
+    if (this.platform === 'win32') return this.win.has(account);
     if (this.platform === 'darwin') {
       const r = await this.run('security', ['find-generic-password', '-s', this.service, '-a', account]);
       if (r.code === NOT_FOUND) return false;
@@ -296,8 +220,7 @@ export class KeychainStore implements SecretStore {
         if (r.code !== 0 && !(r.code === 1 && r.stderr.trim() === '')) throw new KeychainError('delete', r.code);
         return;
       case 'win32':
-        r = await this.win('delete', account);
-        if (r.code !== 0 && r.code !== NOT_FOUND) throw new KeychainError('delete', r.code);
+        await this.win.delete(account);
         return;
       default:
         throw new Error('No system keychain on this platform.');
@@ -305,8 +228,19 @@ export class KeychainStore implements SecretStore {
   }
 }
 
-// The OS keychain when its tool works, otherwise session memory.
-export async function createDefaultStore(): Promise<SecretStore> {
-  const keychain = new KeychainStore();
-  return (await keychain.available()) ? keychain : new MemoryStore();
+// The OS keychain when its tool works, otherwise session memory. A Windows
+// helper that is only slow to start (a cold compile) keeps the keychain: each
+// operation starts it again with the same generous limit. `log` hears which
+// way it went (never a secret).
+export async function createDefaultStore(log: (message: string) => void = () => {}, opts: KeychainOptions = {}): Promise<SecretStore> {
+  const keychain = new KeychainStore(opts);
+  const state = await keychain.availability();
+  if (state === 'available') return keychain;
+  if (state === 'timeout') {
+    log('The Windows Credential Manager helper is slow to start; secrets still go to Credential Manager once it is ready.');
+    return keychain;
+  }
+  keychain.close();
+  log('The system keychain is not available; secrets are kept in memory until the server stops.');
+  return new MemoryStore();
 }

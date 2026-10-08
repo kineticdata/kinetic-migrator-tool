@@ -72,13 +72,17 @@ Ubuntu with Node 20 and 22.
 - Secrets are stored in **Windows Credential Manager** (Control Panel →
   Credential Manager → Windows Credentials, entries named
   `kinetic-migrate:…`), saved for your user on this computer and never
-  roamed. kinetic-migrate talks to it through the built-in Windows
-  PowerShell 5.1 (`%SystemRoot%\System32\WindowsPowerShell\v1.0`); nothing
-  to install. Each secret operation starts PowerShell, so it takes about a
-  second. Where Credential Manager cannot be used (for example some remote or
-  service sessions, or PowerShell blocked by policy), secrets are kept in
-  memory until the server stops and the app says so; they are never written
-  to disk in plain text. A single secret can be up to about 1.9 KB.
+  roamed. kinetic-migrate talks to it through one helper process running
+  the built-in Windows PowerShell 5.1
+  (`%SystemRoot%\System32\WindowsPowerShell\v1.0`), started on first use
+  and kept for as long as the app runs; nothing to install. Its first start
+  compiles a small helper and can take several seconds (longer under some
+  antivirus); later operations are quick. Secrets of any size are stored
+  (values longer than one Credential Manager entry holds are split across
+  `…#1`, `…#2` entries). Where Credential Manager cannot be used (for example
+  some remote or service sessions, or PowerShell blocked by policy), secrets
+  are kept in memory until the server stops and the app says so; they are
+  never written to disk in plain text.
 - The default workspace is `%USERPROFILE%\KineticMigrate` (not Documents,
   which OneDrive often syncs). Avoid putting the workspace in a OneDrive,
   Dropbox or other synced folder: syncing locks files mid-write. The app

@@ -85,7 +85,7 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
   const workspace = path.resolve(opts.workspace);
   // Fake mode only fills in what the caller did not inject.
   const fake = opts.clientFactory || opts.secrets ? undefined : fakeMode(opts.fake ? { KINETIC_MIGRATE_FAKE: '1' } : process.env);
-  const secrets = opts.secrets ?? fake?.secrets ?? await createDefaultStore();
+  const secrets = opts.secrets ?? fake?.secrets ?? await createDefaultStore((m) => process.stderr.write(`[kinetic-migrate] ${m}\n`));
   const clientFactory = opts.clientFactory ?? fake?.clientFactory;
   // Built bundle: dist/server.mjs serves dist/web next to itself.
   const webDir = opts.webDir ?? defaultWebDir();
@@ -110,6 +110,7 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
     router,
     close: () => new Promise<void>((resolve, reject) => {
       jobs.abortAll();
+      (secrets as SecretStore).close?.();
       server.closeAllConnections();
       server.close((err) => (err ? reject(err) : resolve()));
     }),
