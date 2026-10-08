@@ -68,31 +68,115 @@ class KeychainError extends Error {
 // `security -i` reads commands from stdin; arguments are double-quoted.
 const quoteForSecurity = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
-const PS_PRELUDE = [
-  "$ErrorActionPreference = 'Stop'",
-  '[void][Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime]',
-  '$vault = New-Object Windows.Security.Credentials.PasswordVault',
-  '$in = [Console]::In.ReadToEnd() | ConvertFrom-Json',
-  `$resource = '${SERVICE}'`,
-].join('; ');
+// Windows: generic credentials in the Windows Credential Manager (target
+// `kinetic-migrate:<account>`), through CredWriteW / CredReadW / CredDeleteW
+// in advapi32 called from the built-in Windows PowerShell 5.1 (Add-Type
+// compiles the small P/Invoke class with the .NET Framework that ships with
+// Windows 10 and 11; no module or download). Persisted per user on this
+// machine (CRED_PERSIST_LOCAL_MACHINE: never roamed). Not the WinRT
+// PasswordVault: it holds at most 20 credentials per app and roams them with
+// a Microsoft account.
+//
+// The script is fixed and passed with -EncodedCommand (UTF-16LE base64), so no
+// quoting rules apply. The request ({ op, target, account, value }) goes on
+// stdin as one line of ASCII-only JSON (non-ASCII as \u escapes), so the
+// console code page cannot change it; the value is `b64:` + base64 anyway.
+// stdout carries only the stored ASCII value. Exit codes: 0 ok, 44 not found
+// (as macOS `security`), 1 any other failure.
+export const WIN_TARGET_PREFIX = `${SERVICE}:`;
+// CRED_MAX_CREDENTIAL_BLOB_SIZE: the stored (encoded) value, in bytes.
+export const WIN_MAX_STORED = 5 * 512;
 
-// Retrieve into $c; exit 44 only for "Element not found" (0x80070490),
-// exit 1 for any other failure.
-const PS_RETRIEVE = 'try { $c = $vault.Retrieve($resource, $in.account) } catch { $e = $_.Exception; while ($e) { if ($e.HResult -eq -2147023728) { exit 44 }; $e = $e.InnerException }; exit 1 }';
+export const WIN_SCRIPT = String.raw`$ErrorActionPreference = 'Stop'
+trap { exit 1 }
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class KineticMigrateCred {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  struct CREDENTIAL {
+    public int Flags; public int Type; public string TargetName; public string Comment;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+    public int CredentialBlobSize; public IntPtr CredentialBlob; public int Persist;
+    public int AttributeCount; public IntPtr Attributes; public string TargetAlias; public string UserName;
+  }
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool CredWriteW(ref CREDENTIAL credential, int flags);
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool CredReadW(string target, int type, int flags, out IntPtr credential);
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool CredDeleteW(string target, int type, int flags);
+  [DllImport("advapi32.dll")]
+  static extern void CredFree(IntPtr buffer);
+  public static int LastError;
+  public static int Write(string target, string user, string value) {
+    byte[] bytes = Encoding.UTF8.GetBytes(value);
+    CREDENTIAL c = new CREDENTIAL();
+    c.Type = 1; c.TargetName = target; c.UserName = user; c.Persist = 2;
+    c.CredentialBlobSize = bytes.Length;
+    c.CredentialBlob = Marshal.AllocHGlobal(Math.Max(bytes.Length, 1));
+    try {
+      Marshal.Copy(bytes, 0, c.CredentialBlob, bytes.Length);
+      return CredWriteW(ref c, 0) ? 0 : Marshal.GetLastWin32Error();
+    } finally {
+      Marshal.FreeHGlobal(c.CredentialBlob);
+    }
+  }
+  public static string Read(string target) {
+    IntPtr p;
+    LastError = 0;
+    if (!CredReadW(target, 1, 0, out p)) { LastError = Marshal.GetLastWin32Error(); return null; }
+    try {
+      CREDENTIAL c = (CREDENTIAL)Marshal.PtrToStructure(p, typeof(CREDENTIAL));
+      byte[] bytes = new byte[c.CredentialBlobSize];
+      if (bytes.Length > 0) Marshal.Copy(c.CredentialBlob, bytes, 0, bytes.Length);
+      return Encoding.UTF8.GetString(bytes);
+    } finally {
+      CredFree(p);
+    }
+  }
+  public static int Delete(string target) {
+    return CredDeleteW(target, 1, 0) ? 0 : Marshal.GetLastWin32Error();
+  }
+}
+'@
+$req = [Console]::In.ReadToEnd() | ConvertFrom-Json
+switch ($req.op) {
+  'probe' { [void][KineticMigrateCred]::Read($req.target); if ([KineticMigrateCred]::LastError -eq 0 -or [KineticMigrateCred]::LastError -eq 1168) { exit 0 }; exit 1 }
+  'set' { if ([KineticMigrateCred]::Write($req.target, $req.account, $req.value) -eq 0) { exit 0 }; exit 1 }
+  'get' {
+    $v = [KineticMigrateCred]::Read($req.target)
+    if ($null -eq $v) { if ([KineticMigrateCred]::LastError -eq 1168) { exit 44 }; exit 1 }
+    [Console]::Out.Write($v); exit 0
+  }
+  'delete' { $e = [KineticMigrateCred]::Delete($req.target); if ($e -eq 0) { exit 0 }; if ($e -eq 1168) { exit 44 }; exit 1 }
+}
+exit 1`;
 
-const PS = {
-  probe: PS_PRELUDE,
-  set: `${PS_PRELUDE}; try { $vault.Remove($vault.Retrieve($resource, $in.account)) } catch {}; $vault.Add((New-Object Windows.Security.Credentials.PasswordCredential($resource, $in.account, $in.value)))`,
-  get: `${PS_PRELUDE}; ${PS_RETRIEVE}; $c.RetrievePassword(); [Console]::Out.Write($c.Password)`,
-  delete: `${PS_PRELUDE}; ${PS_RETRIEVE}; $vault.Remove($c)`,
+export const winPowerShell = (env: Record<string, string | undefined> = process.env): string => {
+  // The system copy by full path: a powershell.exe earlier on PATH (or in the
+  // current folder) is never run.
+  const root = env.SystemRoot ?? env.SYSTEMROOT;
+  return root ? `${root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : 'powershell.exe';
 };
 
-const psArgs = (script: string) => ['-NoProfile', '-NonInteractive', '-Command', script];
+export const winArgs = (): string[] => [
+  '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(WIN_SCRIPT, 'utf16le').toString('base64'),
+];
+
+// JSON with every non-ASCII character as a \u escape.
+export const asciiJson = (value: unknown): string => JSON.stringify(value).replace(/[\u0080-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+
+// PowerShell output may carry a byte-order mark or a trailing newline.
+const cleanOutput = (s: string) => s.replace(/^﻿/, '').replace(/\r?\n$/, '');
 
 export interface KeychainOptions {
   platform?: NodeJS.Platform | string;
   run?: CommandRunner;
   service?: string;
+  // Windows: the powershell.exe to run (defaults to the system copy).
+  powershell?: string;
 }
 
 export class KeychainStore implements SecretStore {
@@ -100,11 +184,20 @@ export class KeychainStore implements SecretStore {
   private platform: string;
   private run: CommandRunner;
   private service: string;
+  private powershell: string;
 
   constructor(opts: KeychainOptions = {}) {
     this.platform = opts.platform ?? process.platform;
     this.run = opts.run ?? execFileRunner;
     this.service = opts.service ?? SERVICE;
+    this.powershell = opts.powershell ?? winPowerShell();
+  }
+
+  private win(op: 'probe' | 'set' | 'get' | 'delete', account: string, value?: string): Promise<CommandResult> {
+    const target = `${this.service}:${account}`;
+    // The user name is only a label in Credential Manager (at most 513 characters).
+    const req = { op, target, account: account.slice(0, 256), ...(value === undefined ? {} : { value }) };
+    return this.run(this.powershell, winArgs(), asciiJson(req));
   }
 
   async available(): Promise<boolean> {
@@ -117,7 +210,10 @@ export class KeychainStore implements SecretStore {
           const r = await this.run('secret-tool', ['search', 'service', `${this.service}-probe`]);
           return r.code === 0 || (r.code === 1 && r.stderr.trim() === '');
         }
-        case 'win32': return (await this.run('powershell.exe', psArgs(PS.probe), '{}')).code === 0;
+        // Compiles the helper and reads a credential that does not exist: fails
+        // where Credential Manager is unusable (no user profile loaded, as in
+        // some service or remote sessions).
+        case 'win32': return (await this.win('probe', `${this.service}-probe`)).code === 0;
         default: return false;
       }
     } catch {
@@ -143,7 +239,8 @@ export class KeychainStore implements SecretStore {
         r = await this.run('secret-tool', ['store', `--label=${this.service} ${account}`, 'service', this.service, 'account', account], value);
         break;
       case 'win32':
-        r = await this.run('powershell.exe', psArgs(PS.set), JSON.stringify({ account, value }));
+        if (Buffer.byteLength(value) > WIN_MAX_STORED) throw new Error('This secret is too long for Windows Credential Manager.');
+        r = await this.win('set', account, value);
         break;
       default:
         throw new Error('No system keychain on this platform.');
@@ -167,10 +264,10 @@ export class KeychainStore implements SecretStore {
         if ((r.code === 0 || r.code === 1) && r.stdout === '' && r.stderr.trim() === '') return undefined;
         throw new KeychainError('read', r.code);
       case 'win32':
-        r = await this.run('powershell.exe', psArgs(PS.get), JSON.stringify({ account }));
+        r = await this.win('get', account);
         if (r.code === NOT_FOUND) return undefined;
         if (r.code !== 0) throw new KeychainError('read', r.code);
-        return decodeStored(r.stdout);
+        return decodeStored(cleanOutput(r.stdout));
       default:
         throw new Error('No system keychain on this platform.');
     }
@@ -199,7 +296,7 @@ export class KeychainStore implements SecretStore {
         if (r.code !== 0 && !(r.code === 1 && r.stderr.trim() === '')) throw new KeychainError('delete', r.code);
         return;
       case 'win32':
-        r = await this.run('powershell.exe', psArgs(PS.delete), JSON.stringify({ account }));
+        r = await this.win('delete', account);
         if (r.code !== 0 && r.code !== NOT_FOUND) throw new KeychainError('delete', r.code);
         return;
       default:
