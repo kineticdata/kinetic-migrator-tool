@@ -278,7 +278,10 @@ export function registerCompareRoutes(router: Router, ctx: SyncContext): void {
     if (!Array.isArray(selected) || !selected.every((k) => typeof k === 'string')) throw badRequest('"selected" is a list of item keys.');
     const changed = new Set([...c.items.values()].filter((i) => ['new', 'changed', 'drifted'].includes(i.status)).map((i) => i.key));
     c.relationships ??= buildRelationships([...c.source].map(([key, data]) => ({ key, data })));
-    const list = suggest({ selected: new Set(selected as string[]), relationships: c.relationships, changedKeys: changed });
+    const list = suggest({
+      selected: new Set(selected as string[]), relationships: c.relationships, changedKeys: changed,
+      targetOf: (key) => c.items.get(key)?.current ?? undefined,
+    });
     const out: SuggestionOut[] = list.map((s) => {
       const status = c.items.get(s.key)!.status;
       const why = status === 'new' ? `which is new in ${c.result.fromName}` : `which changed in ${c.result.fromName}`;

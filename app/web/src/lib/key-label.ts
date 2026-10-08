@@ -12,22 +12,25 @@ export function segmentLabel(segment: string): string {
 }
 
 // Sub-collection entry keys: `<item key>#<collection>/<encoded name>`.
-// Only the space and kapps have entries; other keys may contain '#' in a name.
-export const isEntryKey = (key: string): boolean => /^(space|kapps\/[^/#]+\/kapp)#[^/]+\/./.test(key);
-export const entryItemKey = (key: string): string => (isEntryKey(key) ? key.slice(0, key.indexOf('#')) : key);
+// Only the space, kapps and Task categories (their handlers and routines)
+// have entries; other keys may contain '#' in a name, and so may a Task
+// category's (mirrors lib/sync/entries.mjs).
+const ENTRY = /^(space|kapps\/[^/#]+\/kapp|task-categories\/[^/]+)#([^/#]+)\/(.+)$/;
+export const isEntryKey = (key: string): boolean => ENTRY.test(key);
+export const entryItemKey = (key: string): string => ENTRY.exec(key)?.[1] ?? key;
 
 const WORDS: Record<string, string> = {
   spaceAttributeDefinitions: 'space attribute definition', teamAttributeDefinitions: 'team attribute definition',
   userAttributeDefinitions: 'user attribute definition', userProfileAttributeDefinitions: 'user profile attribute definition',
   kappAttributeDefinitions: 'kapp attribute definition', formAttributeDefinitions: 'form attribute definition',
   categoryAttributeDefinitions: 'category attribute definition', securityPolicyDefinitions: 'security policy definition',
-  formTypes: 'form type', categories: 'category', integrations: 'integration',
+  formTypes: 'form type', categories: 'category', integrations: 'integration', handlers: 'handler', routines: 'routine',
 };
 
 // "hardware (category)" for `kapps/services/kapp#categories/hardware`.
 export function entryLabel(key: string): string {
-  const rest = key.slice(key.indexOf('#') + 1);
-  const slash = rest.indexOf('/');
-  const field = rest.slice(0, slash);
-  return `${segmentLabel(rest.slice(slash + 1))} (${WORDS[field] ?? field})`;
+  const m = ENTRY.exec(key);
+  if (!m) return segmentLabel(key);
+  const [, , field, name] = m;
+  return `${segmentLabel(name)} (${WORDS[field] ?? field})`;
 }

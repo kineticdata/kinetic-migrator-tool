@@ -130,6 +130,8 @@ test('create a project, compare dev with test, promote a form and its dependenci
     const tray = page.getByRole('complementary');
     const suggested = tray.getByRole('region', { name: 'Suggested' });
     await expect(suggested.getByText('Ticketing', { exact: true })).toBeVisible();
+    // Mail Send's Task category, so the handler shows in the workflow builder.
+    await expect(suggested.getByText('Notifications', { exact: true })).toBeVisible();
     await snap(page, 'compare-suggestion');
     await suggested.getByRole('button', { name: 'Add all' }).click();
     await expect(suggested).toBeHidden();
@@ -156,7 +158,7 @@ test('create a project, compare dev with test, promote a form and its dependenci
     await expect(page.getByRole('heading', { name: 'Applied to Test' })).toBeVisible();
     const progress = page.getByRole('region', { name: 'Progress' });
     await expect(progress.getByRole('status')).toContainText('done');
-    for (const item of ['Ticketing', 'Mail Send', 'Notify Requester', 'IT Request']) {
+    for (const item of ['Ticketing', 'Mail Send', 'Notify Requester', 'Notifications', 'IT Request']) {
       await expect(progress.getByRole('listitem', { name: `${item}: Done` })).toBeVisible();
     }
     await snap(page, 'apply-done');
@@ -165,7 +167,7 @@ test('create a project, compare dev with test, promote a form and its dependenci
   await test.step('history shows the apply', async () => {
     await page.getByRole('link', { name: 'View in History' }).click();
     const timeline = page.getByRole('list', { name: 'Timeline' });
-    const applied = timeline.getByRole('button', { name: /Applied '6 items from Dev' to Test/ });
+    const applied = timeline.getByRole('button', { name: /Applied '7 items from Dev' to Test/ });
     await expect(applied).toBeVisible();
     await expect(timeline.getByRole('button', { name: /Backup of Test before applying/ })).toBeVisible();
     await applied.click();

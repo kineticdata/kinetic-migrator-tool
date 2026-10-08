@@ -21,7 +21,7 @@ export interface SnapshotResult {
 
 export type NodeKind =
   | 'group' | 'space' | 'kapp' | 'form' | 'workflow' | 'webapi' | 'data'
-  | 'connection' | 'operation' | 'handler' | 'team' | 'model' | 'file-resource' | 'routine' | 'other';
+  | 'connection' | 'operation' | 'handler' | 'team' | 'model' | 'file-resource' | 'routine' | 'task-category' | 'other';
 
 export interface TreeNode {
   id: string;

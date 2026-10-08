@@ -4,7 +4,7 @@
 // re-plan after an apply has nothing to do. Secrets live in session memory.
 // Never enabled unless the variable is set to exactly "1".
 // @ts-expect-error -- untyped engine module
-import { fakeClient } from '../../lib/sync/fake-client.mjs';
+import { fakeClient, fakeTaskCategories } from '../../lib/sync/fake-client.mjs';
 import type { ClientFactory, EngineClient } from './engine.ts';
 import { MemoryStore } from './secrets.ts';
 
@@ -31,6 +31,24 @@ interface FakeSpace {
   handlers: Array<{ handler: Obj; zip: Buffer }>;
   // Global routines (Task trees), keyed by title (= name).
   routines: Obj[];
+  // Task categories (the engine's stateful fake of the endpoint).
+  categories: { handle: (api: string, method: string, path: string, opts: { body?: unknown }) => unknown };
+}
+
+// Routines as [definitionId, name].
+interface CategorySeed { name: string; type: 'Stored' | 'Integrated'; description?: string; handlers?: string[]; routines?: Array<[string, string]> }
+
+// Built in to every space; a Stored category of the same name may coexist.
+const SYSTEM_CONTROLS: CategorySeed = { name: 'System Controls', type: 'Integrated', handlers: ['system_join_v1', 'system_junction_v1'] };
+
+// `routines` reads the space's routines when one is added by definitionId.
+function categoriesOf(seeds: CategorySeed[], routines: () => Obj[]): FakeSpace['categories'] {
+  const nameOf = (id: string) => routines().find((r) => r.definitionId === id)?.name ?? id;
+  return fakeTaskCategories(seeds.map((c) => ({
+    name: c.name, type: c.type, description: c.description ?? '',
+    handlers: (c.handlers ?? []).map((definitionId) => ({ definitionId })),
+    trees: (c.routines ?? []).map(([definitionId, name]) => ({ definitionId, name, title: name })),
+  })), { routineName: nameOf });
 }
 
 // Shared by both spaces so an installed handler's package compares equal.
@@ -51,7 +69,7 @@ const routine = (name: string, definitionId: string, nodes: string[]) => ({
 const team = (name: string, description: string) => ({ name, slug: name.toLowerCase().replace(/\s+/g, '-'), description, attributes: [] });
 
 function devSpace(): FakeSpace {
-  return {
+  const s: FakeSpace = {
     space: { name: 'Dev Space', slug: 'dev', displayType: 'Display Page', webApis: [], models: [] },
     teams: [team('Operations', 'Runs the service desk'), team('Facilities', 'Buildings and rooms'), team('Security', 'Access reviews')],
     kapps: [
@@ -103,13 +121,19 @@ function devSpace(): FakeSpace {
       },
     }],
     routines: [routine('Notify Requester', 'routine_notify_requester_v1', ['Start', 'Find Requester', 'Send Email'])],
+    categories: categoriesOf([
+      { name: 'Notifications', type: 'Stored', description: 'Email and alerts', handlers: ['mail_send_v1'], routines: [['routine_notify_requester_v1', 'Notify Requester']] },
+      SYSTEM_CONTROLS,
+      { name: 'System Controls', type: 'Stored', description: 'Shared flow controls', handlers: ['utilities_echo_v1'] },
+    ], () => s.routines),
   };
+  return s;
 }
 
 function testSpace(): FakeSpace {
   const dev = devSpace();
   const [services, facilities] = dev.kapps;
-  return {
+  const s: FakeSpace = {
     space: { ...dev.space, name: 'Test Space', slug: 'test' },
     // Contractors is only in Test (something to remove).
     teams: [team('Operations', 'Service desk'), team('Facilities', 'Buildings and rooms'), team('Contractors', 'Former contractor access')],
@@ -124,7 +148,15 @@ function testSpace(): FakeSpace {
     connections: [dev.connections[1]],
     handlers: [],
     routines: [],
+    // Notifications holds a handler only Test has; Legacy Tools is only in
+    // Test (something to remove).
+    categories: categoriesOf([
+      { name: 'Notifications', type: 'Stored', description: 'Email', handlers: ['utilities_echo_v1'] },
+      SYSTEM_CONTROLS,
+      { name: 'Legacy Tools', type: 'Stored', description: 'Old helpers', handlers: ['utilities_echo_v1'] },
+    ], () => s.routines),
   };
+  return s;
 }
 
 let seq = 0;
@@ -257,6 +289,8 @@ function write(s: FakeSpace, catalog: FakeSpace, api: string, method: string, pa
     return {};
   }
   if (api === 'task') {
+    const category = s.categories.handle(api, method, path, { body });
+    if (category !== undefined) return category;
     if (method === 'POST' && path === '/trees') {
       const { sourceName, sourceGroup, ...tree } = clone(body ?? {});
       if (s.routines.some((t) => t.title === tree.name)) throw Object.assign(new Error(`400 a tree named ${tree.name} exists`), { status: 400 });
@@ -323,7 +357,7 @@ export function fakeSpacesFactory(): ClientFactory {
     if (!s) spaces.set(env.name, (s = env.name === 'dev' ? devSpace() : testSpace()));
     const space = s;
     const request = async (api: string, method: string, path: string, opts: { query?: Obj; body?: unknown; form?: FormData } = {}) => {
-      if (method === 'GET') return fakeClient(routes(space), { mode }).request(api, method, path, opts);
+      if (method === 'GET') return fakeClient(routes(space), { mode, fallback: space.categories.handle }).request(api, method, path, opts);
       if (mode === 'read') throw new Error(`read-only client got ${method} ${path}`);
       return write(space, catalog, api, method, path, opts.body, opts.form);
     };

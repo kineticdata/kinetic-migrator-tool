@@ -127,7 +127,7 @@ export const removeTree: (dir: string) => void = storeModule.removeTree;
 export const MODULES: EngineModule[] = indexModule.MODULES;
 export const moduleFor: (key: string) => EngineModule | undefined = indexModule.moduleFor;
 export const buildRelationships: (artifacts: Array<{ key: string; data: unknown }>) => Relationships = relationshipsModule.buildRelationships;
-export const suggest: (opts: { selected: Set<string>; relationships: Relationships; changedKeys: Set<string> }) => Suggestion[] = relationshipsModule.suggest;
+export const suggest: (opts: { selected: Set<string>; relationships: Relationships; changedKeys: Set<string>; targetOf?: (key: string) => any }) => Suggestion[] = relationshipsModule.suggest;
 export const summarize: (key: string, data: unknown, type: string, extra?: Record<string, unknown>) => Summary = summariesModule.summarize;
 export const compareText: (a: string, b: string) => number = normalizeModule.compareText;
 // No hashOf/withoutEnvBound here on purpose: compare a target with its

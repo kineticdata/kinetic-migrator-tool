@@ -2,7 +2,7 @@
 // mirrors the server's tree layout (app/server/tree-index.ts): the section an
 // item belongs to and the tree nodes above it, root first.
 import type { NodeKind } from '../../../shared/sync-api';
-import { segmentLabel } from './key-label';
+import { entryItemKey, segmentLabel } from './key-label';
 
 // Which top-level section an item key belongs to (for the type filter).
 export function sectionOf(key: string): string {
@@ -11,6 +11,7 @@ export function sectionOf(key: string): string {
   const groups: Record<string, string> = {
     kapps: 'group:kapps', connections: 'group:connections', handlers: 'group:handlers', teams: 'group:teams',
     models: 'group:models', 'file-resources': 'group:file-resources', routines: 'group:routines',
+    'task-categories': 'group:task-categories',
   };
   return groups[head] ?? 'group:other';
 }
@@ -41,14 +42,14 @@ export function ancestorsOf(key: string): string[] {
 // The kind of item a key names (as the tree shows it).
 export function kindOfKey(key: string): NodeKind {
   // A sub-collection entry (`<item>#<collection>/<name>`) shows as its item.
-  if (/^(space|kapps\/[^/#]+\/kapp)#/.test(key)) key = key.slice(0, key.indexOf('#'));
+  key = entryItemKey(key);
   const p = key.split('/');
   if (key === 'space') return 'space';
   if (p[0] === 'workflows' || (p[0] === 'kapps' && (p[2] === 'workflows' || p[4] === 'workflows'))) return 'workflow';
   if (p[0] === 'webapis' || (p[0] === 'kapps' && p[2] === 'webapis')) return 'webapi';
   if (p[0] === 'kapps') return p[2] === 'kapp' ? 'kapp' : p[4] === 'data' ? 'data' : 'form';
   if (p[0] === 'connections') return p[2] === 'operations' ? 'operation' : 'connection';
-  const heads: Record<string, NodeKind> = { handlers: 'handler', teams: 'team', models: 'model', 'file-resources': 'file-resource', routines: 'routine' };
+  const heads: Record<string, NodeKind> = { handlers: 'handler', teams: 'team', models: 'model', 'file-resources': 'file-resource', routines: 'routine', 'task-categories': 'task-category' };
   return heads[p[0]] ?? 'other';
 }
 

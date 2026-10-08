@@ -9,7 +9,9 @@ import path from 'node:path';
 import type { ApplyResult, Changeset, CompareResult, HistoryEvent, PlanResult, RunRecord } from '../shared/sync-api.ts';
 import { log } from './repo.ts';
 import { runTitle } from './runs.ts';
-import { assertNoSecret, harness, testRoutes, type Harness } from './sync-fixtures.ts';
+import { assertNoSecret, devRoutes, harness, testRoutes, type Harness } from './sync-fixtures.ts';
+// @ts-expect-error -- untyped engine module
+import { fakeTaskCategories } from '../../lib/sync/fake-client.mjs';
 import { typeOf } from './history.ts';
 
 const P = '/api/projects/sync-test';
@@ -348,5 +350,60 @@ test('after removing an entry, the next snapshot reports no drift for its item; 
   const restored = (await h.job('POST', `${P}/plans/${rp.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result as ApplyResult;
   assert.equal(restored.status, 'applied', String(restored.error));
   assert.deepEqual((cats as Array<Record<string, unknown>>).map((c) => c.slug), ['old-hardware']);
+  assert.deepEqual((await h.job('POST', `${P}/snapshots`, { env: 'test' })).result.drifted, [], 'a restore is not drift');
+});
+
+test('a Task category and a category member only in the target are removed, with no drift after; a restore puts both back', async (t) => {
+  const h = await harness(t);
+  const seed = (name: string, handlers: string[]) => ({ name, type: 'Stored', description: name, handlers: handlers.map((definitionId) => ({ definitionId })), trees: [] });
+  const devCats = fakeTaskCategories([seed('Notifications', ['utilities_echo_v1'])]);
+  const testCats = fakeTaskCategories([
+    seed('Notifications', ['utilities_echo_v1', 'utilities_old_v1']), seed('Legacy', ['utilities_echo_v1']),
+    { ...seed('Legacy', ['system_join_v1']), type: 'Integrated' },
+  ]);
+  type Store = { handle: (api: string, method: string, path: string, opts?: { body?: unknown }) => unknown };
+  // Routes for every Task categories call, answered by the stateful fake.
+  const categoryRoutes = (store: Store) => {
+    const r: Record<string, unknown> = {};
+    const at = (method: string, p: string) => { r[`${method} task${p}`] = ({ body }: { body?: unknown }) => store.handle('task', method, p, { body }); };
+    at('GET', '/categories');
+    at('POST', '/categories');
+    for (const name of ['Notifications', 'Legacy']) {
+      for (const m of ['PUT', 'DELETE']) at(m, `/categories/${name}`);
+      for (const f of ['handlers', 'routines']) {
+        at('POST', `/categories/${name}/${f}`);
+        for (const id of ['utilities_echo_v1', 'utilities_old_v1']) at('DELETE', `/categories/${name}/${f}/${id}`);
+      }
+    }
+    return r;
+  };
+  h.spaces.dev = () => ({ ...devRoutes(), ...categoryRoutes(devCats) });
+  h.spaces.test = () => ({ ...testRoutes(), ...categoryRoutes(testCats) });
+  const NOTIFY = 'task-categories/Notifications';
+  const ENTRY = `${NOTIFY}#handlers/utilities_old_v1`;
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  // Promoted before, so its state is recorded.
+  const first = await plan(h, { to: 'test', from: 'dev', selected: [NOTIFY] });
+  assert.equal(first.items.find((i) => i.key === NOTIFY)?.action, 'unchanged', 'a member only in Test is no difference');
+  assert.equal((await h.job('POST', `${P}/plans/${first.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result.status, 'applied');
+
+  const p = await plan(h, { to: 'test', from: 'dev', remove: ['task-categories/Legacy', ENTRY] });
+  assert.deepEqual(p.removals.map((r) => [r.key, r.action]), [['task-categories/Legacy', 'delete'], [ENTRY, 'delete']]);
+  const done = (await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result as ApplyResult;
+  assert.equal(done.status, 'applied', String(done.error));
+  assert.deepEqual(h.writes('test').slice(-2), ['DELETE /categories/Legacy', 'DELETE /categories/Notifications/handlers/utilities_old_v1']);
+  const names = () => (testCats as { categories: Array<{ name: string; type: string; handlers: Array<{ definitionId: string }> }> }).categories
+    .map((c) => [c.name, c.type, c.handlers.map((x) => x.definitionId)]);
+  assert.deepEqual(names(), [['Notifications', 'Stored', ['utilities_echo_v1']], ['Legacy', 'Integrated', ['system_join_v1']]], 'the built-in Legacy stays');
+  assert.deepEqual((await h.job('POST', `${P}/snapshots`, { env: 'test' })).result.drifted, [], 'removing a member is not drift');
+
+  const rr = (await h.job('POST', `${P}/restore`, { commit: done.backupCommit })).result as CompareResult;
+  assert.deepEqual([...rr.preselected].sort(), ['task-categories/Legacy', NOTIFY]);
+  const rp = await plan(h, { to: 'test', from: 'test', sourceCommit: rr.sourceCommit, selected: rr.preselected, restore: true });
+  const restored = (await h.job('POST', `${P}/plans/${rp.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result as ApplyResult;
+  assert.equal(restored.status, 'applied', String(restored.error));
+  assert.deepEqual(names(), [
+    ['Notifications', 'Stored', ['utilities_echo_v1', 'utilities_old_v1']], ['Legacy', 'Integrated', ['system_join_v1']], ['Legacy', 'Stored', ['utilities_echo_v1']],
+  ]);
   assert.deepEqual((await h.job('POST', `${P}/snapshots`, { env: 'test' })).result.drifted, [], 'a restore is not drift');
 });
