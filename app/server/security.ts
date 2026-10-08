@@ -5,7 +5,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { ApiError } from './errors.ts';
 
-export const COOKIE_NAME = 'km_session';
+// Port-scoped so two running instances don't overwrite each other's cookie.
+export const cookieName = (port: number): string => `km_session_${port}`;
 export const CSRF_HEADER = 'x-kinetic-migrate';
 
 export const generateKey = (): string => randomBytes(32).toString('base64url');
@@ -27,8 +28,8 @@ export function parseCookies(header: string | undefined): Record<string, string>
   return out;
 }
 
-export function sessionCookie(key: string): string {
-  return `${COOKIE_NAME}=${key}; HttpOnly; SameSite=Strict; Path=/`;
+export function sessionCookie(key: string, port: number): string {
+  return `${cookieName(port)}=${key}; HttpOnly; SameSite=Strict; Path=/`;
 }
 
 export function hostAllowed(host: string | undefined, port: number): boolean {
@@ -41,8 +42,8 @@ export function checkHost(req: IncomingMessage, port: number): void {
 }
 
 // Throws 401/403 unless an /api request carries the session cookie and header.
-export function checkApi(req: IncomingMessage, key: string): void {
-  const cookie = parseCookies(req.headers.cookie)[COOKIE_NAME];
+export function checkApi(req: IncomingMessage, key: string, port: number): void {
+  const cookie = parseCookies(req.headers.cookie)[cookieName(port)];
   if (!cookie || !safeEqual(cookie, key)) throw new ApiError(401, 'unauthorized', 'Open the app from the link printed by kinetic-migrate ui.');
   if (req.headers[CSRF_HEADER] !== '1') throw new ApiError(403, 'forbidden', 'Missing X-Kinetic-Migrate header.');
 }

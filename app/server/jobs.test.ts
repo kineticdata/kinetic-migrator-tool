@@ -85,7 +85,7 @@ function readSse(port: number, pathname: string, headers: Record<string, string>
 }
 
 function parseSse(text: string) {
-  return text.split('\n\n').filter(Boolean).map((block) => {
+  return text.split('\n\n').filter((b) => b && !b.startsWith(':')).map((block) => {
     const out: Record<string, string> = {};
     for (const line of block.split('\n')) {
       const i = line.indexOf(':');
@@ -129,6 +129,25 @@ test('SSE replays earlier events, streams new ones and ends with event: end', as
   assert.equal(JSON.parse(events[1].data).message, 'early');
   assert.equal(JSON.parse(events[2].data).message, 'late');
   assert.equal(JSON.parse(events[3].data).status, 'succeeded');
+});
+
+test('SSE headers arrive before any event', async () => {
+  const gate = deferred();
+  const id = s.jobs.createJob('snapshot', async () => { await gate.promise; return null; });
+  const status = await new Promise<{ status: number; type: string; req: http.ClientRequest }>((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: s.port, path: `/api/jobs/${id}/events`, headers: { host: `localhost:${s.port}`, ...s.good } }, (res) => {
+      res.resume();
+      resolve({ status: res.statusCode ?? 0, type: String(res.headers['content-type']), req });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  assert.equal(s.jobs.get(id)?.events.length, 0);
+  assert.equal(status.status, 200);
+  assert.match(status.type, /text\/event-stream/);
+  status.req.destroy();
+  gate.resolve();
+  await s.jobs.wait(id);
 });
 
 test('SSE on a finished job replays everything then ends', async () => {

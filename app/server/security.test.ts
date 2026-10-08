@@ -3,6 +3,7 @@ import { test, after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import http from 'node:http';
 import path from 'node:path';
 import { request, startTestServer, type TestServer } from './test-helpers.ts';
 
@@ -32,7 +33,7 @@ test('GET /?key= sets an HttpOnly SameSite=Strict cookie and redirects to /', as
   assert.equal(res.status, 302);
   assert.equal(res.headers.location, '/');
   const cookie = String(res.headers['set-cookie']);
-  assert.match(cookie, new RegExp(`km_session=${s.key}`));
+  assert.match(cookie, new RegExp(`km_session_${s.port}=${s.key}`));
   assert.match(cookie, /HttpOnly/);
   assert.match(cookie, /SameSite=Strict/);
   assert.match(cookie, /Path=\//);
@@ -50,8 +51,13 @@ test('no cookie → 401', async () => {
   assert.equal(JSON.parse(res.body).error.code, 'unauthorized');
 });
 
+test('another instance\'s cookie (other port) → 401', async () => {
+  const res = await request(s.port, '/api/session', { headers: { 'x-kinetic-migrate': '1', cookie: `km_session_1=${s.key}` } });
+  assert.equal(res.status, 401);
+});
+
 test('wrong cookie → 401', async () => {
-  const res = await request(s.port, '/api/session', { headers: { 'x-kinetic-migrate': '1', cookie: 'km_session=wrong' } });
+  const res = await request(s.port, '/api/session', { headers: { 'x-kinetic-migrate': '1', cookie: `km_session_${s.port}=wrong` } });
   assert.equal(res.status, 401);
 });
 
@@ -96,6 +102,23 @@ test('JSON bodies over 1 MB → 413', async () => {
   assert.equal(JSON.parse(res.body).error.code, 'payload_too_large');
 });
 
+test('a Content-Length over 1 MB → 413 at once, and the connection is closed', async () => {
+  const res = await new Promise<{ status: number; body: string; closed: boolean }>((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: s.port, path: '/api/session', method: 'POST', headers: { host: `localhost:${s.port}`, ...s.good, 'content-type': 'application/json', 'content-length': String(5 * 1024 * 1024) } }, (r) => {
+      let body = '';
+      r.setEncoding('utf8');
+      r.on('data', (c: string) => { body += c; });
+      r.on('end', () => resolve({ status: r.statusCode ?? 0, body, closed: r.headers.connection === 'close' }));
+    });
+    req.on('error', reject);
+    // Send only the headers and a small part of the body; the server must not wait for the rest.
+    req.write('{"x":"');
+  });
+  assert.equal(res.status, 413);
+  assert.equal(JSON.parse(res.body).error.code, 'payload_too_large');
+  assert.ok(res.closed);
+});
+
 test('static files and SPA fallback, no path traversal', async () => {
   const js = await request(s.port, '/app.js');
   assert.equal(js.status, 200);
@@ -103,8 +126,13 @@ test('static files and SPA fallback, no path traversal', async () => {
   const deep = await request(s.port, '/projects/abc/explore');
   assert.equal(deep.status, 200);
   assert.match(deep.body, /<title>app<\/title>/);
-  const trav = await request(s.port, '/..%2f..%2fetc%2fpasswd');
-  assert.ok(!/root:/.test(trav.body));
+  for (const p of ['/../', '/%2e%2e/', '/..%2f', '/..%5c', '/..%2f..%2fetc%2fpasswd', '/a/../../etc/passwd', '/%2e%2e%2fpackage.json']) {
+    const trav = await request(s.port, p);
+    assert.equal(trav.status, 404, p);
+  }
+  const dbl = await request(s.port, '//etc/passwd');
+  assert.equal(dbl.status, 200);
+  assert.match(dbl.body, /<title>app<\/title>/);
 });
 
 test('static files also require a valid Host', async () => {

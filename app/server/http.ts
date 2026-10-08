@@ -7,6 +7,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ApiError, mapError, notFound } from './errors.ts';
 import { checkApi, checkHost, safeEqual, sessionCookie } from './security.ts';
 import type { Router } from './router.ts';
+import { defaultLogger, type Logger } from './log.ts';
 
 export const BODY_LIMIT = 1024 * 1024;
 
@@ -15,7 +16,11 @@ export interface HandlerOptions {
   port: () => number;
   router: Router;
   webDir?: string;
+  logger?: Logger;
 }
+
+// Rejects before reading the body; the connection is closed afterwards.
+class EarlyRejection extends ApiError {}
 
 const BASE_HEADERS = {
   'x-content-type-options': 'nosniff',
@@ -45,22 +50,30 @@ export function sendJson(res: ServerResponse, status: number, json: unknown): vo
   res.end(body);
 }
 
-function sendError(res: ServerResponse, err: unknown): void {
+function sendError(req: IncomingMessage, res: ServerResponse, err: unknown, logger: Logger): void {
+  const { status, body } = mapError(err);
+  if (status >= 500) logger.error(`${req.method} ${(req.url ?? '').split('?')[0]}`, err);
   if (res.headersSent) {
     res.destroy();
     return;
   }
-  const { status, body } = mapError(err);
+  if (err instanceof EarlyRejection) {
+    res.setHeader('connection', 'close');
+    res.on('finish', () => req.destroy());
+  }
   sendJson(res, status, body);
 }
 
 // Reads a JSON body; empty bodies give undefined. Oversized bodies are drained
 // and rejected with 413.
 export function readJsonBody(req: IncomingMessage, limit = BODY_LIMIT): Promise<unknown> {
+  if (Number(req.headers['content-length'] ?? 0) > limit) {
+    return Promise.reject(new EarlyRejection(413, 'payload_too_large', 'Request body is larger than 1 MB.'));
+  }
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
-    let tooBig = Number(req.headers['content-length'] ?? 0) > limit;
+    let tooBig = false;
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
       if (size > limit) tooBig = true;
@@ -101,12 +114,7 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string
   if (req.method !== 'GET' && req.method !== 'HEAD') throw new ApiError(405, 'method_not_allowed', 'Method not allowed.');
   if (!webDir) throw notFound();
   const root = path.resolve(webDir);
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(pathname);
-  } catch {
-    throw notFound();
-  }
+  const decoded = decodePath(pathname);
   const target = path.resolve(root, `.${decoded}`);
   if (target !== root && !target.startsWith(root + path.sep)) throw notFound();
   const head = req.method === 'HEAD';
@@ -120,15 +128,33 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string
   serveFile(res, index, indexSize, head);
 }
 
+function decodePath(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    throw notFound();
+  }
+}
+
+// Parses the request target without normalising it (so `..` can't be hidden
+// by URL resolution) and refuses any `..` segment, raw or encoded.
+function parseTarget(rawUrl: string): URL {
+  if (!rawUrl.startsWith('/')) throw notFound();
+  const rawPath = rawUrl.split('?')[0];
+  if (decodePath(rawPath).split(/[\\/]/).some((seg) => seg === '..' || seg === '.')) throw notFound();
+  return new URL(`http://localhost${rawUrl}`);
+}
+
 export function createRequestHandler(opts: HandlerOptions) {
+  const logger = opts.logger ?? defaultLogger;
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
       checkHost(req, opts.port());
-      const url = new URL(req.url ?? '/', 'http://localhost');
+      const url = parseTarget(req.url ?? '/');
       const { pathname } = url;
 
       if (pathname === '/api' || pathname.startsWith('/api/')) {
-        checkApi(req, opts.key);
+        checkApi(req, opts.key, opts.port());
         const body = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method ?? '') ? await readJsonBody(req) : undefined;
         const m = opts.router.match(req.method ?? 'GET', pathname);
         if (!m) throw notFound('No such API endpoint.');
@@ -144,14 +170,14 @@ export function createRequestHandler(opts: HandlerOptions) {
       // Launch: exchange the key from the printed URL for the session cookie.
       if (pathname === '/' && url.searchParams.has('key')) {
         if (!safeEqual(url.searchParams.get('key') ?? '', opts.key)) throw new ApiError(403, 'forbidden', 'Invalid launch key.');
-        res.writeHead(302, { ...BASE_HEADERS, 'set-cookie': sessionCookie(opts.key), location: '/', 'cache-control': 'no-store' });
+        res.writeHead(302, { ...BASE_HEADERS, 'set-cookie': sessionCookie(opts.key, opts.port()), location: '/', 'cache-control': 'no-store' });
         res.end();
         return;
       }
 
       serveStatic(req, res, pathname, opts.webDir);
     } catch (err) {
-      sendError(res, err);
+      sendError(req, res, err, logger);
     }
   };
 }

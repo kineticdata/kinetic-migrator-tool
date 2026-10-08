@@ -7,6 +7,7 @@ import type { ServerResponse } from 'node:http';
 import type { JobEvent, JobEventData, JobInfo, JobStatus } from '../shared/api.ts';
 import { ApiError, mapError, notFound } from './errors.ts';
 import type { Router } from './router.ts';
+import { defaultLogger, type Logger } from './log.ts';
 
 export type Emit = (event: JobEventData) => void;
 export type JobRun<R = unknown> = (emit: Emit, signal: AbortSignal) => Promise<R>;
@@ -32,6 +33,11 @@ export interface CreateJobOptions {
 export class JobRegistry {
   private entries = new Map<string, Entry>();
   private locks = new Map<string, string>();
+  private logger: Logger;
+
+  constructor(opts: { logger?: Logger } = {}) {
+    this.logger = opts.logger ?? defaultLogger;
+  }
 
   createJob<R>(kind: string, run: JobRun<R>, opts: CreateJobOptions = {}): string {
     const { lockKey } = opts;
@@ -68,6 +74,7 @@ export class JobRegistry {
         return finish('succeeded');
       } catch (err) {
         if (controller.signal.aborted || (err as { name?: string } | null)?.name === 'CancelledError') return finish('cancelled');
+        this.logger.error(`job ${kind} ${id} failed`, err);
         const { code, message } = mapError(err).body.error;
         job.error = { code, message };
         return finish('failed');
@@ -152,6 +159,7 @@ export function registerJobRoutes(router: Router, jobs: JobRegistry): void {
       connection: 'keep-alive',
       'x-content-type-options': 'nosniff',
     });
+    res.flushHeaders();
     for (const event of job.events) if (event.seq > after) writeEvent(res, event);
     if (job.status !== 'running') {
       writeEnd(res, job);

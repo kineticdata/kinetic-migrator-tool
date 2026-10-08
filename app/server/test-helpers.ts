@@ -48,7 +48,7 @@ export async function startTestServer(opts: Partial<StartServerOptions> = {}): P
   const workspace = mkdtempSync(path.join(tmpdir(), 'km-ws-'));
   const server = await startServer({ workspace, ...opts });
   const key = new URL(server.url).searchParams.get('key') ?? '';
-  const cookie = `km_session=${key}`;
+  const cookie = `km_session_${server.port}=${key}`;
   const good = { cookie, 'x-kinetic-migrate': '1' };
   return {
     ...server,

@@ -11,6 +11,7 @@ import { createRequestHandler } from './http.ts';
 import { JobRegistry, registerJobRoutes } from './jobs.ts';
 import { Router } from './router.ts';
 import { generateKey } from './security.ts';
+import { defaultLogger, type Logger } from './log.ts';
 
 export const VERSION: string = pkg.version;
 
@@ -34,6 +35,7 @@ export interface StartServerOptions {
   webDir?: string;
   secrets?: SecretsStore;
   clientFactory?: ClientFactory;
+  logger?: Logger;
 }
 
 export interface ServerContext {
@@ -64,11 +66,12 @@ export function buildRouter(ctx: Omit<ServerContext, 'router'>): Router {
 
 export async function startServer(opts: StartServerOptions): Promise<ServerHandle> {
   const key = generateKey();
-  const jobs = new JobRegistry();
+  const logger = opts.logger ?? defaultLogger;
+  const jobs = new JobRegistry({ logger });
   const workspace = path.resolve(opts.workspace);
   const router = buildRouter({ workspace, secrets: opts.secrets, clientFactory: opts.clientFactory, jobs });
   let port = 0;
-  const server = http.createServer(createRequestHandler({ key, port: () => port, router, webDir: opts.webDir }));
+  const server = http.createServer(createRequestHandler({ key, port: () => port, router, webDir: opts.webDir, logger }));
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(opts.port ?? 0, HOST, () => {
