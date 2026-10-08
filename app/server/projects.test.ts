@@ -201,7 +201,28 @@ test('environments: add, order, credentials, delete — one commit per mutation,
   assert.equal(tolerant.status, 200);
   assert.deepEqual(tolerant.json.envBoundAttributes, { kapp: ['Logo'] });
   assert.match(tolerant.json.warnings[0], /unknown level "forms"/);
+  // Space settings kept per environment: defaults when absent, validated on save, tolerant on load.
+  const defaults = ['displayType', 'displayValue', 'trustedFrameDomains', 'trustedResourceDomains', 'allowedIps', 'allowedIpsEnabled'];
+  assert.deepEqual(tolerant.json.envBoundSpaceFields, defaults);
+  writeFileSync(cfgFile, JSON.stringify({ envBoundSpaceFields: ['displayValue', 'favouriteColour'] }));
+  const unknownField = await call('GET', '/api/projects/pipeline/config');
+  assert.equal(unknownField.status, 200);
+  assert.deepEqual(unknownField.json.envBoundSpaceFields, ['displayType', 'displayValue']);
+  assert.match(unknownField.json.warnings[0], /"envBoundSpaceFields": "favouriteColour" cannot be kept per environment; it is ignored\./);
+  assert.match(unknownField.json.warnings[1], /"displayType" and "displayValue" go together; both are kept\./);
   writeFileSync(cfgFile, saved);
+  await rejects({ envBoundSpaceFields: ['displayValue', 'slug'] }, /"slug" cannot be kept per environment \(choose from /);
+  await rejects({ envBoundSpaceFields: 'displayValue' }, /must be a list/);
+  await rejects({ envBoundSpaceFields: ['allowedIps'] }, /"allowedIps" and "allowedIpsEnabled" go together; list both or neither/);
+  const putSpace = await call('PUT', '/api/projects/pipeline/config', { envBoundSpaceFields: ['loginPage', 'displayValue', 'loginPage', 'displayType'] });
+  assert.equal(putSpace.status, 200);
+  await mutated();
+  // Saved without repeats, in the canonical order.
+  assert.deepEqual(putSpace.json.envBoundSpaceFields, ['displayType', 'displayValue', 'loginPage']);
+  assert.deepEqual(JSON.parse(readFileSync(cfgFile, 'utf8')).envBoundSpaceFields, ['displayType', 'displayValue', 'loginPage']);
+  // Saving another part of the settings leaves the list alone.
+  assert.equal((await call('PUT', '/api/projects/pipeline/config', { envBoundAttributes: scoped.envBoundAttributes })).status, 200);
+  assert.deepEqual((await call('GET', '/api/projects/pipeline/config')).json.envBoundSpaceFields, ['displayType', 'displayValue', 'loginPage']);
   // Nothing was written by the rejected requests.
   assert.deepEqual((await call('GET', '/api/projects/pipeline/config')).json.envBoundAttributes, scoped.envBoundAttributes);
   const putOv = await call('PUT', '/api/projects/pipeline/overrides/test', { artifacts: { 'space/space': { name: 'Test space' } }, replace: [{ from: 'dev.example.com', to: 'test.example.com' }] });

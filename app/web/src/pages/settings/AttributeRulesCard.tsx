@@ -156,6 +156,9 @@ export function AttributeRulesCard({ projectId, config, catalog }: { projectId: 
   const saved = JSON.stringify(config.envBoundAttributes);
   useEffect(() => setRows(toRuleRows(JSON.parse(saved))), [saved]);
 
+  // The space settings card shows its own.
+  const warnings = (config.warnings ?? []).filter((w) => !w.includes('"envBoundSpaceFields"'));
+
   const set = (i: number, patch: Partial<RuleRow>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
 
   const submit = () => {
@@ -192,10 +195,10 @@ export function AttributeRulesCard({ projectId, config, catalog }: { projectId: 
         )}
         <div className="mt-3 space-y-2">
           <CatalogHint catalog={catalog} />
-          {config.warnings?.length ? (
+          {warnings.length ? (
             <div className="space-y-1">
               <p className="text-xs text-muted">Ignored in the project file (saving the rules replaces them):</p>
-              {config.warnings.map((w) => <InlineError key={w} error={w} />)}
+              {warnings.map((w) => <InlineError key={w} error={w} />)}
             </div>
           ) : null}
           {invalid && <div id={errorId}><InlineError error="Each rule needs an attribute name." /></div>}
