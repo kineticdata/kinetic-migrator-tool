@@ -65,7 +65,7 @@ Platform behaviour this confirmed:
   deleting a workflow through the Core API does.
 - Deleting an Integrator connection deletes its operations.
 
-## Task categories (2026-10-08)
+## Workflow categories (2026-10-08)
 
 | Step | Result |
 |------|--------|

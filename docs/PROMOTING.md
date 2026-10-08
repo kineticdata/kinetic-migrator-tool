@@ -1,12 +1,20 @@
-# Promoting a Kinetic space between environments
+# Promoting reference
 
-`kinetic-migrate.mjs` exports a space's configuration into a project directory
-you keep in git, shows exactly what promoting it would change in another
-environment, and applies only those changes. It never deletes anything unless
-you ask (by type with `--prune`, or item by item with `--remove` and the app's
-Remove action), and it never writes to an environment marked `readOnly`.
+This is the detailed reference for the engine behind Kinetic Migrator: the
+project files, how each kind of item is promoted, environment values,
+secrets, handlers, reference data, removals and drift. It uses the command
+line (`kinetic-migrate`) for its examples; the web app runs the same engine.
 
-You need Node.js 20 or newer. Nothing else is installed.
+For the web app, read the [User guide](USER-GUIDE.md). For the ideas, read
+[Concepts](CONCEPTS.md). For every command and flag, read [CLI.md](CLI.md).
+
+The engine exports a space's configuration into a project directory you keep
+in git, shows exactly what promoting it would change in another environment,
+and applies only those changes. It never deletes anything unless you ask (by
+type with `--prune`, or item by item with `--remove` and the app's Remove
+action), and it never writes to an environment marked `readOnly`.
+
+You need Node.js 20.6 or newer. Nothing else is installed.
 
 ## What is promoted
 
@@ -32,9 +40,11 @@ folder), never committed into this repo.
 node kinetic-migrate.mjs init --project ../my-project
 ```
 
-This creates `kinetic-sync.config.json`, `environments/dev.json` and a
+This creates `kinetic-sync.config.json`, `environments/dev.json`, a
 `.gitignore` that keeps credentials, backups, plan records and comparison
-reports out of git.
+reports out of git, and a `.gitattributes` that keeps LF line ends. The app
+creates the same files when you make a new project, and manages the folder as
+a git repository.
 
 ## 2. Describe your environments
 
@@ -42,7 +52,7 @@ One file per environment in `environments/`. Environment names use letters,
 digits, `-` and `_`. A file may only contain `url` and `readOnly` (a boolean):
 
 ```json
-{ "url": "https://your-space.kinops.io", "readOnly": true }
+{ "url": "https://dev.example.com", "readOnly": true }
 ```
 
 Mark the space you export from as `readOnly: true`. Apply refuses to write to
@@ -57,8 +67,12 @@ KINETIC_DEV_PASSWORD=...
 ```
 
 `<ENV>` is the environment name upper-cased, with anything other than letters
-and digits turned into `_`. The same credentials are used for the Core, Task
-and Integrator APIs; the tool fetches the Integrator token itself.
+and digits turned into `_`. A variable set in the shell wins over the file.
+The same credentials are used for the Core, Task and Integrator APIs; the
+tool fetches the Integrator token itself.
+
+The app does not read these files: it keeps credentials and secrets in the
+system keychain (see [Concepts](CONCEPTS.md#secrets)).
 
 ### Platform versions
 
@@ -518,10 +532,13 @@ when `--from` is omitted; with neither, the command stops and asks for
 `--from`.
 
 Apply shows the plan, asks you to type the environment name (`--yes` skips
-this for CI), saves a full export of the target under `backups/`, then
-creates and updates in dependency order (handlers, then global routines,
-then the workflow categories that hold them, then the WebAPIs and workflows that
-use them; a routine that calls another routine comes after it). If something fails it stops and
+this for CI), saves a full export of the target under `backups/` (the app
+commits it instead, as `Backup of <Env> before applying '…'`), then
+creates and updates in dependency order (space, teams, models, file
+resources, connections and operations, handlers, global routines, the
+workflow categories that hold them, kapps, forms, WebAPIs, workflows, then
+reference data; a routine that calls another routine comes after it; see
+[Apply order](CONCEPTS.md#apply-order)). If something fails it stops and
 says how far it got; fix the cause and run it again, since every step is
 safe to repeat.
 
@@ -563,10 +580,11 @@ the handler is unchanged).
 
 A handler or routine that is in no workflow category does not appear in the
 workflow builder, so a promoted handler or routine is only usable there once
-its categories come along. workflow categories are exported under
-`task-categories/<name>`: the name, the description, the definitionIds of
-the handlers and routines in the category, and its policy rule names (for
-information only).
+its categories come along. The Task API and older versions of the app call
+them Task categories; the keys and the `--prune` type keep that name.
+Workflow categories are exported under `task-categories/<name>`: the name,
+the description, the definitionIds of the handlers and routines in the
+category, and its policy rule names (for information only).
 
 - Only **Stored** categories are exported and promoted. **Integrated**
   categories are built into the platform: never exported, changed or
@@ -715,55 +733,18 @@ check drift normally.
 
 ## Comparing two environments
 
-```bash
-node kinetic-migrate.mjs compare --project ../my-project --from test --to prod
-node kinetic-migrate.mjs compare --project ../my-project --from test --to prod --raw
-```
-
-Both environments are read live with read-only clients, so this works for
-`readOnly` environments too. Nothing is written to either environment, and
-snapshots are not used or changed.
-
-- **Default (preview)** answers "if `--from` were promoted into `--to` right
-  now, what would change?" It is the plan you would get after exporting
-  `--from`: the target's overrides, environment-bound fields and attributes,
-  and drift state all apply, so expected per-environment differences are
-  hidden. It exits non-zero when the plan has errors.
-- **`--raw`** shows every difference between the two environments, nothing
-  hidden: environment-bound values, handler references included, and items
-  that exist on only one side.
-
-Each run prints the result and writes two reports to `compares/`
-(`<from>-vs-<to>-<time>.json` and `.html`); their paths are printed at the
-end. The HTML page is self-contained: open it in any browser. Reports can
-contain reference-data values, so `compares/` is git-ignored.
+`compare` reads both environments live with read-only clients, so it works
+for `readOnly` environments too. Nothing is written to either environment,
+and snapshots are not used or changed. By default it previews the plan you
+would get after exporting `--from` (the target's overrides,
+environment-bound fields and attributes, and drift state all apply, so
+expected per-environment differences are hidden) and exits non-zero when
+that plan has errors; `--raw` shows every difference, nothing hidden. Each
+run writes a JSON and a self-contained HTML report to `compares/`, which is
+git-ignored because reports can contain reference-data values. See
+[CLI.md](CLI.md#compare) for the options.
 
 ## Troubleshooting
 
-- **`No credentials for "<env>"`**: set the two variables it names, or add
-  them to `.env.<env>` in the project.
-- **`is readOnly`**: you are applying to an export-only environment. Check
-  `--to`.
-- **`Handler … is not installed in the target`**: a workflow or WebAPI uses a
-  handler that is neither in the export nor in the target. Install it in the
-  source and re-export (it is then promoted), or install it in the target by
-  hand, then plan again.
-- **`… the same name but id …`**: the connection or operation was created in
-  the target by hand. Delete or rename it there so the promoted one (with
-  the id forms and workflows expect) can be created.
-- **`Connections and operations were left out`**: the Integrator sign-in is
-  not available on that platform version (see section 2). Everything else
-  is exported, compared and promoted; connections are not, until it is.
-- **`This space signs in with single sign-on`**: the 7.x sign-in page refused
-  a password the Core API accepts, or sent the tool to an identity provider.
-  Use a local account with a password for the environment.
-- **`… runs 6.1.7 and … runs 7.0.0-rc3 — review differences carefully`**:
-  the two environments run different major versions (see section 2).
-- **Plan shows changes right after an apply**: the platform added defaults
-  on write. Report it; the tool's normalizer should ignore that field.
-- **`The Kinetic Platform rejected the change (400): …`** (in the app): the
-  platform refused a write. The text after the status is the platform's own
-  message and error list, which name fields, not values (it is still
-  redacted and shortened). For `"<name> may not be empty"` on a handler, see
-  Required handler settings. With nothing usable in the response, the app
-  shows only `The Kinetic Platform returned an error (<status>).`
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md): every message above, and
+others, with its cause and fix.
