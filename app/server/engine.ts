@@ -48,6 +48,8 @@ export interface EngineConfig {
   data: EngineDataEntry[];
   exclude: { kapps: string[]; forms: string[]; [k: string]: unknown };
   envBoundAttributes: EnvBoundAttributes;
+  // Space settings each environment keeps (the defaults when the file has none).
+  envBoundSpaceFields: string[];
   warnings?: string[];
 }
 
@@ -66,5 +68,6 @@ export const createClient: ClientFactory = httpModule.createClient;
 export const stableStringify: (value: unknown) => string = normalizeModule.stableStringify;
 export const GITATTRIBUTES: string = commandsModule.GITATTRIBUTES;
 export const envBoundAttributesError: (value: unknown) => string | null = envBoundModule.envBoundAttributesError;
+export const envBoundSpaceFieldsError: (value: unknown) => string | null = envBoundModule.envBoundSpaceFieldsError;
 export const envBoundNamesFor: (eba: EnvBoundAttributes, scope: string | null, key: string, data?: unknown) => Set<string> = envBoundModule.envBoundNamesFor;
 export const dataConfigError: (entries: unknown) => string | null = dataModule.dataConfigError;

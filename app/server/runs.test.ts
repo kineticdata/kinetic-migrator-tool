@@ -314,3 +314,34 @@ test('environment values follow scoped attribute rules: only the matching form a
   assert.ok(labels.includes('Region'), JSON.stringify(labels));
   assert.equal(labels.includes('Owner'), false);
 });
+
+test('environment values offer the kept space settings the target has no value for, and honour overrides and the configured list', async (t) => {
+  const h = await harness(t);
+  const withSpace = (original: () => Record<string, unknown>, extra: Record<string, unknown>) => () => {
+    const routes = original();
+    const space = (routes['GET core/space'] as { space: Record<string, unknown> }).space;
+    return { ...routes, 'GET core/space': { space: { ...space, ...extra } } };
+  };
+  h.spaces.dev = withSpace(h.spaces.dev, { displayValue: 'https://dev.example.com/app', defaultLocale: 'fr' });
+  h.spaces.test = withSpace(h.spaces.test, { displayValue: null, defaultLocale: 'en' });
+  for (const env of ['dev', 'test']) assert.equal((await h.job('POST', `${P}/snapshots`, { env })).status, 'succeeded');
+  const spaceValues = async () => (await plan(h, { to: 'test', from: 'dev', selected: ['space'] })).environmentValues
+    .filter((v) => v.key === 'space').map((v) => [v.label, v.origin, v.from, v.to, v.required]);
+
+  // Defaults: displayValue is kept per environment and empty in Test, so it starts from Dev's value, offered to change.
+  // displayType is the same on both sides; defaultLocale is promoted.
+  assert.deepEqual((await spaceValues()).filter(([label]) => label !== 'name' && label !== 'slug'), [
+    ['displayValue', 'environment', 'https://dev.example.com/app', 'https://dev.example.com/app', false],
+  ]);
+  // An override is listed as such, once.
+  assert.equal((await h.call('PUT', `${P}/overrides/test`, { artifacts: { space: { displayValue: 'https://cdn.example.com/test' } }, replace: [] })).status, 200);
+  assert.deepEqual((await spaceValues()).filter(([label]) => label === 'displayValue'), [
+    ['displayValue', 'override', 'https://dev.example.com/app', 'https://cdn.example.com/test', false],
+  ]);
+  assert.equal((await h.call('PUT', `${P}/overrides/test`, { artifacts: {}, replace: [] })).status, 200);
+  // Unticked: promoted like any other setting, no longer an environment value.
+  assert.equal((await h.call('PUT', `${P}/config`, { envBoundSpaceFields: ['defaultLocale'] })).status, 200);
+  const unticked = await spaceValues();
+  assert.equal(unticked.some(([label]) => label === 'displayValue'), false);
+  assert.deepEqual(unticked.find(([label]) => label === 'defaultLocale'), ['defaultLocale', 'environment', 'fr', 'en', false]);
+});

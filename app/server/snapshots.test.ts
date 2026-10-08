@@ -7,7 +7,9 @@ import assert from 'node:assert/strict';
 import fs, { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { retryingRename, swapInto } from './snapshots.ts';
+import { createHash } from 'node:crypto';
+import { stableStringify } from './engine.ts';
+import { driftedKeys, retryingRename, swapInto } from './snapshots.ts';
 
 function layout(t: { after: (fn: () => void) => void }) {
   const dir = mkdtempSync(path.join(tmpdir(), 'km-swap-'));
@@ -93,4 +95,29 @@ test('retries give up after a bounded time and only for transient codes', async 
   calls = 0;
   await assert.rejects(retryingRename(busy, { platform: 'darwin', sleep: () => {} })('a', 'b'), /EBUSY/);
   assert.equal(calls, 1, 'no retries where the error is not transient');
+});
+
+test('drift after a snapshot uses the field set each entry was recorded with, so upgrading or changing the kept space settings is not drift', (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'km-drift-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const space = { name: 'Test', slug: 'test', displayValue: 'https://test.example.com/app', defaultLocale: 'en' };
+  // What a build without envBoundSpaceFields recorded: only the fixed fields left out.
+  const { name, slug, ...rest } = space;
+  const legacy = createHash('sha256').update(stableStringify(rest)).digest('hex');
+  mkdirSync(path.join(dir, 'state'));
+  const writeState = (entry: string) => writeFileSync(path.join(dir, 'state', 'test.json'), JSON.stringify({ space: entry }));
+  writeState(legacy);
+  const config = (fields?: string[]) => writeFileSync(path.join(dir, 'kinetic-sync.config.json'), JSON.stringify(fields ? { envBoundSpaceFields: fields } : {}));
+  config();
+  const tree = (data: unknown) => new Map([['space', data]]);
+  assert.deepEqual(driftedKeys(dir, 'test', tree(space)), []);
+  config(['displayValue', 'defaultLocale']);
+  assert.deepEqual(driftedKeys(dir, 'test', tree(space)), []);
+  // A real change since the promotion still is.
+  assert.deepEqual(driftedKeys(dir, 'test', tree({ ...space, defaultLocale: 'de' })), ['space']);
+  // An entry recorded with defaultLocale kept: a change to it is not drift, even after unticking it.
+  const { defaultLocale, displayValue, ...portable } = rest;
+  writeState(`${createHash('sha256').update(stableStringify(portable)).digest('hex')};space-fields=displayValue,defaultLocale`);
+  config([]);
+  assert.deepEqual(driftedKeys(dir, 'test', tree({ ...space, defaultLocale: 'de' })), []);
 });

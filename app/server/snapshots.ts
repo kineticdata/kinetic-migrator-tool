@@ -10,7 +10,7 @@ import type { SnapshotResult } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
 import { loadConfig, snapshotDir, type ClientFactory, type EngineEnv } from './engine.ts';
 import {
-  buildRelationships, hashOf, loadState, moduleFor, readTree, runExport, withoutEnvBound, type OnEvent, type Relationships,
+  buildRelationships, driftedFrom, loadState, moduleFor, readTree, runExport, type OnEvent, type Relationships,
 } from './engine-sync.ts';
 import { environmentExists, resolveEnv } from './environments.ts';
 import type { Emit } from './jobs.ts';
@@ -35,11 +35,12 @@ export async function latestSnapshotCommit(ref: ProjectRef, env: string): Promis
 // promotion into `env`.
 export function driftedKeys(projectDir: string, env: string, artifacts: Map<string, unknown>): string[] {
   const state = loadState(projectDir, env);
-  const eba = loadConfig(projectDir).envBoundAttributes ?? {};
+  const config = loadConfig(projectDir);
   return Object.keys(state).filter((key) => {
     if (!artifacts.has(key)) return false;
     const mod = moduleFor(key);
-    return Boolean(mod) && hashOf(withoutEnvBound(mod!.scope, artifacts.get(key), eba, key)) !== state[key];
+    // Hashed the way the entry was recorded, so a changed field list is not drift.
+    return Boolean(mod) && driftedFrom(mod!.scope, artifacts.get(key), state[key], config, key);
   }).sort();
 }
 

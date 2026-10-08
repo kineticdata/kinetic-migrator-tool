@@ -22,7 +22,7 @@ import type {
 import { ApiError, badRequest, notFound, toApiError } from './errors.ts';
 import { envBoundNamesFor, envKey, loadConfig, loadOverrides, stableStringify, type EngineEnv } from './engine.ts';
 import {
-  ENV_BOUND_FIELDS, computePlan, isSecretName, isSecretProperty, parsePath, readTree, runApply, segmentLabel, stamp, type EnginePlan, type PlanItem,
+  computePlan, envBoundFields, isEmptyValue, isSecretName, isSecretProperty, parsePath, readTree, runApply, segmentLabel, stamp, type EnginePlan, type PlanItem,
 } from './engine-sync.ts';
 import { currentKeys, readChangeset, recordApplied } from './changesets.ts';
 import { hasEnvSecret, readEnvironmentFile, readOverrides, resolveEnv, setEnvSecret } from './environments.ts';
@@ -105,7 +105,8 @@ const attributeValues = (data: unknown, name: string) => obj(data).attributes?.f
 
 function environmentValues(projectDir: string, to: string, items: PlanItem[], exported: Map<string, unknown>): EnvironmentValue[] {
   const overrides = loadOverrides(projectDir, to);
-  const eba = loadConfig(projectDir).envBoundAttributes ?? {};
+  const config = loadConfig(projectDir);
+  const eba = config.envBoundAttributes ?? {};
   const out: EnvironmentValue[] = [];
   const push = (v: Omit<EnvironmentValue, 'id'>) => {
     if (parsePath(v.path).some(isSecretName)) return;
@@ -116,11 +117,15 @@ function environmentValues(projectDir: string, to: string, items: PlanItem[], ex
     const own = (overrides.artifacts?.[i.key] ?? {}) as Record<string, unknown>;
     for (const [p, v] of Object.entries(own)) push({ key: i.key, path: p, label: p, from: getPath(exp, p) ?? null, to: v, origin: 'override', required: false });
     const scope = i.scope ?? '';
-    for (const f of ENV_BOUND_FIELDS[scope] ?? []) {
+    const chosen = scope === 'space' ? new Set(config.envBoundSpaceFields ?? []) : new Set<string>();
+    for (const f of envBoundFields(scope, config.envBoundSpaceFields)) {
       if (f in own) continue;
       const from = obj(exp)[f];
       const to = obj(i.desired)[f];
-      if (!same(from, to)) push({ key: i.key, path: escapeSeg(f), label: f, from: from ?? null, to: to ?? null, origin: 'environment', required: false });
+      // A chosen space setting the target has no value for (a space not set
+      // up yet) starts from the source value: offered to fill instead.
+      const unset = chosen.has(f) && Boolean(i.existing) && isEmptyValue(obj(i.existing?.data)[f]) && !isEmptyValue(from);
+      if (unset || !same(from, to)) push({ key: i.key, path: escapeSeg(f), label: f, from: from ?? null, to: to ?? null, origin: 'environment', required: false });
     }
     for (const name of envBoundNamesFor(eba, i.scope, i.key, i.desired)) {
       const p = `attributes.${escapeSeg(name)}`;
