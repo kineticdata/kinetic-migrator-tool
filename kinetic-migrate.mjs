@@ -14,7 +14,7 @@ const USAGE = `Usage:
   node kinetic-migrate.mjs init    [--project <dir>]
   node kinetic-migrate.mjs export  [--project <dir>] --env <name>
   node kinetic-migrate.mjs plan    [--project <dir>] [--from <name>] --to <name> [--overwrite-drift]
-  node kinetic-migrate.mjs apply   [--project <dir>] [--from <name>] --to <name> [--yes] [--overwrite-drift] [--prune <type>]...
+  node kinetic-migrate.mjs apply   [--project <dir>] [--from <name>] --to <name> [--yes] [--overwrite-drift] [--prune <type>]... [--remove <key>]...
   node kinetic-migrate.mjs compare [--project <dir>] --from <name> --to <name> [--raw]
   node kinetic-migrate.mjs ui      [--workspace <dir>] [--port <n>] [--no-open] [--fake]
 
@@ -23,7 +23,10 @@ ui starts the local web app (needs npm run build); --workspace defaults to ~/Kin
 --fake serves synthetic dev and test spaces from memory (same as KINETIC_MIGRATE_FAKE=1).
 export writes snapshots/<name>/; plan and apply read snapshots/<from>/.
 Without --from they read a legacy export/ folder, only when there is no snapshots/ folder.
---prune types: ${PRUNABLE.join(', ')}`;
+--prune types: ${PRUNABLE.join(', ')}
+--remove deletes one item that is only in the target, by its key (its path under
+snapshots/<to>/ without .json, e.g. teams/Old or kapps/legacy/kapp); repeat it for more.
+A removed kapp, form or connection takes what is inside it with it.`;
 
 const OPTIONS = {
   project: { type: 'string' },
@@ -34,6 +37,7 @@ const OPTIONS = {
   raw: { type: 'boolean' },
   'overwrite-drift': { type: 'boolean' },
   prune: { type: 'string', multiple: true },
+  remove: { type: 'string', multiple: true },
   help: { type: 'boolean', short: 'h' },
 };
 
@@ -72,7 +76,7 @@ async function main(argv) {
     case 'plan': return (await runPlan({ projectDir, envName: need('to'), from: values.from, overwriteDrift: values['overwrite-drift'], log })).code;
     case 'apply': return (await runApply({
       projectDir, envName: need('to'), from: values.from, yes: values.yes, prune: values.prune ?? [],
-      overwriteDrift: values['overwrite-drift'], log,
+      remove: values.remove ?? [], overwriteDrift: values['overwrite-drift'], log,
     })).code;
     case 'compare': return (await runCompare({ projectDir, from: need('from'), to: need('to'), raw: values.raw, log })).code;
     default: throw new Error(`Unknown command "${command}"\n\n${USAGE}`);
