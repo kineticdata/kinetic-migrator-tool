@@ -7,12 +7,13 @@ import path from 'node:path';
 import type {
   ConnectionTestResult, ConnectionTestStep, CredentialsStatus, EnvironmentOverrides, PutCredentialsRequest,
 } from '../shared/api.ts';
-import { ApiError, badRequest, notFound } from './errors.ts';
+import { ApiError, badRequest, notFound, toApiError } from './errors.ts';
 import { envKey, loadOverrides, stableStringify, validateEnvName, type ClientFactory, type EngineEnv } from './engine.ts';
 import {
   commitChange, displayName, isPlainObject, readJsonFile, readMeta, secretsId, withProjectLock, withSecretsLock, writeMeta,
   type ProjectRef,
 } from './project-meta.ts';
+import { rememberSecrets } from './log.ts';
 import { accountFor, type SecretStore } from './secrets.ts';
 
 export interface EnvironmentFile {
@@ -157,6 +158,8 @@ async function writeIndex(store: SecretStore, sid: string, env: string, names: s
 }
 
 export async function setEnvSecret(store: SecretStore, ref: ProjectRef, env: string, scope: SecretScope, name: string, value: string): Promise<void> {
+  // Masked in every log line from now on.
+  rememberSecrets([value]);
   const sid = await secretsId(ref);
   await withSecretsLock(ref, async () => {
     // Index first: a value that fails to store leaves at most an index entry
@@ -238,13 +241,18 @@ export async function resolveEnv(ref: ProjectRef, env: string, store: SecretStor
     const value = await store.get(accountFor(sid, env, scope, name));
     if (value) vars[`KINETIC_${k}_${VAR_SCOPES[scope]}_${name}`] = value;
   }
+  // Masked in every log line from now on (run-only secrets included).
+  rememberSecrets([password, ...Object.values(vars), ...Object.values(extraVars)]);
   return { name: env, url: def.url, readOnly: def.readOnly, username, password, vars: { ...vars, ...extraVars } };
 }
 
 // ---- Test connection -----------------------------------------------------
 
 function stepMessage(err: unknown): string {
-  const e = err as { name?: string; status?: number } | null;
+  const e = err as { name?: string; status?: number; message?: string } | null;
+  // Built by the engine from the host, the status and the platform version only.
+  if (e?.name === 'IntegratorAuthUnavailable') return `${e.message} Snapshots will leave connections and operations out.`;
+  if (e?.name === 'IntegratorSignInFailed') return toApiError(err).message;
   if (e?.name === 'HttpError') {
     if (e.status === 401 || e.status === 403) return `The username or password was not accepted (${e.status}).`;
     return `The server returned an error (${e.status ?? 'unknown'}).`;

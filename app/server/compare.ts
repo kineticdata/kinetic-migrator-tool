@@ -13,8 +13,8 @@ import { resolveCommit } from './pinned.ts';
 import { readTreeAt } from './repo.ts';
 import { loadConfig, loadOverrides, type ClientFactory, type EngineEnv } from './engine.ts';
 import {
-  MODULES, buildPlan, buildRelationships, collectionWord, compareArtifacts, computePlan, diffItem, loadState, moduleFor, suggest, targetOnlyEntries, unresolvedErrors,
-  type EnginePlan, type LoadedTree, type Relationships, type TargetOnlyEntry,
+  MODULES, buildPlan, buildRelationships, collectionWord, compareArtifacts, computePlan, diffItem, isOmittedKey, loadState, moduleFor, omittedBetween, suggest, targetOnlyEntries,
+  unresolvedErrors, withoutOmitted, type EnginePlan, type LoadedTree, type Omission, type Relationships, type TargetOnlyEntry,
 } from './engine-sync.ts';
 import { readEnvironmentFile, resolveEnv } from './environments.ts';
 import type { Emit } from './jobs.ts';
@@ -45,6 +45,8 @@ interface CompareRecord {
   // Items below each node that have target-only entries.
   entriesBelow: Map<string, number>;
   source: Map<string, unknown>;
+  // Types left out of the comparison (either side has none recorded).
+  omitted: Set<string>;
   relationships?: Relationships;
   scrub: Scrubber;
 }
@@ -123,20 +125,30 @@ function entriesBelow(index: TreeIndex, items: Map<string, ItemFull>): Map<strin
   return out;
 }
 
+const typeOf = (key: string) => moduleFor(key)?.type;
+
 async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
   env: EngineEnv | null; clientFactory?: ClientFactory; emit: Emit; signal: AbortSignal;
 }): Promise<CompareResult> {
   const { emit, signal, env } = deps;
   const onEvent = forwardEvents(emit, env ? envSecrets(env) : []);
+  const sourceOmitted = opts.source.artifacts.omitted ?? [];
   const sourceList = [...opts.source.artifacts].map(([key, data]) => ({ key, data }));
+  // Types either side left out (see lib/sync/omitted.mjs), and why.
+  const between = (target: Omission[] | undefined, live: boolean) => omittedBetween([
+    { name: opts.fromName, omitted: sourceOmitted }, { name: displayName(opts.to), omitted: target, live },
+  ]);
+  let omitted = new Set<string>();
+  let notes: string[] = [];
   let items: ItemFull[];
   if (opts.mode === 'preview') {
     if (opts.useSnapshots) {
       progress(emit, 1, 2, 'snapshot');
       const target = await loadSnapshot(ref, opts.to);
+      ({ types: omitted, notes } = between(target.artifacts.omitted, false));
       const plan = buildPlan({
-        modules: MODULES, exported: opts.source.artifacts, config: loadConfig(ref.dir),
-        target: new Map([...target.artifacts].map(([key, data]) => [key, { key, data }])),
+        modules: MODULES, exported: withoutOmitted(opts.source.artifacts, omitted, typeOf), config: loadConfig(ref.dir),
+        target: new Map([...withoutOmitted(target.artifacts, omitted, typeOf)].map(([key, data]) => [key, { key, data }])),
         state: loadState(ref.dir, opts.to), overrides: loadOverrides(ref.dir, opts.to),
         vars: { targetUrl: readEnvironmentFile(ref.dir, opts.to).url }, sourceName: opts.from, targetName: opts.to,
       });
@@ -144,24 +156,31 @@ async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
       items = previewItems(plan);
       progress(emit, 2, 2, 'compare');
     } else {
-      const { plan } = await computePlan({
-        projectDir: ref.dir, envName: opts.to, env: env!, sourceArtifacts: sourceList, sourceUnresolved: opts.source.artifacts.unresolved, sourceName: opts.from, onEvent, signal, clientFactory: deps.clientFactory,
+      const { plan, targetList } = await computePlan({
+        projectDir: ref.dir, envName: opts.to, env: env!, sourceArtifacts: sourceList, sourceUnresolved: opts.source.artifacts.unresolved, sourceOmitted, sourceName: opts.from, onEvent, signal, clientFactory: deps.clientFactory,
       });
+      ({ types: omitted, notes } = between(targetList.omitted, true));
       items = previewItems(plan);
     }
   } else {
     progress(emit, 1, 3, 'source');
     let right: Map<string, { data: unknown }>;
+    let targetOmitted: Omission[] | undefined;
     if (opts.liveTarget) {
       const { targetList } = await computePlan({
-        projectDir: ref.dir, envName: opts.to, env: env!, sourceArtifacts: sourceList, onEvent, signal, clientFactory: deps.clientFactory,
+        projectDir: ref.dir, envName: opts.to, env: env!, sourceArtifacts: sourceList, sourceOmitted, onEvent, signal, clientFactory: deps.clientFactory,
       });
       right = new Map(targetList.map((a) => [a.key, { data: a.data }]));
+      targetOmitted = targetList.omitted;
     } else {
-      right = new Map([...(await loadSnapshot(ref, opts.to)).artifacts].map(([k, data]) => [k, { data }]));
+      const target = await loadSnapshot(ref, opts.to);
+      right = new Map([...target.artifacts].map(([k, data]) => [k, { data }]));
+      targetOmitted = target.artifacts.omitted;
     }
+    ({ types: omitted, notes } = between(targetOmitted, Boolean(opts.liveTarget)));
+    right = withoutOmitted(right, omitted, typeOf);
     progress(emit, 2, 3, 'target');
-    const left = new Map(sourceList.map((a) => [a.key, { data: a.data }]));
+    const left = withoutOmitted(new Map(sourceList.map((a) => [a.key, { data: a.data }])), omitted, typeOf);
     const result = compareArtifacts({ modules: MODULES, left, right });
     // The engine diffs left (source) against right (target); the API's
     // `from` is the target's value and `to` the incoming one, as in preview.
@@ -185,10 +204,11 @@ async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
   const result: CompareResult = {
     compareId: randomUUID(), from: opts.from, fromName: opts.fromName, to: opts.to, mode: opts.mode,
     sourceCommit: opts.source.commit, counts, preselected: (opts.preselected ?? []).filter((k) => byKey.has(k)),
+    ...(notes.length ? { notes } : {}),
   };
   compares.set(result.compareId, {
     projectDir: ref.dir, result, items: byKey, index, rollup: rollupCounts(index, byKey), entriesBelow: entriesBelow(index, byKey),
-    source: opts.source.artifacts, scrub: makeScrubber(env ? envSecrets(env) : []),
+    source: opts.source.artifacts, omitted, scrub: makeScrubber(env ? envSecrets(env) : []),
   });
   while (compares.size > MAX_COMPARES) compares.delete(compares.keys().next().value!);
   return result;
@@ -277,12 +297,21 @@ export function registerCompareRoutes(router: Router, ctx: SyncContext): void {
     const selected = isPlainObject(body) ? body.selected : undefined;
     if (!Array.isArray(selected) || !selected.every((k) => typeof k === 'string')) throw badRequest('"selected" is a list of item keys.');
     const changed = new Set([...c.items.values()].filter((i) => ['new', 'changed', 'drifted'].includes(i.status)).map((i) => i.key));
+    // Items left out of the comparison may be needed too: they are named,
+    // as not checked, and never added.
+    const unchecked = new Set([...c.source.keys()].filter((k) => isOmittedKey(k, c.omitted, typeOf)));
     c.relationships ??= buildRelationships([...c.source].map(([key, data]) => ({ key, data })));
     const list = suggest({
-      selected: new Set(selected as string[]), relationships: c.relationships, changedKeys: changed,
+      selected: new Set(selected as string[]), relationships: c.relationships, changedKeys: new Set([...changed, ...unchecked]),
       targetOf: (key) => c.items.get(key)?.current ?? undefined,
     });
     const out: SuggestionOut[] = list.map((s) => {
+      if (unchecked.has(s.key)) {
+        return {
+          key: s.key, label: label(c, s.key), forKey: s.forKey, kind: s.kind, status: 'manual', unchecked: true,
+          reason: `${s.reason}; it couldn't be checked, because connections and operations were left out of this comparison`,
+        };
+      }
       const status = c.items.get(s.key)!.status;
       const why = status === 'new' ? `which is new in ${c.result.fromName}` : `which changed in ${c.result.fromName}`;
       return { key: s.key, label: label(c, s.key), forKey: s.forKey, kind: s.kind, status, reason: `${s.reason}, ${why}` };

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import git from 'isomorphic-git';
 import http from 'isomorphic-git/http/node';
 import type { SecretStore } from './secrets.ts';
-import { LAYOUT_VERSION, MARKER, markerLayout, rekeyTree, type LoadedTree } from './engine-sync.ts';
+import { LAYOUT_VERSION, MARKER, markerLayout, markerOmitted, rekeyTree, type LoadedTree } from './engine-sync.ts';
 
 export interface Author { name: string; email: string }
 
@@ -135,7 +135,7 @@ export async function readTreeAt(dir: string, commit: string, subdir: string, op
     }
   };
   await walk(root, '');
-  return rekeyTree(out, opts.raw ? LAYOUT_VERSION : markerLayout(marker));
+  return rekeyTree(out, opts.raw ? LAYOUT_VERSION : markerLayout(marker), markerOmitted(marker));
 }
 
 export async function getRemote(dir: string): Promise<string | null> {

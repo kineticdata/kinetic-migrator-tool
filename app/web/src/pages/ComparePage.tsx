@@ -32,6 +32,7 @@ import { DiffNamesProvider, FieldDiffTable, ThreeWayDiff } from '../components/F
 import { JobProgress } from '../components/JobProgress';
 import { JsonView } from '../components/JsonView';
 import { KindIcon, ObjectTree, flattenTree, type ChildrenState, type TreeRow } from '../components/ObjectTree';
+import { Notes } from '../components/Notes';
 import { SuggestionsList, uniqueSuggestions } from '../components/SuggestionsList';
 import { Button, IconButton, LinkButton } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
@@ -785,8 +786,9 @@ export function ComparePage() {
     toast.show({ tone: 'success', title: `Added ${plural(added.length, 'item')} to the changeset` });
   };
 
-  const addSuggestion = (s: SuggestionOut) => setSel((cur) => addItems(cur, [{ key: s.key, status: s.status }]));
-  const addAll = () => setSel((cur) => addItems(cur, uniqueSuggestions(suggestions).map((s) => ({ key: s.key, status: s.status }))));
+  const addSuggestion = (s: SuggestionOut) => !s.unchecked && setSel((cur) => addItems(cur, [{ key: s.key, status: s.status }]));
+  // Items the comparison could not check are named, never added.
+  const addAll = () => setSel((cur) => addItems(cur, uniqueSuggestions(suggestions).filter((s) => !s.unchecked).map((s) => ({ key: s.key, status: s.status }))));
 
   const trayItems: TrayItem[] = keys.map((key) => {
     const node = lookup.nodes.get(key);
@@ -931,6 +933,7 @@ export function ComparePage() {
               {(result.counts.same ?? 0) > 0 && <> · {plural(result.counts.same ?? 0, 'item')} the same</>}
             </p>
             {run.error ? <div className="w-full"><InlineError error={run.error} /></div> : null}
+            <Notes notes={result.notes} label="Comparison notes" className="w-full" />
           </div>
           <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(300px,360px)_minmax(0,1fr)_300px] lg:grid-rows-[minmax(0,1fr)]">
             <CompareTree

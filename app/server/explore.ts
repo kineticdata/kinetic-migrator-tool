@@ -2,7 +2,8 @@
 // parent), one item's summary / relationships / JSON / history, and search.
 // Secrets never appear: snapshots hold none, and summaries get only has-flags.
 import type { CatalogKapp, ProjectCatalog } from '../shared/api.ts';
-import type { ExploreItem, RelatedItem, SearchResponse, SearchResult } from '../shared/sync-api.ts';
+import type { ExploreItem, RelatedItem, SearchResponse, SearchResult, TreeNode } from '../shared/sync-api.ts';
+import { NOT_CAPTURED } from './history.ts';
 import { badRequest, notFound } from './errors.ts';
 import { compareText, moduleFor, segmentLabel, summarize, type Edge } from './engine-sync.ts';
 import { hasEnvSecret, pipelineOrder } from './environments.ts';
@@ -201,6 +202,26 @@ async function catalogSnapshot(ref: ProjectRef, env: string | null): Promise<Sna
   return null;
 }
 
+// The Connections group of a snapshot that could not capture connections:
+// shown with why, instead of missing or looking empty.
+const CONNECTIONS = 'group:connections';
+export function treeNodes(snap: Snapshot, parent: string | null): TreeNode[] | null {
+  const omission = (snap.artifacts.omitted ?? []).find((o) => o.types.includes('connections'));
+  const note = omission ? `${NOT_CAPTURED}${omission.message}` : undefined;
+  if (note && parent === CONNECTIONS && !snap.index.nodes.has(CONNECTIONS)) return [];
+  const nodes = childrenOf(snap.index, parent);
+  if (!nodes) return null;
+  const out = nodes.map(toTreeNode);
+  if (!note || (parent !== null && parent !== '')) return out;
+  const own = out.find((n) => n.id === CONNECTIONS);
+  if (own) own.note = note;
+  else {
+    const at = out.findIndex((n) => n.id === 'group:kapps');
+    out.splice(at < 0 ? out.length : at + 1, 0, { id: CONNECTIONS, label: 'Connections', kind: 'group', count: 0, hasChildren: false, note });
+  }
+  return out;
+}
+
 export function registerExploreRoutes(router: Router, ctx: SyncContext): void {
   const snapshotOf = async (p: string, env: string) => {
     const ref = ctx.find(p);
@@ -213,9 +234,9 @@ export function registerExploreRoutes(router: Router, ctx: SyncContext): void {
   });
   router.get('/api/projects/:p/explore/:env/tree', async ({ params, query }) => {
     const { snap } = await snapshotOf(params.p, params.env);
-    const nodes = childrenOf(snap.index, query.get('parent'));
+    const nodes = treeNodes(snap, query.get('parent'));
     if (!nodes) throw notFound('No such tree node.');
-    return { json: nodes.map(toTreeNode) };
+    return { json: nodes };
   });
   router.get('/api/projects/:p/explore/:env/item', async ({ params, query }) => {
     const { ref, snap } = await snapshotOf(params.p, params.env);

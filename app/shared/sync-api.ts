@@ -15,6 +15,9 @@ export interface SnapshotResult {
   counts: Record<string, number>;
   // Items changed in the environment since they were last promoted.
   drifted: string[];
+  // What the snapshot had to leave out, in words (connections and operations
+  // when the Integrator sign-in is unavailable).
+  warnings?: string[];
 }
 
 // ---- Trees (Explore and Compare) -------------------------------------------
@@ -32,6 +35,8 @@ export interface TreeNode {
   // Items below this node (not counting itself).
   count: number;
   hasChildren: boolean;
+  // A group the snapshot could not capture, and why (Explore).
+  note?: string;
 }
 
 export type CompareStatus = 'new' | 'changed' | 'drifted' | 'manual' | 'only-target' | 'same';
@@ -130,6 +135,9 @@ export interface CompareResult {
   counts: Partial<Record<CompareStatus, number>>;
   // Items to tick up front (a restore pre-ticks what the apply touched).
   preselected: string[];
+  // What this comparison left out, and why (connections and operations when
+  // either side's snapshot has none recorded).
+  notes?: string[];
 }
 
 export interface DiffEntry {
@@ -175,6 +183,9 @@ export interface SuggestionOut {
   status: CompareStatus;
   // Plain reason ending in "which is new in Dev" / "which changed in Dev".
   reason: string;
+  // A dependency this comparison could not check (a connection or operation
+  // left out of it): shown with its reason, never added.
+  unchecked?: boolean;
 }
 
 // ---- Changesets ------------------------------------------------------------
@@ -427,6 +438,8 @@ export interface HistoryEvent {
   changesetId: string | null;
   status: RunStatus | null;
   drifted: string[];
+  // Snapshots and backups: what was not captured, and why.
+  notes?: string[];
 }
 
 export interface HistoryDetail {

@@ -13,6 +13,7 @@ import { qk, startSnapshot, useExploreItem, useSearch, useTreeChildren, useTreeR
 import { useJob } from '../api/useJob';
 import { DetailPane } from '../components/DetailPane';
 import { JobProgress } from '../components/JobProgress';
+import { Notes } from '../components/Notes';
 import { ObjectTree, flattenTree, type ChildrenState, type TreeRow } from '../components/ObjectTree';
 import { Badge } from '../components/ui/Badge';
 import { Button, IconButton } from '../components/ui/Button';
@@ -59,7 +60,9 @@ function useSnapshotJob(projectId: string, env: string) {
     onDone: (j) => {
       if (j.status !== 'succeeded') return;
       const r = j.result;
-      toast.show({ tone: 'success', title: `Snapshot of ${label} taken`, description: r ? (r.commit ? plural(r.total, 'item') : 'Nothing changed since the last snapshot.') : undefined });
+      toast.show(r?.warnings?.length
+        ? { tone: 'info', title: `Snapshot of ${label} taken, with notes`, description: r.warnings.join(' ') }
+        : { tone: 'success', title: `Snapshot of ${label} taken`, description: r ? (r.commit ? plural(r.total, 'item') : 'Nothing changed since the last snapshot.') : undefined });
     },
   });
   const start = async () => {
@@ -188,7 +191,14 @@ function TreePanel({ projectId, env, commit, selectedKey, onSelect }: {
       );
     }
   } else {
-    body = <ObjectTree label={`Items in ${envLabel(env)}`} rows={rows} selectedKey={selectedKey} onSelect={select} onToggle={toggle} className="min-h-0 flex-1 py-1" />;
+    // A group the snapshot could not capture (connections) says why.
+    const notes = (root.data ?? []).map((n) => n.note).filter((n): n is string => Boolean(n));
+    body = (
+      <>
+        <Notes notes={notes} label="Snapshot notes" className="m-2" />
+        <ObjectTree label={`Items in ${envLabel(env)}`} rows={rows} selectedKey={selectedKey} onSelect={select} onToggle={toggle} className="min-h-0 flex-1 py-1" />
+      </>
+    );
   }
 
   return (

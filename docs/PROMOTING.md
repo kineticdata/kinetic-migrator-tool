@@ -60,6 +60,16 @@ KINETIC_DEV_PASSWORD=...
 and digits turned into `_`. The same credentials are used for the Core, Task
 and Integrator APIs; the tool fetches the Integrator token itself.
 
+The Integrator token comes from the platform's OAuth implicit-grant sign-in.
+Some platform versions do not offer it (Kinetic Platform 7.0.0-rc3 answers
+404). Then exports keep everything else and leave connections and
+operations out, saying why; the snapshot records it. Plans and comparisons
+where either side has no connections recorded this way leave connections
+and operations out entirely: none show as new, only in the target or
+removable, and references to them are not checked (one warning lists the
+items that have them). Test connection shows the same message for the
+Integrator step.
+
 ## 3. Export
 
 ```bash
@@ -701,6 +711,9 @@ contain reference-data values, so `compares/` is git-ignored.
 - **`… the same name but id …`**: the connection or operation was created in
   the target by hand. Delete or rename it there so the promoted one (with
   the id forms and workflows expect) can be created.
+- **`Connections and operations were left out`**: the Integrator sign-in is
+  not available on that platform version (see section 2). Everything else
+  is exported, compared and promoted; connections are not, until it is.
 - **Plan shows changes right after an apply**: the platform added defaults
   on write. Report it; the tool's normalizer should ignore that field.
 - **`The Kinetic Platform rejected the change (400): …`** (in the app): the

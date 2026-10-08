@@ -9,6 +9,7 @@ import { Check, GitCompare, History as HistoryIcon, ListChecks, RotateCcw } from
 import type { HistoryEvent, RunRecord } from '../../../shared/sync-api';
 import { useHistoryDetail } from '../api/history';
 import { useItemLabels } from '../api/queries';
+import { Notes } from '../components/Notes';
 import { Timeline } from '../components/Timeline';
 import { Badge } from '../components/ui/Badge';
 import { Button, LinkButton } from '../components/ui/Button';
@@ -180,6 +181,7 @@ function DetailPanel({ projectId, selected, listed }: { projectId: string; selec
               {run && <Fact label="Duration">{duration ?? '—'}</Fact>}
               {run && run.from !== run.to && <Fact label="From">{envLabel(run.from)}</Fact>}
             </dl>
+            <Notes notes={event.notes} label="Snapshot notes" />
             {event.drifted.length > 0 && (
               <div>
                 <h3 className="mb-1 text-xs font-semibold text-muted">{plural(event.drifted.length, 'item')} changed since the last promotion</h3>

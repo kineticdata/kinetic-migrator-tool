@@ -25,6 +25,7 @@ import {
   MODULES, collectionWord, computePlan, describeFailureMessage, removalInSource, envBoundFields, isEmptyValue, isSecretName, isSecretProperty, missingRequired, parseEntryKey, parsePath, readTree, runApply, segmentLabel, stamp,
   type EngineHints, type EngineRemoval, type EnginePlan, type PlanItem, type SettingsHintParts,
 } from './engine-sync.ts';
+import { isOmittedKey, moduleFor } from './engine-sync.ts';
 import { currentKeys, readChangeset, recordApplied, removeList } from './changesets.ts';
 import { hasEnvSecret, readEnvironmentFile, readOverrides, resolveEnv, setEnvSecret } from './environments.ts';
 import type { Emit } from './jobs.ts';
@@ -56,6 +57,9 @@ interface StoredPlan {
   // one's fingerprint as reviewed (an item changed since is not deleted).
   remove: string[];
   removeExpected: Record<string, string>;
+  // Selected keys left out of the plan (connections the Integrator could not
+  // be read for), with why: reported skipped at apply, never written unreviewed.
+  leftOut: Record<string, string>;
 }
 
 const MAX_PLANS = 50;
@@ -390,8 +394,17 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     // An item that is in the newest snapshot of the source again (not only the
     // pinned one) is not removed.
     const newest = remove.length ? await latestSnapshotCommit(ref, from) : null;
+    // Removals the newest snapshot could not check (it left their type out)
+    // are refused, with why.
+    const refused: string[] = [];
     if (newest && newest !== pinned) {
       const latest = (await loadSnapshot(ref, from)).artifacts;
+      for (const o of latest.omitted ?? []) {
+        const types = new Set(o.types);
+        const unknown = remove.filter((k) => isOmittedKey(k.split('#')[0], types, (x) => moduleFor(x)?.type));
+        for (const k of unknown) refused.push(`${k}: not removed — couldn't check ${displayName(from)}'s connections: ${o.message}`);
+        remove = remove.filter((k) => !unknown.includes(k));
+      }
       const back = remove.filter((k) => removalInSource(k, latest, MODULES));
       for (const k of back) unplanned.push(`${k}: still exists in ${displayName(from)} (newest snapshot) — not removed`);
       remove = remove.filter((k) => !back.includes(k));
@@ -403,18 +416,28 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
       signal, clientFactory: ctx.clientFactory, hints,
     });
     plan.warnings.push(...unplanned);
+    plan.errors.push(...refused);
     // Only what the plan shows as a delete is ever sent to apply.
     const deletes = (plan.removals ?? []).filter((x) => x.action === 'delete' && x.hash);
     const removeExpected = Object.fromEntries(deletes.map((x) => [x.key, x.hash!]));
     const active = plan.items.filter((i) => i.action !== 'excluded');
-    const missing = keys.filter((k) => !plan.items.some((i) => i.key === k));
+    // Keys of a type left out of the plan (connections when either side has
+    // none recorded) are skipped with the plan's note, not refused.
+    const leftOutTypes = new Set(plan.omitted ?? []);
+    const isLeftOut = (k: string) => !plan.items.some((i) => i.key === k) && isOmittedKey(k, leftOutTypes, (x) => moduleFor(x)?.type);
+    const why = plan.omissions?.[0];
+    const leftOut = Object.fromEntries(keys.filter(isLeftOut).map((k) => [k, why
+      ? `Not applied: ${why.live ? `${displayName(why.name)}'s connections couldn't be read` : `${displayName(why.name)}'s snapshot has none recorded`} — ${why.message}`
+      : 'Not applied: connections and operations were left out of this plan.']));
+    for (const k of Object.keys(leftOut)) select.delete(k);
+    const missing = keys.filter((k) => !plan.items.some((i) => i.key === k) && !isLeftOut(k));
     if (missing.length) plan.errors.push(...missing.map((k) => `${k}: not in the source snapshot`));
     const secrets = await secretsNeeded(ctx.secrets, ref, to, active, memory);
     const result = buildResult({ planId, name, to, from, changesetId, sourceCommit: pinned, selected: keys, remove }, plan, {
       environmentValues: environmentValues(ref.dir, to, active, readTree(sourceDir)), secretsNeeded: secrets, hints,
     });
     const scrubbed = makeScrubber([env.password, ...Object.values(env.vars)])(result);
-    remember(planId, { projectDir: ref.dir, result: scrubbed, kind, select, sourceDir, sourcePath, resolutions, remove: deletes.map((x) => x.key), removeExpected });
+    remember(planId, { projectDir: ref.dir, result: scrubbed, kind, select, sourceDir, sourcePath, resolutions, remove: deletes.map((x) => x.key), removeExpected, leftOut });
     return scrubbed;
   }
 }
@@ -568,7 +591,13 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   // changed in the target since review, now manual, or gone (the run is then
   // partial), unless the user chose to keep the target's version.
   const skipped: string[] = [];
+  // Selected items the plan had to leave out: skipped, and the run partial.
+  const leftOut = Object.entries(plan.leftOut ?? {});
   const onPlan = (applyPlan: EnginePlan) => {
+    for (const [key, message] of leftOut) {
+      skipped.push(key);
+      onEvent({ type: 'item', key, status: 'skipped', message });
+    }
     if (applyPlan.errors.length) return;
     for (const reviewed of r.items) {
       if (reviewed.action !== 'create' && reviewed.action !== 'update') continue;
@@ -637,6 +666,8 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
     } else {
       status = done ? 'partial' : 'failed';
       error = failed ? `${failed.key}: ${failed.message ?? toApiError(err).message}` : toApiError(err).message;
+      // The job itself succeeds (its result records the failure): log it here.
+      ctx.logger?.error(`apply ${r.planId} to ${r.to} failed${failed ? ` at ${failed.key}` : ''}`, scrubError(err, known));
     }
   }
   step('apply', status === 'applied' ? 'done' : 'failed');
@@ -657,7 +688,8 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   const safe = scrub(record);
   mkdirSync(path.join(ref.dir, RUNS_DIR), { recursive: true });
   writeFileSync(path.join(ref.dir, RUNS_DIR, `${runId}.json`), stableStringify(safe));
-  if (r.changesetId && (status === 'applied' || status === 'partial') && existsSync(path.join(ref.dir, 'changesets', `${r.changesetId}.json`))) {
+  // A changeset with items left out was not promoted to this target.
+  if (r.changesetId && (status === 'applied' || status === 'partial') && !leftOut.length && existsSync(path.join(ref.dir, 'changesets', `${r.changesetId}.json`))) {
     recordApplied(ref, r.changesetId, { env: r.to, runId, at: safe.finishedAt });
   }
   // Removals actually made (as planned when none was).

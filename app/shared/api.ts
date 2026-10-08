@@ -10,6 +10,8 @@ export interface SessionInfo {
   // checking: the keychain is still being probed (Windows compiles its
   // helper on first start); `available` is not known yet.
   keychain: { available: boolean; checking?: boolean };
+  // Today's server log file (redacted lines, kept 14 days), when there is one.
+  logFile?: string;
 }
 
 export type JobStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
