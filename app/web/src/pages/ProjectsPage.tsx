@@ -69,7 +69,13 @@ export function ProjectsPage() {
         )}
       </div>
 
-      {session.data && !session.data.keychain.available && (
+      {session.data?.keychain.checking && (
+        <p role="status" className="mb-6 flex items-start gap-2 rounded-lg border border-border bg-surface-2 px-3.5 py-2.5 text-sm text-muted">
+          <Info size={16} aria-hidden className="mt-0.5 shrink-0 text-accent" />
+          Checking the system keychain…
+        </p>
+      )}
+      {session.data && !session.data.keychain.available && !session.data.keychain.checking && (
         <p className="mb-6 flex items-start gap-2 rounded-lg border border-border bg-surface-2 px-3.5 py-2.5 text-sm text-muted">
           <Info size={16} aria-hidden className="mt-0.5 shrink-0 text-accent" />
           No system keychain was found, so passwords are kept only until kinetic-migrate stops.

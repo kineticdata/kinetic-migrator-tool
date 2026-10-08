@@ -236,11 +236,17 @@ export class DeferredStore implements SecretStore {
   private store: SecretStore | null = null;
   private pending: Promise<SecretStore>;
 
-  constructor(make: () => Promise<SecretStore>) {
-    this.pending = make().catch(() => new MemoryStore()).then((s) => (this.store = s));
+  constructor(make: () => Promise<SecretStore>, log: (message: string) => void = () => {}) {
+    this.pending = make().catch((err: unknown) => {
+      // The probe's own failure, never a secret: only the error's name.
+      log(`The system keychain check failed (${err instanceof Error ? err.name : 'error'}); secrets are kept in memory until the server stops.`);
+      return new MemoryStore();
+    }).then((s) => (this.store = s));
   }
 
   get persistent(): boolean { return Boolean(this.store?.persistent); }
+  // True until the store is chosen.
+  get checking(): boolean { return this.store === null; }
   ready(): Promise<void> { return this.pending.then(() => undefined); }
   async get(account: string) { return (await this.pending).get(account); }
   async set(account: string, value: string) { return (await this.pending).set(account, value); }

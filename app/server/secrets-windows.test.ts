@@ -310,3 +310,29 @@ test('the keychain is chosen in the background: the server never waits for the p
   await broken.ready();
   assert.equal(await broken.has('x'), false, 'falls back to memory');
 });
+
+test('/api/session says "checking" while the keychain is still being probed, and logs (no secrets) when the probe fails', async () => {
+  const { DeferredStore } = await import('./secrets.ts');
+  const { buildRouter } = await import('./main.ts');
+  const { JobRegistry } = await import('./jobs.ts');
+  let resolve!: (s: MemoryStore) => void;
+  const store = new DeferredStore(() => new Promise((r) => { resolve = r; }));
+  const router = buildRouter({ workspace: '/ws', secrets: store, jobs: new JobRegistry({}) });
+  const session = async () => {
+    const m = router.match('GET', '/api/session') as { handler: (x: unknown) => Promise<{ json: any }> };
+    return (await m.handler({ params: {}, query: new URLSearchParams() })).json;
+  };
+  const started = Date.now();
+  const first = await session();
+  assert.deepEqual(first.keychain, { available: false, checking: true });
+  assert.ok(Date.now() - started < 5000);
+  resolve(new MemoryStore());
+  await store.ready();
+  assert.deepEqual((await session()).keychain, { available: false });
+  const logs: string[] = [];
+  const failing = new DeferredStore(async () => { throw new Error(`boom ${PLANTED}`); }, (m) => logs.push(m));
+  await failing.ready();
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /check failed \(Error\); secrets are kept in memory/);
+  assert.ok(!logs[0].includes('pl4nted'));
+});

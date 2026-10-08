@@ -47,7 +47,12 @@ export function asList<T>(value: unknown, key: string): T[] {
   return [];
 }
 
-export const useSession = () => useQuery({ queryKey: qk.session, queryFn: () => api.get<SessionInfo>('/api/session') });
+// Asked again every few seconds while the server is still checking the keychain.
+export const useSession = () => useQuery({
+  queryKey: qk.session,
+  queryFn: () => api.get<SessionInfo>('/api/session'),
+  refetchInterval: (q) => (q.state.data?.keychain.checking ? 2000 : false),
+});
 
 export const useProjects = () => useQuery({ queryKey: qk.projects, queryFn: () => api.get<ProjectSummary[]>('/api/projects') });
 
