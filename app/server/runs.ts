@@ -67,15 +67,16 @@ function remember(id: string, plan: StoredPlan): void {
 }
 
 // At server start: source folders (plans/src-*) of plans that no longer
-// exist and unfinished snapshot exports (plans/snap-*), for example from
-// before a restart or a crash.
+// exist, unfinished snapshot exports (plans/snap-*) and replaced snapshots
+// that could not be deleted (plans/old-*), for example from before a restart
+// or a crash.
 export function removeStaleWorkFolders(projectDir: string): void {
   const dir = path.join(projectDir, 'plans');
   if (!existsSync(dir)) return;
   const live = new Set([...plans.values()].map((p) => p.sourceDir));
   for (const name of readdirSync(dir)) {
     const full = path.join(dir, name);
-    if (/^(src|snap)-/.test(name) && !live.has(full)) rmSync(full, { recursive: true, force: true });
+    if (/^(src|snap|old)-/.test(name) && !live.has(full)) rmSync(full, { recursive: true, force: true });
   }
 }
 

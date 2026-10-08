@@ -43,6 +43,43 @@ export function driftedKeys(projectDir: string, env: string, artifacts: Map<stri
   }).sort();
 }
 
+// Replaces `final` with `temp` as a whole. The previous folder is renamed
+// aside (into plans/, which is never committed) rather than deleted first, and
+// put back when the new one cannot be moved in: a failed rename (antivirus or
+// indexer handles on Windows) never leaves the snapshot missing, which the
+// next commit would record as a deletion. An old folder that cannot be
+// deleted afterwards stays in plans/ until the next start.
+export function swapInto(temp: string, final: string, aside: string, ops: {
+  rename?: (from: string, to: string) => void; rm?: (p: string) => void;
+} = {}): void {
+  const rename = ops.rename ?? fs.renameSync;
+  const rm = ops.rm ?? ((p: string) => fs.rmSync(p, { recursive: true, force: true }));
+  const removeTemp = () => fs.rmSync(temp, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(final), { recursive: true });
+  const hadOld = fs.existsSync(final);
+  if (hadOld) {
+    try {
+      fs.mkdirSync(path.dirname(aside), { recursive: true });
+      rename(final, aside);
+    } catch (err) {
+      removeTemp();
+      throw err;
+    }
+  }
+  try {
+    rename(temp, final);
+  } catch (err) {
+    if (hadOld) {
+      try { rename(aside, final); } catch { /* left in plans/; reported by the error below */ }
+    }
+    removeTemp();
+    throw err;
+  }
+  if (hadOld) {
+    try { rm(aside); } catch { /* removed with the other work folders at the next start */ }
+  }
+}
+
 // Exports `env` into a temporary folder, swaps it into snapshots/<env>/ only
 // when the export succeeded, and commits. Call inside withProjectLock.
 export async function takeSnapshot(opts: {
@@ -62,9 +99,7 @@ export async function takeSnapshot(opts: {
     throw scrubError(err, envSecrets(env));
   }
   const final = snapshotDir(ref.dir, env.name);
-  fs.rmSync(final, { recursive: true, force: true });
-  fs.mkdirSync(path.dirname(final), { recursive: true });
-  fs.renameSync(temp, final);
+  swapInto(temp, final, path.join(ref.dir, 'plans', `old-${randomUUID()}`));
   const drifted = driftedKeys(ref.dir, env.name, readTree(snapshotDir(ref.dir, env.name)));
   const body = drifted.length ? `Drifted: ${drifted.length} item(s) changed since the last promotion.\n${drifted.join('\n')}` : undefined;
   const message = commitMessage(opts.title, { Environment: env.name, ...opts.trailers }, body);
