@@ -45,6 +45,16 @@ export const execFileRunner: CommandRunner = (file, args, input) => new Promise(
   child.stdin?.end(input ?? '');
 });
 
+// Keychain values are stored as `b64:` + base64 of the UTF-8 text, so every
+// tool only ever sees ASCII (macOS `security -w` prints non-ASCII values as
+// hex; console code pages can mangle them on Windows). Values stored before
+// the marker existed are read back as they are.
+const MARKER = 'b64:';
+export const encodeStored = (value: string): string => MARKER + Buffer.from(value, 'utf8').toString('base64');
+export const decodeStored = (stored: string): string => (
+  stored.startsWith(MARKER) ? Buffer.from(stored.slice(MARKER.length), 'base64').toString('utf8') : stored
+);
+
 // `security` exits 44 for a missing item; the Windows scripts use the same code.
 const NOT_FOUND = 44;
 
@@ -101,8 +111,12 @@ export class KeychainStore implements SecretStore {
     try {
       switch (this.platform) {
         case 'darwin': return (await this.run('security', ['list-keychains'])).code === 0;
-        // A search that succeeds proves the tool and a running secret service.
-        case 'linux': return (await this.run('secret-tool', ['search', 'service', `${this.service}-probe`])).code === 0;
+        // A search that runs proves the tool and a running secret service; a
+        // search with no match exits 1 with nothing on stderr.
+        case 'linux': {
+          const r = await this.run('secret-tool', ['search', 'service', `${this.service}-probe`]);
+          return r.code === 0 || (r.code === 1 && r.stderr.trim() === '');
+        }
         case 'win32': return (await this.run('powershell.exe', psArgs(PS.probe), '{}')).code === 0;
         default: return false;
       }
@@ -115,7 +129,9 @@ export class KeychainStore implements SecretStore {
     if (/[\r\n\x00]/.test(value)) throw new Error('Secrets cannot contain line breaks.');
   }
 
-  async set(account: string, value: string): Promise<void> {
+  async set(account: string, plain: string): Promise<void> {
+    // Encoded, the value is one ASCII line on every platform.
+    const value = encodeStored(plain);
     let r: CommandResult;
     switch (this.platform) {
       case 'darwin':
@@ -143,10 +159,10 @@ export class KeychainStore implements SecretStore {
         r = await this.run('security', ['find-generic-password', '-s', this.service, '-a', account, '-w']);
         if (r.code === NOT_FOUND) return undefined;
         if (r.code !== 0) throw new KeychainError('read', r.code);
-        return r.stdout.replace(/\n$/, '');
+        return decodeStored(r.stdout.replace(/\n$/, ''));
       case 'linux':
         r = await this.run('secret-tool', ['lookup', 'service', this.service, 'account', account]);
-        if (r.code === 0 && r.stdout !== '') return r.stdout;
+        if (r.code === 0 && r.stdout !== '') return decodeStored(r.stdout);
         // An empty lookup (exit 0 or 1, no output at all) is "not found".
         if ((r.code === 0 || r.code === 1) && r.stdout === '' && r.stderr.trim() === '') return undefined;
         throw new KeychainError('read', r.code);
@@ -154,7 +170,7 @@ export class KeychainStore implements SecretStore {
         r = await this.run('powershell.exe', psArgs(PS.get), JSON.stringify({ account }));
         if (r.code === NOT_FOUND) return undefined;
         if (r.code !== 0) throw new KeychainError('read', r.code);
-        return r.stdout;
+        return decodeStored(r.stdout);
       default:
         throw new Error('No system keychain on this platform.');
     }

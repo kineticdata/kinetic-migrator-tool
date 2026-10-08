@@ -2,7 +2,7 @@
 // command shapes (a fake runner; no real keychain is touched).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { accountFor, KeychainStore, MemoryStore, type CommandRunner } from './secrets.ts';
+import { accountFor, decodeStored, encodeStored, KeychainStore, MemoryStore, type CommandRunner } from './secrets.ts';
 
 const PLANTED = 'pl4nted-S3cret"\\value';
 
@@ -37,25 +37,26 @@ function fakeRunner(results: Array<{ code: number; stdout?: string }>): { run: C
 }
 
 test('macOS adapter never puts the value on the command line', async () => {
-  const { run, calls } = fakeRunner([{ code: 0 }, { code: 0, stdout: `${PLANTED}\n` }, { code: 44 }]);
+  const { run, calls } = fakeRunner([{ code: 0 }, { code: 0, stdout: `${encodeStored(PLANTED)}\n` }, { code: 44 }]);
   const s = new KeychainStore({ platform: 'darwin', run });
   assert.equal(s.persistent, true);
   await s.set('p/dev/credentials/password', PLANTED);
   assert.equal(calls[0].file, 'security');
   assert.ok(!calls[0].args.join(' ').includes('pl4nted'));
   assert.ok(calls[0].input?.includes('add-generic-password'));
+  assert.ok(calls[0].input?.includes(`-w "${encodeStored(PLANTED)}"`), 'stored base64-encoded');
   assert.equal(await s.get('p/dev/credentials/password'), PLANTED);
   assert.deepEqual(calls[1].args, ['find-generic-password', '-s', 'kinetic-migrate', '-a', 'p/dev/credentials/password', '-w']);
   assert.equal(await s.get('p/dev/credentials/username'), undefined);
 });
 
 test('Linux adapter stores via stdin with secret-tool', async () => {
-  const { run, calls } = fakeRunner([{ code: 0 }, { code: 0, stdout: PLANTED }]);
+  const { run, calls } = fakeRunner([{ code: 0 }, { code: 0, stdout: encodeStored(PLANTED) }]);
   const s = new KeychainStore({ platform: 'linux', run });
   await s.set('p/dev/credentials/password', PLANTED);
   assert.equal(calls[0].file, 'secret-tool');
   assert.equal(calls[0].args[0], 'store');
-  assert.equal(calls[0].input, PLANTED);
+  assert.equal(calls[0].input, encodeStored(PLANTED));
   assert.ok(!calls[0].args.join(' ').includes('pl4nted'));
   assert.equal(await s.has('p/dev/credentials/password'), true);
 });
@@ -66,7 +67,7 @@ test('Windows adapter passes account and value as JSON on stdin', async () => {
   await s.set('p/dev/credentials/password', PLANTED);
   assert.equal(calls[0].file, 'powershell.exe');
   assert.ok(!calls[0].args.join(' ').includes('pl4nted'));
-  assert.deepEqual(JSON.parse(calls[0].input ?? ''), { account: 'p/dev/credentials/password', value: PLANTED });
+  assert.deepEqual(JSON.parse(calls[0].input ?? ''), { account: 'p/dev/credentials/password', value: encodeStored(PLANTED) });
 });
 
 test('a failing keychain write never echoes the value in the error', async () => {
@@ -109,9 +110,36 @@ test('Linux: an empty lookup is not found; failures with output throw; delete ch
   await assert.rejects(s.delete('a/b/c/d'), /keychain/i);
 });
 
-test('Linux available() needs a successful secret-tool probe', async () => {
+test('Linux available() needs a working secret-tool probe (a search with no match exits 1 quietly)', async () => {
   assert.equal(await new KeychainStore({ platform: 'linux', run: scripted([result(0)]) }).available(), true);
+  assert.equal(await new KeychainStore({ platform: 'linux', run: scripted([result(1)]) }).available(), true);
   assert.equal(await new KeychainStore({ platform: 'linux', run: scripted([result(1, '', 'Cannot autolaunch D-Bus')]) }).available(), false);
+  assert.equal(await new KeychainStore({ platform: 'linux', run: scripted([result(2)]) }).available(), false);
+});
+
+test('keychain values are stored base64-encoded with a marker; values stored before the marker still read back', async () => {
+  const unicode = 'Pässwörd-日本-€';
+  assert.match(encodeStored(unicode), /^b64:[A-Za-z0-9+/=]+$/);
+  assert.equal(decodeStored(encodeStored(unicode)), unicode);
+  assert.equal(decodeStored('legacy-plain-value'), 'legacy-plain-value');
+  assert.equal(decodeStored(''), '');
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const stored = new Map<string, string>();
+    const run: CommandRunner = async (file, args, input) => {
+      if (args.includes('find-generic-password') || args[0] === 'lookup' || (file === 'powershell.exe' && input && !JSON.parse(input).value && !args.join(' ').includes('Remove'))) {
+        return result(0, platform === 'darwin' ? `${stored.get('v') ?? ''}\n` : stored.get('v') ?? '');
+      }
+      const value = platform === 'darwin' ? /-w "([^"]*)"/.exec(input ?? '')?.[1] : platform === 'linux' ? input : JSON.parse(input ?? '{}').value;
+      stored.set('v', value ?? '');
+      return result(0);
+    };
+    const s = new KeychainStore({ platform, run });
+    await s.set('a/b/c/d', unicode);
+    assert.ok(/^b64:/.test(stored.get('v') ?? ''), platform);
+    assert.equal(await s.get('a/b/c/d'), unicode, platform);
+    stored.set('v', 'legacy-plain-value');
+    assert.equal(await s.get('a/b/c/d'), 'legacy-plain-value', platform);
+  }
 });
 
 test('Windows: exit 44 is not found; other failures throw; delete checks exit codes', async () => {
