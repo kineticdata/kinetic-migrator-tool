@@ -8,10 +8,12 @@ import { randomUUID } from 'node:crypto';
 import type {
   CompareItem, CompareMode, CompareResult, CompareStatus, CompareTreeNode, DiffEntry, SuggestionOut,
 } from '../shared/sync-api.ts';
-import { badRequest, notFound } from './errors.ts';
+import { ApiError, badRequest, notFound } from './errors.ts';
+import { resolveCommit } from './pinned.ts';
+import { readTreeAt } from './repo.ts';
 import { loadConfig, loadOverrides, type ClientFactory, type EngineEnv } from './engine.ts';
 import {
-  MODULES, buildPlan, buildRelationships, compareArtifacts, computePlan, loadState, suggest, type EnginePlan, type Relationships,
+  MODULES, buildPlan, buildRelationships, compareArtifacts, computePlan, diffValues, loadState, suggest, type EnginePlan, type Relationships,
 } from './engine-sync.ts';
 import { readEnvironmentFile, resolveEnv } from './environments.ts';
 import type { Emit } from './jobs.ts';
@@ -139,8 +141,10 @@ async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
     progress(emit, 2, 3, 'target');
     const left = new Map(sourceList.map((a) => [a.key, { data: a.data }]));
     const result = compareArtifacts({ modules: MODULES, left, right });
+    // The engine diffs left (source) against right (target); the API's
+    // `from` is the target's value and `to` the incoming one, as in preview.
     items = result.items.filter((i) => i.key !== 'task-refs').map((i) => ({
-      key: i.key, type: i.type, status: RAW_STATUS[i.status], diff: i.diff,
+      key: i.key, type: i.type, status: RAW_STATUS[i.status], diff: i.diff.map((d) => ({ path: d.path, from: d.to, to: d.from })),
       incoming: left.get(i.key)?.data ?? null, current: right.get(i.key)?.data ?? null,
     }));
     progress(emit, 3, 3, 'compare');
@@ -187,10 +191,19 @@ export function registerCompareRoutes(router: Router, ctx: SyncContext): void {
     if (from === to) throw badRequest('Compare needs two different environments.');
     const mode = body.mode ?? 'preview';
     if (mode !== 'preview' && mode !== 'raw') throw badRequest('"mode" is "preview" or "raw".');
-    const snap = await loadSnapshot(ref, from);
+    let source: CompareSource;
+    if (body.sourceCommit !== undefined) {
+      const commit = typeof body.sourceCommit === 'string' ? await resolveCommit(ref.dir, body.sourceCommit) : null;
+      if (!commit) throw badRequest('"sourceCommit" is not a commit of this project.');
+      const artifacts = await readTreeAt(ref.dir, commit, `snapshots/${from}`);
+      if (!artifacts.size) throw new ApiError(404, 'no_snapshot', `That commit holds no snapshot of ${displayName(from)}.`);
+      source = { artifacts, commit };
+    } else {
+      const snap = await loadSnapshot(ref, from);
+      source = { artifacts: snap.artifacts, commit: snap.commit };
+    }
     const jobId = await startCompare(ctx, ref, {
-      from, fromName: displayName(from), to, mode, useSnapshots: body.useSnapshots === true,
-      source: { artifacts: snap.artifacts, commit: snap.commit },
+      from, fromName: displayName(from), to, mode, useSnapshots: body.useSnapshots === true, source,
     });
     return { status: 202, json: { jobId } };
   });
@@ -217,7 +230,10 @@ export function registerCompareRoutes(router: Router, ctx: SyncContext): void {
     const item: CompareItem = { key, type: i.type, label: label(c, key), status: i.status, diff: i.diff, incoming: i.incoming, current: i.current };
     if (i.status === 'drifted') {
       const last = await lastPromoted(ref, c.result.to, key);
-      item.threeWay = { lastPromoted: last?.data ?? null, lastPromotedAt: last?.at ?? null, target: i.current, incoming: i.incoming };
+      item.threeWay = {
+        lastPromoted: last?.data ?? null, lastPromotedAt: last?.at ?? null, target: i.current, incoming: i.incoming,
+        targetChanges: last ? diffValues(last.data, i.current) : [],
+      };
     }
     return { json: c.scrub(item) };
   });

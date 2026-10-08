@@ -77,6 +77,7 @@ const ITEMS: Record<string, CompareItem> = {
     threeWay: {
       lastPromoted: { name: 'Approval', description: 'v1' }, lastPromotedAt: '2026-10-01T10:00:00Z',
       target: { name: 'Approval', description: 'edited in test' }, incoming: { name: 'Approval', description: 'v1', status: 'Inactive' },
+      targetChanges: [{ path: 'description', from: 'v1', to: 'edited in test' }],
     },
   },
 };

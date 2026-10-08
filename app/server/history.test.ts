@@ -45,6 +45,7 @@ test('history events, drift with a three-way view, and restore from a backup', a
   assert.equal((item.threeWay!.target as any).description, 'Edited in test');
   assert.equal((item.threeWay!.incoming as any).description, 'Operations (dev)');
   assert.ok(item.threeWay!.lastPromotedAt);
+  assert.deepEqual(item.threeWay!.targetChanges, [{ path: 'description', from: 'Operations (dev)', to: 'Edited in test' }]);
 
   // Restore: compare the backup (From) with live Test, pre-ticking what the apply touched.
   const restore = await h.job('POST', `${P}/restore`, { commit: applied.backupCommit });

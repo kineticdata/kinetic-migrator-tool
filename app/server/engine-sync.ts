@@ -85,6 +85,7 @@ export const buildPlan: (opts: {
   modules: EngineModule[]; exported: Map<string, unknown>; target: Map<string, TargetArtifact>; state?: Record<string, string>;
   overrides?: EngineOverrides; vars?: Record<string, string>; config: EngineConfig;
 }) => EnginePlan = planModule.buildPlan;
+export const diffValues: (from: unknown, to: unknown) => DiffEntry[] = planModule.diffValues;
 export const readTree: (dir: string) => Map<string, unknown> = storeModule.readTree;
 export const writeTree: (dir: string, artifacts: Artifact[]) => void = storeModule.writeTree;
 export const MODULES: EngineModule[] = indexModule.MODULES;

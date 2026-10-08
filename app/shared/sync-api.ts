@@ -99,6 +99,9 @@ export interface CompareRequest {
   mode: CompareMode;
   // Preview against snapshots/<to> instead of the live target.
   useSnapshots?: boolean;
+  // Compare the snapshot of `from` at this commit (a changeset's pinned
+  // source) instead of its newest snapshot.
+  sourceCommit?: string;
 }
 
 export interface CompareResult {
@@ -127,6 +130,9 @@ export interface ThreeWay {
   lastPromotedAt: string | null;
   target: unknown;
   incoming: unknown;
+  // What changed in the target since the last promotion (`from` = last
+  // promoted, `to` = target now); empty when the last promotion is unknown.
+  targetChanges: DiffEntry[];
 }
 
 export interface CompareItem {

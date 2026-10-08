@@ -59,13 +59,21 @@ test('raw compare over both snapshots and preview against the target snapshot', 
   // Raw shows the env-bound space name difference that preview hides.
   const space = (await h.call('GET', `${P}/compare/${rr.compareId}/item?key=space`)).json as CompareItem;
   assert.equal(space.status, 'changed');
-  assert.ok(space.diff.some((d) => d.path === 'name'));
+  // `from` is the target's value and `to` the incoming one, as in preview.
+  assert.deepEqual(space.diff.find((d) => d.path === 'name'), { path: 'name', from: 'Test Space', to: 'Dev Space' });
 
   const fast = await h.job('POST', `${P}/compare`, { from: 'dev', to: 'test', mode: 'preview', useSnapshots: true });
   const fr = fast.result as CompareResult;
   assert.equal(fr.counts.new, 3);
   const spaceP = (await h.call('GET', `${P}/compare/${fr.compareId}/item?key=space`)).json as CompareItem;
   assert.equal(spaceP.status, 'same');
+
+  // A pinned source: the snapshot of From at a given commit.
+  const pinned = await h.job('POST', `${P}/compare`, { from: 'dev', to: 'test', mode: 'preview', useSnapshots: true, sourceCommit: fr.sourceCommit });
+  assert.equal(pinned.status, 'succeeded', JSON.stringify(pinned.error));
+  assert.equal((pinned.result as CompareResult).sourceCommit, fr.sourceCommit);
+  assert.deepEqual((pinned.result as CompareResult).counts, fr.counts);
+  assert.equal((await h.call('POST', `${P}/compare`, { from: 'dev', to: 'test', sourceCommit: 'zz' })).status, 400);
 
   assert.equal((await h.call('POST', `${P}/compare`, { from: 'dev', to: 'dev' })).status, 400);
   assert.equal((await h.call('POST', `${P}/compare`, { from: 'dev', to: 'test', mode: 'x' })).status, 400);
