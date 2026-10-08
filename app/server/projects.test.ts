@@ -173,6 +173,28 @@ test('environments: add, order, credentials, delete — one commit per mutation,
   assert.deepEqual(putConfig.json.data, [{ kapp: 'services', form: 'lookups', key: ['Code'] }]);
   assert.equal((await call('PUT', '/api/projects/pipeline/config', { data: [{ kapp: 'services' }] })).status, 400);
   assert.equal((await call('PUT', '/api/projects/pipeline/config', { envBoundAttributes: { kapp: 'Logo' } })).status, 400);
+  // Scoped attribute rules and keyless, filtered reference data are accepted alongside the legacy shapes.
+  const scoped = {
+    data: [{ kapp: 'services', form: 'lookups', filter: [{ field: 'Type', value: 'Lookup' }] }, { kapp: 'services', form: 'codes', key: ['Code'] }],
+    envBoundAttributes: { kapp: ['Logo', { name: 'Url', kapp: 'services' }], form: [{ name: 'Queue', kapp: 'services', form: 'lookups' }], team: [{ name: 'Email', team: 'Ops' }], category: [{ name: 'Icon' }] },
+  };
+  const putScoped = await call('PUT', '/api/projects/pipeline/config', scoped);
+  assert.equal(putScoped.status, 200);
+  await mutated();
+  assert.deepEqual(putScoped.json.data, scoped.data);
+  assert.deepEqual(putScoped.json.envBoundAttributes, scoped.envBoundAttributes);
+  const rejects = async (body: unknown, message: RegExp) => {
+    const r = await call('PUT', '/api/projects/pipeline/config', body);
+    assert.equal(r.status, 400);
+    assert.match(r.json.error.message, message);
+  };
+  await rejects({ envBoundAttributes: { kapp: [{ kapp: 'services' }] } }, /entry 1 needs a "name"/);
+  await rejects({ envBoundAttributes: { team: [{ name: 'Email', kapp: 'services' }] } }, /"kapp" is not allowed at the team level/);
+  await rejects({ envBoundAttributes: { widget: ['x'] } }, /unknown level "widget"/);
+  await rejects({ data: [{ kapp: 'services', form: 'lookups', filter: [{ field: 'Type', value: '' }] }] }, /filter condition 1 needs a field and a value/);
+  await rejects({ data: [{ kapp: 'services', form: 'lookups', key: 'Code' }] }, /"key" must be a list/);
+  // Nothing was written by the rejected requests.
+  assert.deepEqual((await call('GET', '/api/projects/pipeline/config')).json.envBoundAttributes, scoped.envBoundAttributes);
   const putOv = await call('PUT', '/api/projects/pipeline/overrides/test', { artifacts: { 'space/space': { name: 'Test space' } }, replace: [{ from: 'dev.example.com', to: 'test.example.com' }] });
   assert.equal(putOv.status, 200);
   await mutated();

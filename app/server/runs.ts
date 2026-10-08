@@ -20,7 +20,7 @@ import type {
   RunItemOutcome, RunRecord, RunStatus, SecretNeeded,
 } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound, toApiError } from './errors.ts';
-import { envKey, loadConfig, loadOverrides, stableStringify, type EngineEnv } from './engine.ts';
+import { envBoundNamesFor, envKey, loadConfig, loadOverrides, stableStringify, type EngineEnv } from './engine.ts';
 import {
   ENV_BOUND_FIELDS, computePlan, isSecretName, isSecretProperty, parsePath, readTree, runApply, stamp, type EnginePlan, type PlanItem,
 } from './engine-sync.ts';
@@ -122,7 +122,7 @@ function environmentValues(projectDir: string, to: string, items: PlanItem[], ex
       const to = obj(i.desired)[f];
       if (!same(from, to)) push({ key: i.key, path: escapeSeg(f), label: f, from: from ?? null, to: to ?? null, origin: 'environment', required: false });
     }
-    for (const name of eba[scope] ?? []) {
+    for (const name of envBoundNamesFor(eba, i.scope, i.key, i.desired)) {
       const p = `attributes.${escapeSeg(name)}`;
       if (p in own) continue;
       const to = attributeValues(i.desired, name);

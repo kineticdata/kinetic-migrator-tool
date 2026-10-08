@@ -25,7 +25,7 @@ import * as envModule from '../../lib/sync/env.mjs';
 import * as overridesModule from '../../lib/sync/overrides.mjs';
 // @ts-expect-error -- untyped engine module
 import * as stateModule from '../../lib/sync/state.mjs';
-import type { ClientFactory, EngineConfig, EngineEnv, EngineOverrides } from './engine.ts';
+import type { ClientFactory, EngineConfig, EngineEnv, EngineOverrides, EnvBoundAttributes } from './engine.ts';
 
 export interface Artifact { key: string; data: unknown; files?: Record<string, Uint8Array> }
 export interface TargetArtifact { key: string; data: any; meta?: unknown }
@@ -96,7 +96,7 @@ export const suggest: (opts: { selected: Set<string>; relationships: Relationshi
 export const summarize: (key: string, data: unknown, type: string, extra?: Record<string, unknown>) => Summary = summariesModule.summarize;
 export const compareText: (a: string, b: string) => number = normalizeModule.compareText;
 export const hashOf: (value: unknown) => string = normalizeModule.hashOf;
-export const withoutEnvBound: (scope: string | null, data: unknown, eba?: Record<string, string[]>) => unknown = normalizeModule.withoutEnvBound;
+export const withoutEnvBound: (scope: string | null, data: unknown, eba?: EnvBoundAttributes, key?: string) => unknown = normalizeModule.withoutEnvBound;
 export const ENV_BOUND_FIELDS: Record<string, string[]> = normalizeModule.ENV_BOUND_FIELDS;
 export const isSecretName: (name: string) => boolean = secretsModule.isSecretName;
 export const AUTH_SECRET_FIELDS: Readonly<Record<string, readonly string[]>> = secretsModule.AUTH_SECRET_FIELDS;
