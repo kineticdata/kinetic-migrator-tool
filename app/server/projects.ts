@@ -149,7 +149,7 @@ export async function openProject(workspace: string, body: unknown): Promise<Pro
   // Commits only ever go to main: never into a repository checked out elsewhere.
   const branch = await currentBranch(dir);
   if (branch !== undefined && branch !== 'main') {
-    throw badRequest(`This folder is a git repository on ${branch === null ? 'a detached commit' : `branch ${branch}`}; kinetic-migrate manages projects on main.`);
+    throw badRequest(`This folder is a git repository on ${branch === null ? 'a detached commit' : `branch ${branch}`}; Kinetic Migrator manages projects on main.`);
   }
   const ws = isDir(workspace) ? realpathSync.native(workspace) : path.resolve(workspace);
   let id: string;
