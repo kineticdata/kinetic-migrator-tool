@@ -297,7 +297,7 @@ Shared for Tasks 10–14:
 
 ### Task 16: Live verification (controller-run)
 - With the built app, using `projects/roundtrip-test` (copied into a temp workspace):
-  - snapshot `the read-only source space` (read-only) and `scratch`;
+  - snapshot the read-only source space and `scratch`;
   - Explore a form and a handler (secrets masked);
   - compare and build a small changeset (one form + suggestions);
   - plan into `scratch` → apply → re-plan shows nothing to do;
