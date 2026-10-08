@@ -13,6 +13,10 @@
 //   nothing below it can be promoted.
 // - After a compare refresh, keys that no longer differ (or that became
 //   drifted with no decision) are pruned.
+// - Items only in the target are never ticked: each one is marked for removal
+//   on purpose (its own Remove action), never through a parent and never by
+//   a suggestion. A marked item that is no longer only in the target is
+//   dropped on refresh.
 import type { CompareStatus, CompareTreeNode, Resolution } from '../../../shared/sync-api';
 import type { CheckState } from '../components/ObjectTree';
 import { ancestorsOf } from './tree-layout';
@@ -26,6 +30,9 @@ export interface Selection {
   // Selected key → its status when it was ticked (insertion order kept).
   items: Record<string, CompareStatus>;
   resolutions: Record<string, Resolution>;
+  // Keys of items only in the target, marked for removal (in marking order).
+  // Absent in selections kept before removals existed.
+  remove?: string[];
 }
 
 export interface KeyStatus {
@@ -33,9 +40,36 @@ export interface KeyStatus {
   status: CompareStatus;
 }
 
-export const emptySelection = (): Selection => ({ items: {}, resolutions: {} });
+export const emptySelection = (): Selection => ({ items: {}, resolutions: {}, remove: [] });
 
 export const selectedKeys = (sel: Selection): string[] => Object.keys(sel.items);
+
+export const removalKeys = (sel: Selection): string[] => sel.remove ?? [];
+
+export const isMarkedForRemoval = (sel: Selection, key: string): boolean => removalKeys(sel).includes(key);
+
+// Only an item that is only in the target can be removed.
+export const isRemovable = (status: CompareStatus | undefined): boolean => status === 'only-target';
+
+// An item's own Remove action: marks or unmarks it.
+export function toggleRemoval(sel: Selection, key: string, status: CompareStatus | undefined): Selection {
+  const cur = removalKeys(sel);
+  if (cur.includes(key)) return { ...sel, remove: cur.filter((k) => k !== key) };
+  if (!isRemovable(status)) return sel;
+  return { ...sel, remove: [...cur, key] };
+}
+
+// Marks several items on purpose (Also remove…), skipping those already marked.
+export function addRemovals(sel: Selection, keys: string[]): Selection {
+  const cur = removalKeys(sel);
+  const more = keys.filter((k) => !cur.includes(k));
+  return more.length ? { ...sel, remove: [...cur, ...more] } : sel;
+}
+
+export const unmarkRemovals = (sel: Selection, keys: Iterable<string>): Selection => {
+  const drop = new Set(keys);
+  return { ...sel, remove: removalKeys(sel).filter((k) => !drop.has(k)) };
+};
 
 export const isSelectable = (status: CompareStatus | undefined): boolean => Boolean(status && SELECTABLE.has(status));
 
@@ -100,7 +134,7 @@ function add(sel: Selection, list: KeyStatus[]): Selection {
     items[key] = status;
     if (status === 'drifted') resolutions[key] = 'overwrite';
   }
-  return { items, resolutions };
+  return { ...sel, items, resolutions };
 }
 
 export function removeKeys(sel: Selection, keys: Iterable<string>): Selection {
@@ -110,7 +144,7 @@ export function removeKeys(sel: Selection, keys: Iterable<string>): Selection {
     delete items[k];
     if (resolutions[k] === 'overwrite') delete resolutions[k];
   }
-  return { items, resolutions };
+  return { ...sel, items, resolutions };
 }
 
 // Adds items on purpose (a suggestion, Add all): drifted ones as overwrites.
@@ -142,9 +176,17 @@ export function setResolution(sel: Selection, key: string, status: CompareStatus
 
 // `found` maps keys looked up in the new comparison to their status, or null
 // when the comparison no longer has them. Keys not in `found` are kept.
+// Marked removals that are no longer only in the target are dropped too (and
+// listed in `removed`).
 export function pruneSelection(sel: Selection, found: Map<string, CompareStatus | null | undefined>): { selection: Selection; removed: string[] } {
   const removed: string[] = [];
   let changed = false;
+  const marks = removalKeys(sel).filter((k) => !found.has(k) || isRemovable(found.get(k) ?? undefined));
+  if (marks.length !== removalKeys(sel).length) {
+    removed.push(...removalKeys(sel).filter((k) => !marks.includes(k)));
+    sel = { ...sel, remove: marks };
+    changed = true;
+  }
   const items = { ...sel.items };
   for (const [key, was] of Object.entries(sel.items)) {
     if (!found.has(key)) continue;

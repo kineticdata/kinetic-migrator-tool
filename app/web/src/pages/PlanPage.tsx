@@ -1,5 +1,6 @@
 // Plan & apply, as guided steps: Review (counts, the needs-attention
-// checklist, blocking errors with plain fixes, per-item changes) →
+// checklist, blocking errors with plain fixes, removals with what they take
+// along and a warning for anything still using them, per-item changes) →
 // Environment values (from → to, editable, required markers; secrets needed)
 // → Confirm (summary, backup note, typed environment name) → Apply (a live
 // checklist; on failure Resume, View backup and Restore…).
@@ -8,16 +9,16 @@
 // sent, are sent with a plain request (never a query or mutation cache) and
 // are cleared as it goes out.
 import { useMemo, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import {
-  AlertOctagon, ArrowLeft, ArrowRight, CheckCircle2, ChevronRight, DatabaseBackup, History, KeyRound, Lock, RotateCcw, ShieldCheck, Undo2,
+  AlertOctagon, AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, ChevronRight, DatabaseBackup, History, KeyRound, Lock, RotateCcw, ShieldCheck, Trash2, Undo2,
 } from 'lucide-react';
-import type { ApplyRequest, ApplyResult, PlanItemOut, PlanResult } from '../../../shared/sync-api';
+import type { ApplyRequest, ApplyResult, PlanItemOut, PlanRemovalOut, PlanResult } from '../../../shared/sync-api';
 import { ApiError } from '../api/client';
 import { startApply, usePlan } from '../api/plans';
-import { qk } from '../api/queries';
+import { qk, startPlan } from '../api/queries';
 import { useJob, type JobState } from '../api/useJob';
-import { ApplyChecklist } from '../components/ApplyChecklist';
+import { ApplyChecklist, type ApplyChecklistProps } from '../components/ApplyChecklist';
 import { EnvironmentValuesForm } from '../components/EnvironmentValuesForm';
 import { FieldDiffTable } from '../components/FieldDiffTable';
 import { NeedsAttention } from '../components/NeedsAttention';
@@ -32,8 +33,8 @@ import { SecretInput } from '../components/ui/SecretInput';
 import { cn } from '../components/ui/cn';
 import { envLabel, plural } from '../lib/format';
 import {
-  applyOutcome, attentionList, backupHref, carryOver, checklistFrom, errorFix, groupByPhase, restoreHref, satisfied, settleChecklist, valuesPayload,
-  writes, type ApplyOutcome, type ItemProgress,
+  applyOutcome, attentionList, backupHref, carryOver, checklistFrom, deletes, errorFix, groupByPhase, inUse, planWithRemovals, removalRows, restoreHref, satisfied,
+  settleChecklist, valuesPayload, writes, type ApplyOutcome, type ItemProgress,
 } from '../lib/plan';
 import { useProjectContext } from '../lib/project';
 import { kindOfKey } from '../lib/tree-layout';
@@ -89,13 +90,18 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
   const values = useMemo(() => valuesPayload(plan.environmentValues, edits), [plan.environmentValues, edits]);
   const missing = useMemo(() => new Set(values.missing), [values.missing]);
   const applied = useMemo(() => plan.items.filter(writes), [plan.items]);
-  const groups = useMemo(() => groupByPhase(applied), [applied]);
+  const removed = useMemo(() => removalRows(plan), [plan]);
+  const groups = useMemo(() => [
+    ...groupByPhase(applied),
+    ...(removed.length ? [{ id: 'removals', label: `Removals from ${To}`, types: [], items: removed, danger: true }] : []),
+  ], [applied, removed, To]);
+  const settleRows = useMemo(() => [...applied, ...removed], [applied, removed]);
 
   const job = useJob<ApplyResult>(jobId, { invalidate: [qk.project(projectId)] });
   const live = useMemo(() => checklistFrom(job.events, carried), [job.events, carried]);
   const finished = job.status !== 'idle' && job.status !== 'running';
   const outcome = useMemo(() => (finished ? applyOutcome(job, live) : null), [finished, job, live]);
-  const checklist = useMemo(() => settleChecklist(live, outcome?.status ?? null, applied), [live, outcome, applied]);
+  const checklist = useMemo(() => settleChecklist(live, outcome?.status ?? null, settleRows), [live, outcome, settleRows]);
   const filled = useMemo(() => new Set(values.filled), [values.filled]);
   const blank = useMemo(() => new Set(values.blank), [values.blank]);
 
@@ -132,6 +138,25 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
     return send(again);
   };
 
+  // Also remove: plan again with more removals, then open that plan.
+  const navigate = useNavigate();
+  const [replanId, setReplanId] = useState<string | null>(null);
+  const [replanError, setReplanError] = useState<unknown>(null);
+  const replan = useJob<PlanResult>(replanId, {
+    onDone: (j) => {
+      if (j.status === 'succeeded' && j.result) navigate(`/p/${projectId}/plan/${encodeURIComponent(j.result.planId)}`);
+      else setReplanError(j.error?.message ?? 'The plan did not finish.');
+    },
+  });
+  const alsoRemove = async (keys: string[]) => {
+    setReplanError(null);
+    try {
+      setReplanId((await startPlan(projectId, planWithRemovals(plan, keys))).jobId);
+    } catch (err) {
+      setReplanError(err);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-5xl px-6 py-8">
       <header className="mb-6">
@@ -166,7 +191,8 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
       )}
 
       {step === 0 && (
-        <Review plan={plan} attention={attention} ticked={ticked} filled={filled} onToggle={(id) => setTicked((cur) => {
+        <Review plan={plan} attention={attention} ticked={ticked} filled={filled}
+          onAlsoRemove={alsoRemove} replanning={replan.status === 'running'} replanError={replanError} onToggle={(id) => setTicked((cur) => {
           const nextSet = new Set(cur);
           if (nextSet.has(id)) nextSet.delete(id);
           else nextSet.add(id);
@@ -218,9 +244,10 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
       {step === 2 && (
         <StepCard title="Confirm" description={`Check the summary, then type the environment name to apply to ${To}.`}>
           <ConfirmSummary plan={plan} changedValues={Object.values(values.values).reduce((n, v) => n + Object.keys(v).length, 0)} secrets={Object.values(secrets).filter(Boolean).length} remember={remember} acknowledged={attention.length} />
+          {deletes(plan).length > 0 && <ConfirmRemovals plan={plan} />}
           <div className="mt-5 flex items-start gap-3 rounded-xl border border-accent/30 bg-accent-soft px-4 py-3 text-sm text-fg">
             <DatabaseBackup size={18} aria-hidden className="mt-0.5 shrink-0 text-accent" />
-            <p>A backup snapshot of {To} is taken first, so you can restore it if anything goes wrong.</p>
+            <p>A backup snapshot of {To} is taken first, so you can restore it if anything goes wrong.{deletes(plan).some((r) => r.restore) ? ' Restoring cannot bring back everything a removal deletes (see above).' : ''}</p>
           </div>
           <Field className="mt-5 max-w-sm" label={<>Type <span className="font-mono font-semibold">{plan.to}</span> to confirm</>} hint={isProtected ? `${To} is protected; it cannot be applied to.` : undefined}>
             {(p) => <Input {...p} value={confirm} autoComplete="off" spellCheck={false} onChange={(e) => setConfirm(e.target.value)} className="font-mono" />}
@@ -286,8 +313,9 @@ function Stat({ value, label, tone }: { value: number; label: string; tone: stri
   );
 }
 
-function Review({ plan, attention, ticked, filled, onToggle, footer }: {
-  plan: PlanResult; attention: ReturnType<typeof attentionList>; ticked: Set<string>; filled: ReadonlySet<string>; onToggle: (id: string) => void; footer: ReactNode;
+function Review({ plan, attention, ticked, filled, onToggle, onAlsoRemove, replanning, replanError, footer }: {
+  plan: PlanResult; attention: ReturnType<typeof attentionList>; ticked: Set<string>; filled: ReadonlySet<string>; onToggle: (id: string) => void;
+  onAlsoRemove: (keys: string[]) => void; replanning: boolean; replanError: unknown; footer: ReactNode;
 }) {
   const c = plan.counts;
   const skip = c.unchanged + c.manual + c['skip-drift'];
@@ -323,6 +351,8 @@ function Review({ plan, attention, ticked, filled, onToggle, footer }: {
       )}
 
       {attention.length > 0 && <NeedsAttention entries={attention} ticked={ticked} filled={filled} onToggle={onToggle} />}
+
+      {(plan.removals ?? []).length > 0 && <Removals plan={plan} onAlsoRemove={onAlsoRemove} replanning={replanning} replanError={replanError} />}
 
       <section aria-label="Items" className="overflow-hidden rounded-xl border border-border bg-surface">
         {all.map((g) => (
@@ -374,10 +404,132 @@ function Review({ plan, attention, ticked, filled, onToggle, footer }: {
             </ul>
           </div>
         ))}
-        {all.length === 0 && <p className="px-4 py-6 text-center text-sm text-muted">This plan has no items.</p>}
+        {all.length === 0 && <p className="px-4 py-6 text-center text-sm text-muted">{(plan.removals ?? []).length ? 'Nothing to promote: this plan only removes items.' : 'This plan has no items.'}</p>}
       </section>
       {footer}
     </div>
+  );
+}
+
+// ---- Removals ----------------------------------------------------------------
+
+const REMOVAL_STATE: Record<PlanRemovalOut['action'], { label: string; tone: Tone }> = {
+  delete: { label: 'Remove', tone: 'danger' },
+  'skip-drift': { label: 'Kept: changed since last promoted', tone: 'drift' },
+  gone: { label: 'Already gone', tone: 'neutral' },
+};
+
+// What still uses a removal: a warning (never a block), with Also remove for
+// users that are only in the target.
+function InUseWarning({ r, to, onAlsoRemove, busy }: { r: PlanRemovalOut; to: string; onAlsoRemove?: (keys: string[]) => void; busy?: boolean }) {
+  const removable = r.usedBy.filter((u) => u.onlyTarget);
+  return (
+    <div role="alert" className="mt-2 rounded-lg border border-drift/50 bg-drift-soft px-3 py-2">
+      <p className="flex items-start gap-2 text-[13px] font-medium text-fg">
+        <AlertTriangle size={15} aria-hidden className="mt-0.5 shrink-0 text-drift" />
+        <span>Still in use in {envLabel(to)}: removing it may break {r.usedBy.length === 1 ? 'this' : `these ${r.usedBy.length}`}. You can still go ahead.</span>
+      </p>
+      <ul className="mt-1.5 space-y-1 pl-6">
+        {r.usedBy.map((u) => (
+          <li key={u.key} className="flex flex-wrap items-center gap-2 text-[13px] text-fg">
+            <span className="min-w-0">{u.reason}</span>
+            {u.onlyTarget && onAlsoRemove && (
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-danger" aria-label={`Also remove ${u.label}`} loading={busy} onClick={() => onAlsoRemove([u.key])}>Also remove</Button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {removable.length > 1 && onAlsoRemove && (
+        <div className="mt-1.5 pl-6">
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-danger" loading={busy} onClick={() => onAlsoRemove(removable.map((u) => u.key))}>Also remove all {removable.length}</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Removals({ plan, onAlsoRemove, replanning, replanError }: { plan: PlanResult; onAlsoRemove: (keys: string[]) => void; replanning: boolean; replanError: unknown }) {
+  const To = envLabel(plan.to);
+  const list = plan.removals ?? [];
+  return (
+    <section aria-label={`Remove from ${To}`} className="overflow-hidden rounded-xl border border-danger/40 bg-surface">
+      <h3 className="flex flex-wrap items-center gap-2 border-b border-danger/30 bg-danger-soft px-4 py-2.5 text-sm font-semibold text-danger">
+        <Trash2 size={15} aria-hidden />Remove from {To}
+        <span className="rounded-full bg-surface px-2 py-px text-xs tabular-nums">{deletes(plan).length}</span>
+        <span className="ml-auto text-xs font-normal text-muted">Deleted after everything else is applied</span>
+      </h3>
+      <ul className="divide-y divide-border">
+        {list.map((r) => {
+          const st = REMOVAL_STATE[r.action];
+          return (
+            <li key={r.key} aria-label={r.label} className="px-4 py-3">
+              <div className="flex items-center gap-2.5">
+                <KindIcon kind={kindOfKey(r.key)} className="shrink-0 text-danger" />
+                <span className="min-w-0 flex-1">
+                  <span className={cn('block truncate text-sm text-fg', r.action === 'delete' && 'line-through decoration-danger/60')}>{r.label}</span>
+                  <span className="block truncate font-mono text-[11px] text-subtle">{r.key}</span>
+                </span>
+                <Badge tone={st.tone}>{r.action === 'delete' && <span aria-hidden>−</span>}{st.label}</Badge>
+              </div>
+              {r.children.length > 0 && (
+                <div className="mt-2 pl-6">
+                  <p className="text-xs text-muted">Also deletes what is inside it ({r.children.length}):</p>
+                  <ul aria-label={`Inside ${r.label}`} className="mt-1 space-y-0.5">
+                    {r.children.map((c) => (
+                      <li key={c.key} className="flex items-center gap-2 text-[13px] text-fg">
+                        <KindIcon kind={kindOfKey(c.key)} className="text-subtle" />{c.label}
+                        <span className="min-w-0 truncate font-mono text-[11px] text-subtle">{c.key}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {r.action === 'delete' && r.usedBy.length > 0 && <InUseWarning r={r} to={plan.to} onAlsoRemove={onAlsoRemove} busy={replanning} />}
+              {r.action === 'delete' && [...r.notes, ...(r.restore ? [r.restore] : [])].map((note) => (
+                <p key={note} className="mt-1.5 pl-6 text-xs text-muted">{note}</p>
+              ))}
+            </li>
+          );
+        })}
+      </ul>
+      {replanError ? <div className="border-t border-border px-4 py-2"><InlineError error={replanError} /></div> : null}
+    </section>
+  );
+}
+
+// The confirm step's removals: listed in red, with the in-use warnings again
+// and what a restore cannot bring back.
+function ConfirmRemovals({ plan }: { plan: PlanResult }) {
+  const To = envLabel(plan.to);
+  const list = deletes(plan);
+  const inside = list.reduce((k, r) => k + r.children.length, 0);
+  const used = inUse(plan);
+  const limits = [...new Set(list.map((r) => r.restore).filter((x): x is string => Boolean(x)))];
+  return (
+    <section aria-label={`Removals from ${To}`} className="mt-5 overflow-hidden rounded-xl border border-danger/50 bg-danger-soft/40">
+      <h3 className="flex items-center gap-2 px-4 pt-3 text-sm font-semibold text-danger">
+        <Trash2 size={15} aria-hidden />{plural(list.length, 'item')} will be removed from {To}{inside ? ` (and ${plural(inside, 'item')} inside them)` : ''}
+      </h3>
+      <ul className="space-y-0.5 px-4 pt-2 pb-3">
+        {list.map((r) => (
+          <li key={r.key} className="text-[13px] text-danger">
+            <span aria-hidden>− </span>{r.label} <span className="font-mono text-[11px] text-muted">{r.key}</span>
+            {r.usedBy.length > 0 && <span className="ml-1 font-medium text-drift">· still used by {plural(r.usedBy.length, 'item')}</span>}
+          </li>
+        ))}
+      </ul>
+      {used.length > 0 && (
+        <p role="alert" className="flex items-start gap-2 border-t border-danger/30 px-4 py-2 text-[13px] text-fg">
+          <AlertTriangle size={15} aria-hidden className="mt-0.5 shrink-0 text-drift" />
+          {used.length === 1 ? `${used[0].label} is` : `${used.length} of them are`} still used by other items in {To}; those may stop working.
+        </p>
+      )}
+      {limits.length > 0 && (
+        <ul aria-label="Restore limits" className="space-y-0.5 border-t border-danger/30 px-4 py-2 text-xs text-muted">
+          {limits.map((n) => <li key={n}>{n}</li>)}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -388,8 +540,10 @@ function ConfirmSummary({ plan, changedValues, secrets, remember, acknowledged }
 }) {
   const To = envLabel(plan.to);
   const n = plan.counts.create + plan.counts.update;
+  const removals = deletes(plan).length;
   const rows: Array<[string, string]> = [
     ['Changes', n ? `${plural(n, 'item')} written to ${To} (${plan.counts.create} new, ${plan.counts.update} updated)` : `Nothing to write to ${To}`],
+    ...(removals ? [['Removals', `${plural(removals, 'item')} removed from ${To}`]] as Array<[string, string]> : []),
     ['From', `${envLabel(plan.from)}${plan.changesetId ? ', as saved in the changeset' : ', newest snapshot'}`],
     ['Environment values', changedValues ? `${plural(changedValues, 'value')} saved for ${To}` : 'No changes'],
     ...(plan.secretsNeeded.length ? [['Secrets', secrets ? `${plural(secrets, 'secret')} ${remember ? 'kept in the keychain' : 'for this apply only'}` : 'None entered']] as Array<[string, string]> : []),
@@ -400,7 +554,7 @@ function ConfirmSummary({ plan, changedValues, secrets, remember, acknowledged }
       {rows.map(([k, v]) => (
         <div key={k} className="grid grid-cols-[10rem_1fr] gap-3 px-4 py-2.5 text-sm">
           <dt className="text-muted">{k}</dt>
-          <dd className="text-fg">{v}</dd>
+          <dd className={k === 'Removals' ? 'font-medium text-danger' : 'text-fg'}>{v}</dd>
         </div>
       ))}
     </dl>
@@ -412,7 +566,7 @@ function ConfirmSummary({ plan, changedValues, secrets, remember, acknowledged }
 function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, onResume, resuming, resumeError }: {
   projectId: string;
   plan: PlanResult;
-  groups: ReturnType<typeof groupByPhase>;
+  groups: ApplyChecklistProps['groups'];
   checklist: ReturnType<typeof checklistFrom>;
   job: JobState<ApplyResult>;
   outcome: ApplyOutcome | null;

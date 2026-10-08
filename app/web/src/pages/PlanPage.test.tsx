@@ -37,7 +37,7 @@ const SECRET = 'planted-secret-value-7f3a';
 
 function plan(over: Partial<PlanResult> = {}): PlanResult {
   return {
-    planId: 'pl1', name: '3 items from Dev', to: 'test', from: 'dev', changesetId: null, sourceCommit: 'c-dev',
+    planId: 'pl1', name: '3 items from Dev', to: 'test', from: 'dev', changesetId: null, sourceCommit: 'c-dev', selected: [], remove: [], removals: [],
     items: [
       { key: CONN, type: 'connections', label: 'Tickets', action: 'create', drift: false, diff: [] },
       { key: HANDLER, type: 'handlers', label: 'SMTP Send', action: 'create', drift: false, diff: [] },
@@ -78,7 +78,7 @@ function liveStream() {
   };
 }
 
-function setup(p: PlanResult, opts: { readOnly?: boolean; applyJobs?: Array<{ id: string; events?: string | (() => Response); result?: ApplyResult; status?: string; error?: string }> } = {}) {
+function setup(p: PlanResult, opts: { extra?: Record<string, unknown>; readOnly?: boolean; applyJobs?: Array<{ id: string; events?: string | (() => Response); result?: ApplyResult; status?: string; error?: string }> } = {}) {
   const jobs = opts.applyJobs ?? [{ id: 'a1', result: { runId: 'r1', status: 'applied', commit: 'c-run', backupCommit: 'c-backup', done: 3, error: null } }];
   let started = 0;
   const routes: Record<string, unknown> = {
@@ -96,7 +96,7 @@ function setup(p: PlanResult, opts: { readOnly?: boolean; applyJobs?: Array<{ id
       ...(j.result ? { result: j.result } : {}), ...(j.error ? { error: { code: 'failed', message: j.error } } : {}),
     };
   }
-  return mockApi(routes);
+  return mockApi({ ...routes, ...opts.extra });
 }
 
 const next = () => screen.getByRole('button', { name: /^Next/ });
@@ -474,6 +474,77 @@ test('values: numbers are checked; an optional value cleared says the target kee
   expect(next()).toBeEnabled();
   // A list value is edited as JSON.
   expect(screen.getByLabelText('Web Server Url in Test').tagName).toBe('TEXTAREA');
+});
+
+const LEGACY = 'kapps/legacy/kapp';
+const OLD = 'routines/Old Helper';
+const removalPlan = () => simple({
+  name: 'Remove 2 items from Test', items: [], selected: [], remove: [LEGACY, OLD],
+  counts: { create: 0, update: 0, unchanged: 0, manual: 0, 'skip-drift': 0, delete: 2 },
+  removals: [
+    {
+      key: LEGACY, type: 'kapps', label: 'Legacy', action: 'delete', usedBy: [], notes: ['Removing a kapp deletes all of its forms and submissions.'],
+      children: [{ key: 'kapps/legacy/forms/old/form', type: 'forms', label: 'Old Form' }],
+      restore: 'Restoring from the backup recreates the kapp, its forms, workflows and reference data, but not its other submissions.',
+    },
+    {
+      key: OLD, type: 'routines', label: 'Old Helper', action: 'delete', children: [], notes: [], restore: null,
+      usedBy: [{ key: 'workflows/User Created/Welcome', label: 'Welcome', reason: 'Welcome runs routine "Old Helper"', onlyTarget: true }],
+    },
+  ],
+  warnings: ['routines/Old Helper: still used by workflows/User Created/Welcome; removing it may break them'],
+});
+
+test('removals: listed in red with what they take along, an in-use warning that does not block, and Also remove plans again', async () => {
+  const m = setup(removalPlan(), { extra: {
+    'POST /api/projects/:p/plans': { status: 202, json: { jobId: 'replan' } },
+    'GET /api/jobs/replan/events': { sse: sse([]) },
+    'GET /api/jobs/replan': { id: 'replan', kind: 'plan', status: 'succeeded', createdAt: 'x', result: { planId: 'pl2' } },
+  } });
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  await screen.findByRole('heading', { name: 'Remove 2 items from Test' });
+  expect(screen.getByRole('region', { name: 'Summary' })).toHaveTextContent('2delete');
+  const section = screen.getByRole('region', { name: 'Remove from Test' });
+  expect(within(section).getByRole('list', { name: 'Inside Legacy' })).toHaveTextContent('Old Form');
+  expect(section).toHaveTextContent('not its other submissions');
+  const warning = within(within(section).getByRole('listitem', { name: 'Old Helper' })).getByRole('alert');
+  expect(warning).toHaveTextContent('Still in use in Test');
+  expect(warning).toHaveTextContent('Welcome runs routine "Old Helper"');
+  // The in-use warning is not something to tick: nothing blocks Next.
+  expect(screen.queryByRole('region', { name: 'Needs attention' })).toBeNull();
+  expect(next()).toBeEnabled();
+
+  await user.click(within(warning).getByRole('button', { name: 'Also remove Welcome' }));
+  await waitFor(() => expect(m.callsTo('POST', '/api/projects/acme-demo/plans')).toHaveLength(1));
+  expect(m.callsTo('POST', '/api/projects/acme-demo/plans')[0].body).toEqual({
+    to: 'test', from: 'dev', selected: [], remove: [LEGACY, OLD, 'workflows/User Created/Welcome'].sort(), sourceCommit: 'c-dev',
+  });
+  await waitFor(() => expect(currentLocation()).toBe('/p/acme-demo/plan/pl2'));
+});
+
+test('removals: the confirm step lists them separately in red with their count and the restore limits; the checklist has a removals group', async () => {
+  setup(removalPlan(), { applyJobs: [{ id: 'a1', events: sse([
+    { type: 'item', data: { type: 'item', key: LEGACY, status: 'done', message: 'Removed' } },
+    { type: 'item', data: { type: 'item', key: 'kapps/legacy/forms/old/form', status: 'done', message: `Removed with ${LEGACY}` } },
+    { type: 'item', data: { type: 'item', key: OLD, status: 'done', message: 'Removed' } },
+  ]), result: { runId: 'r1', status: 'applied', commit: 'c', backupCommit: 'b', done: 3, error: null } }] });
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  await screen.findByRole('heading', { name: 'Remove 2 items from Test' });
+  await user.click(next());
+  await user.click(next());
+  const confirm = screen.getByRole('region', { name: 'Removals from Test' });
+  expect(confirm).toHaveTextContent('2 items will be removed from Test (and 1 item inside them)');
+  expect(confirm).toHaveTextContent('still used by 1 item');
+  expect(within(confirm).getByRole('alert')).toHaveTextContent('Old Helper is still used by other items in Test');
+  expect(within(confirm).getByRole('list', { name: 'Restore limits' })).toHaveTextContent('not its other submissions');
+  expect(screen.getByText('2 items removed from Test')).toBeInTheDocument();
+  await user.type(screen.getByLabelText(/to confirm/), 'test');
+  await user.click(screen.getByRole('button', { name: 'Apply to Test' }));
+  const progress = await screen.findByRole('region', { name: 'Progress' });
+  expect(await within(progress).findByRole('heading', { name: 'Removals from Test' })).toBeInTheDocument();
+  expect(await within(progress).findByRole('listitem', { name: /Old Form: Done/ })).toBeInTheDocument();
 });
 
 test('values: a kept space setting is not copied unless the offered value is taken, and a pair is taken whole', async () => {

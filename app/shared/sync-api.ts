@@ -41,6 +41,20 @@ export interface CompareTreeNode extends TreeNode {
   status?: CompareStatus;
   // Statuses of the items below this node, rolled up.
   counts: Partial<Record<CompareStatus, number>>;
+  // Sub-collection entries only in the target: on this item, and below it.
+  entries?: number;
+  entriesBelow?: number;
+}
+
+// One entry of an item's sub-collection (an attribute definition, a
+// category…) that only the target has. Kept unless removed on purpose.
+export interface TargetOnlyEntryOut {
+  // `<item key>#<collection>/<encoded name>`: the removal key.
+  key: string;
+  collection: string;
+  // The collection in words ("category", "form attribute definition").
+  word: string;
+  name: string;
 }
 
 // ---- Explore ---------------------------------------------------------------
@@ -145,6 +159,8 @@ export interface CompareItem {
   incoming: unknown;
   current: unknown;
   threeWay?: ThreeWay;
+  // Sub-collection entries only in the target (space and kapps).
+  targetOnlyEntries?: TargetOnlyEntryOut[];
 }
 
 export interface SuggestionsRequest {
@@ -176,6 +192,13 @@ export interface Changeset {
   from: string;
   sourceCommit: string;
   keys: string[];
+  // Items only in the target to remove (absent in changesets saved before
+  // removals existed: nothing to remove).
+  remove?: string[];
+  // The environment the removals were chosen for: they are only planned
+  // against it. Absent with `remove`: saved before removals were bound to a
+  // target; they are not planned until confirmed for one (update removeFrom).
+  removeFrom?: string;
   createdAt: string;
   appliedTo: AppliedTo[];
   // 2: `keys` use today's file-name encoding. Absent: saved against a
@@ -188,7 +211,11 @@ export interface CreateChangesetRequest {
   name: string;
   description?: string;
   from: string;
+  // May be empty when `remove` is not.
   keys: string[];
+  remove?: string[];
+  // Required with `remove`: the target the removals were chosen against.
+  removeFrom?: string;
   // Defaults to the newest snapshot of `from`.
   sourceCommit?: string;
 }
@@ -197,6 +224,8 @@ export interface UpdateChangesetRequest {
   name?: string;
   description?: string;
   keys?: string[];
+  remove?: string[];
+  removeFrom?: string;
 }
 
 // ---- Plans and apply -------------------------------------------------------
@@ -208,6 +237,8 @@ export interface PlanRequest {
   changesetId?: string;
   from?: string;
   selected?: string[];
+  // Items only in the target to remove (added to a changeset's own).
+  remove?: string[];
   // Pin the source to the snapshots/<from> tree at this commit (restores).
   sourceCommit?: string;
   restore?: boolean;
@@ -223,6 +254,35 @@ export interface PlanItemOut {
   action: PlanAction;
   drift: boolean;
   diff: DiffEntry[];
+}
+
+// An explicit removal: `delete`, or `skip-drift` (changed since it was last
+// promoted; kept), or `gone` (already not in the target).
+export type RemovalAction = 'delete' | 'skip-drift' | 'gone';
+
+export interface RemovalUser {
+  key: string;
+  label: string;
+  reason: string;
+  // Only in the target, so it can be removed too.
+  onlyTarget: boolean;
+}
+
+export interface PlanRemovalOut {
+  key: string;
+  type: string;
+  label: string;
+  action: RemovalAction;
+  // What the delete takes with it (a kapp's forms and workflows, a
+  // connection's operations).
+  children: Array<{ key: string; type: string; label: string }>;
+  // What will still use it after the apply (a warning, never a block).
+  usedBy: RemovalUser[];
+  notes: string[];
+  // What restoring it from the backup cannot bring back (null: everything).
+  restore: string | null;
+  // For one entry of an item's sub-collection (key `<item>#<collection>/<name>`).
+  entry?: { item: string; itemLabel: string; collection: string; name: string };
 }
 
 export type AttentionKind = 'handler' | 'index' | 'data-workflows' | 'connection-secrets' | 'drift';
@@ -269,7 +329,12 @@ export interface PlanResult {
   from: string;
   changesetId: string | null;
   sourceCommit: string | null;
+  // The keys promoted and the keys removed, as planned.
+  selected: string[];
+  remove: string[];
   items: PlanItemOut[];
+  removals: PlanRemovalOut[];
+  // delete: removals that will be deleted (not counting what they take with them).
   counts: Record<PlanAction | 'delete', number>;
   needsAttention: NeedsAttention[];
   environmentValues: EnvironmentValue[];
@@ -314,6 +379,8 @@ export interface RunRecord {
   finishedAt: string;
   status: RunStatus;
   selection: string[];
+  // Items asked to be removed (absent before removals existed).
+  removals?: string[];
   acknowledgements: string[];
   resolutions: Record<string, Resolution>;
   // Environment values used (never secrets).

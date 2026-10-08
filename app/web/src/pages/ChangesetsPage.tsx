@@ -9,7 +9,7 @@ import { ArrowLeft, ArrowRight, CheckCircle2, GitCompare, Layers, Lock, Trash2 }
 import { useQueries } from '@tanstack/react-query';
 import type { Changeset, CompareItem, CompareResult, NodeKind, PlanResult } from '../../../shared/sync-api';
 import { ApiError, api, projectPath } from '../api/client';
-import { qk, startCompare, startPlan, useChangeset, useChangesets, useDeleteChangeset } from '../api/queries';
+import { qk, startCompare, startPlan, useChangeset, useChangesets, useDeleteChangeset, useUpdateChangeset } from '../api/queries';
 import { useJob } from '../api/useJob';
 import { ItemStatus } from '../components/CountBar';
 import { FieldDiffTable } from '../components/FieldDiffTable';
@@ -25,6 +25,7 @@ import { cn } from '../components/ui/cn';
 import { envLabel, formatDateTime, plural, timeAgo } from '../lib/format';
 import { useProjectContext } from '../lib/project';
 import { kindOfKey, nameOfKey } from '../lib/tree-layout';
+import { entryLabel, isEntryKey } from '../lib/key-label';
 
 const formatDate = (iso: string) => {
   const d = new Date(iso);
@@ -61,7 +62,10 @@ function ChangesetRow({ projectId, cs }: { projectId: string; cs: Changeset }) {
       </td>
       <td className="px-4 py-3 text-fg">{envLabel(cs.from)}</td>
       <td className="px-4 py-3 text-muted">{pinned && <time dateTime={pinned} title={formatDateTime(pinned)}>{formatDate(pinned)}</time>}</td>
-      <td className="px-4 py-3 text-right text-fg tabular-nums">{cs.keys.length.toLocaleString('en')}</td>
+      <td className="px-4 py-3 text-right text-fg tabular-nums">
+        {cs.keys.length.toLocaleString('en')}
+        {(cs.remove?.length ?? 0) > 0 && <span className="ml-1.5 text-xs text-danger" title="Items to remove from the target">−{cs.remove!.length}</span>}
+      </td>
       <td className="px-5 py-3"><AppliedTo cs={cs} /></td>
     </tr>
   );
@@ -149,6 +153,51 @@ function ItemsCard({ keys }: { keys: string[] }) {
           </div>
         ))}
       </section>
+    </Card>
+  );
+}
+
+// Items only in a target that applying the changeset removes from it, and
+// the environment they were chosen for (they are planned only against it).
+// Removals saved before that was recorded must be confirmed for one first.
+function RemovalsCard({ projectId, cs }: { projectId: string; cs: Changeset }) {
+  const keys = cs.remove ?? [];
+  const { project } = useProjectContext();
+  const targets = project.environments.filter((e) => e.name !== cs.from);
+  const [env, setEnv] = useState(targets[0]?.name ?? '');
+  const update = useUpdateChangeset(projectId, cs.id);
+  const selectId = useId();
+  const where = cs.removeFrom ? envLabel(cs.removeFrom) : null;
+  return (
+    <Card>
+      <CardHeader
+        title={where ? `Remove from ${where}` : 'Remove from the target'}
+        description={where
+          ? `${plural(keys.length, 'item')} deleted from ${where} when this changeset is applied there, after everything else (each one only if it is there and unchanged since you review the plan). Not planned against other environments.`
+          : `${plural(keys.length, 'item')} saved without the environment they were chosen for: they are not planned until you confirm one.`}
+      />
+      {!where && (
+        <div role="alert" className="flex flex-wrap items-end gap-2 border-b border-border bg-drift-soft px-5 py-3">
+          <div className="min-w-40 flex-1 space-y-1.5">
+            <label htmlFor={selectId} className="text-[13px] font-medium text-fg">These removals are for</label>
+            <select id={selectId} value={env} onChange={(e) => setEnv(e.target.value)} className={inputClasses}>
+              {targets.map((e) => <option key={e.name} value={e.name}>{envLabel(e.name)}</option>)}
+            </select>
+          </div>
+          <Button variant="danger" size="sm" disabled={!env} loading={update.isPending} onClick={() => update.mutate({ removeFrom: env })}>Confirm removals for {envLabel(env)}</Button>
+          <InlineError error={update.error} />
+        </div>
+      )}
+      <ul aria-label="Removals" className="space-y-1 px-5 py-3">
+        {keys.map((k) => (
+          <li key={k} className="flex min-w-0 items-center gap-2.5">
+            <KindIcon kind={kindOfKey(k)} className="text-danger" />
+            <span className="text-sm text-fg">{isEntryKey(k) ? entryLabel(k) : nameOfKey(k)}</span>
+            <span className="min-w-0 truncate font-mono text-xs text-subtle" title={k}>{k}</span>
+            <Badge tone="danger" className="ml-auto"><span aria-hidden>−</span>Remove</Badge>
+          </li>
+        ))}
+      </ul>
     </Card>
   );
 }
@@ -319,7 +368,10 @@ export function ChangesetDetailPage() {
         <Button variant="ghost" size="sm" icon={<Trash2 size={14} aria-hidden />} onClick={() => setConfirming(true)}>Delete</Button>
       </div>
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <ItemsCard keys={c.keys} />
+        <div className="space-y-5">
+          {c.keys.length > 0 && <ItemsCard keys={c.keys} />}
+          {(c.remove?.length ?? 0) > 0 && <RemovalsCard projectId={project.id} cs={c} />}
+        </div>
         <div className="space-y-5">
           <Card>
             <CardHeader title="Promote" description="Ships the items exactly as they were in the pinned snapshot." />

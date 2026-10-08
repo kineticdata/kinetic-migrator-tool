@@ -3,7 +3,8 @@
 `kinetic-migrate.mjs` exports a space's configuration into a project directory
 you keep in git, shows exactly what promoting it would change in another
 environment, and applies only those changes. It never deletes anything unless
-you ask, and it never writes to an environment marked `readOnly`.
+you ask (by type with `--prune`, or item by item with `--remove` and the app's
+Remove action), and it never writes to an environment marked `readOnly`.
 
 You need Node.js 20 or newer. Nothing else is installed.
 
@@ -13,12 +14,12 @@ Space settings, attribute definitions and security policies; teams (without
 memberships); bridge models; file resources; Integrator connections and
 operations; kapps (settings, attribute definitions, policies, categories,
 form types, integrations, index definitions); forms; WebAPIs; workflows; Task
-handlers (package and settings); and submissions on forms you allowlist as
-reference data.
+handlers (package and settings); global routines; and submissions on forms
+you allowlist as reference data.
 
 Not promoted: users, team memberships, transactional submissions, built-in
 handlers (`utilities_*`, `system_*`, and any handler with no downloadable
-package), global routines (checked for presence in the target), and webhooks.
+package), and webhooks.
 
 ## 1. Create a project
 
@@ -401,11 +402,13 @@ connection that exists nowhere, a connection with the same name but a
 different id) make the command exit non-zero. A record is saved under
 `plans/`.
 
-Handlers in the export are installed by apply, so the plan only reports a
-missing handler that is not in the export (usually a handler in no category
-that the source no longer has installed). Built-in handlers are never
-reported. Missing global routines must exist in the target: create them in the target's workflow builder from
-`snapshots/<from>/routines/<name>.json`.
+Handlers and global routines in the export are created by apply, so the
+plan only reports a missing handler that is not in the export (usually a
+handler in no category that the source no longer has installed). Built-in
+handlers are never reported. When you promote a selection (in the app), a
+workflow, WebAPI or routine that runs a routine the target does not have
+(by definitionId, under any name) needs that routine in the selection too;
+Compare suggests it.
 
 ## 8. Apply
 
@@ -420,8 +423,9 @@ when `--from` is omitted; with neither, the command stops and asks for
 
 Apply shows the plan, asks you to type the environment name (`--yes` skips
 this for CI), saves a full export of the target under `backups/`, then
-creates and updates in dependency order (handlers before the WebAPIs and
-workflows that use them). If something fails it stops and
+creates and updates in dependency order (handlers, then global routines,
+then the WebAPIs and workflows that use them; a routine that calls another
+routine comes after it). If something fails it stops and
 says how far it got; fix the cause and run it again, since every step is
 safe to repeat.
 
@@ -429,7 +433,15 @@ Nothing is deleted unless you name the type: `--prune teams`,
 `--prune forms`, `--prune data` (rows not in the export, for entries with
 match fields only), and so on. The
 types are teams, models, file-resources, connections, operations, handlers,
-kapps, forms, webapis, workflows and data.
+routines, kapps, forms, webapis, workflows and data.
+
+Global routines are created and updated through the Task API's component
+path (`/app/components/task/app/api/v2/trees`; the `/kinetic-task` path
+silently drops a routine's inputs and outputs). A new routine is one `POST
+/trees` (type `Global Routine`, source and group `-`, with its definitionId,
+notes, status, inputs, outputs and tree); a changed one is a `PUT
+/trees/<name>` with only the fields that changed and the routine's current
+`versionId`. Routines are matched across environments by name.
 
 For handlers, apply installs a new one (upload, then its settings and any
 supplied secret values), re-uploads the package with `force` when its
@@ -437,6 +449,82 @@ supplied secret values), re-uploads the package with `force` when its
 otherwise sends only the plaintext settings that differ. Other differences
 (name, categories, status) come from the package or the console; apply warns
 and leaves them for you.
+
+## Removing items from a target
+
+Promoting never deletes. To delete something that is only in the target,
+remove it on purpose:
+
+- In the app, Compare shows each item only in the target with a **Remove
+  from <target>** action (it has no tick box, a parent tick never selects it,
+  and nothing is ever suggested for removal). Removals sit in their own red
+  section of the changeset tray and are saved with the changeset (a
+  `remove` list beside its keys, and `removeFrom`, the environment they were
+  chosen for; changesets saved before removals existed have neither). A
+  changeset's removals are planned only against that environment; against
+  any other the plan says so and leaves them out. Removals saved without an
+  environment are not planned until you confirm one on the changeset's page.
+- On the command line, `apply --remove <key>` (repeatable) removes one item
+  by its key, its path under `snapshots/<to>/` without `.json`, for example
+  `--remove teams/Contractors` or `--remove kapps/legacy/kapp`. `--prune`
+  still removes every target-only item of a type.
+
+What happens:
+
+- Only the items the plan shows as **Remove** are deleted. One the plan
+  keeps (changed since it was last promoted), finds already gone, or finds
+  in the source again (the snapshot being promoted, or the source's newest
+  snapshot when a changeset is pinned to an older one: "still exists in
+  <source> — not removed") is never sent to apply.
+- They are deleted after every create and update, in
+  reverse dependency order (workflows and WebAPIs before the routines and
+  handlers they run, operations before connections).
+- A kapp takes its forms, workflows, WebAPIs and reference data with it; a
+  form its workflows and data; a connection its operations. The plan lists
+  them, and they are not deleted one by one. After the deletes the target is
+  read again: anything listed that is still there is deleted on its own (or,
+  if that fails, reported as failed, kept in drift state, and the run is
+  partial).
+- The plan warns about anything that will still use a removed item (a
+  workflow running a removed routine, a form calling a removed operation,
+  and so on), with **Also remove** for users that are only in the target.
+  For teams, models and file resources it also looks by name: a team named
+  in a security policy rule or set as an attribute value, a model a form's
+  bridged resources use, a file resource named in a value ("may be used
+  by"). It is a warning: the apply is not blocked.
+- If the item (or anything it takes with it) changed in the target after
+  you reviewed the plan, it is not deleted; the run says so and is partial.
+  One that is already gone is fine.
+- Never removable: the space itself, built-in handlers (`utilities_*`,
+  `system_*`), reference data records (use `--prune data`) and the
+  `task-refs` summary. A changeset cannot save a removal of an item that
+  is in its pinned source snapshot.
+- The backup taken before the apply can restore removed items (History,
+  Restore…), with limits the plan and the confirm step spell out: a kapp
+  or form comes back without its submissions (other than reference data),
+  a connection without its credentials, a handler without its secret
+  property values, and a team without its members.
+
+### Entries of the space and of a kapp
+
+The space's attribute definitions (space, team, user, user profile) and
+security policy definitions, and a kapp's attribute definitions (kapp, form,
+category), security policy definitions, form types, categories and
+integrations are created and updated with their item. Entries only the
+target has are kept and never count as a difference. Compare lists them on
+the item under **Only in <target>**, each with its own Remove action. Such
+a removal is keyed `<item key>#<collection>/<name>` (for example
+`kapps/services/kapp#categories/old-hardware`; the name is encoded like a
+file name) and works with `--remove` too. Apply deletes only the chosen
+entries, through the collection's own endpoint
+(`DELETE /kapps/<kapp>/categories/<slug>`, `DELETE /spaceAttributeDefinitions/<name>`…).
+The plan warns when an entry is still in use: an attribute definition set on
+the space, a team, the kapp, a category or a form; a category forms are in;
+a security policy definition a policy names; a form type forms use. (User
+attributes and kapp integrations are not traced.) An entry changed in the
+target since review is kept. Restoring the item from the backup brings the
+entries back; forms are put back in a removed category only if they are
+restored too.
 
 ## Drift
 
@@ -477,8 +565,8 @@ snapshots are not used or changed.
   and drift state all apply, so expected per-environment differences are
   hidden. It exits non-zero when the plan has errors.
 - **`--raw`** shows every difference between the two environments, nothing
-  hidden: environment-bound values, routines and handler references
-  included, and items that exist on only one side.
+  hidden: environment-bound values, handler references included, and items
+  that exist on only one side.
 
 Each run prints the result and writes two reports to `compares/`
 (`<from>-vs-<to>-<time>.json` and `.html`); their paths are printed at the

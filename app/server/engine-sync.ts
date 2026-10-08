@@ -27,6 +27,10 @@ import * as overridesModule from '../../lib/sync/overrides.mjs';
 import * as stateModule from '../../lib/sync/state.mjs';
 // @ts-expect-error -- untyped engine module
 import * as layoutModule from '../../lib/sync/layout.mjs';
+// @ts-expect-error -- untyped engine module
+import * as removalsModule from '../../lib/sync/removals.mjs';
+// @ts-expect-error -- untyped engine module
+import * as entriesModule from '../../lib/sync/entries.mjs';
 import type { ClientFactory, EngineConfig, EngineEnv, EngineOverrides, EnvBoundAttributes } from './engine.ts';
 
 export interface Artifact { key: string; data: unknown; files?: Record<string, Uint8Array> }
@@ -48,9 +52,24 @@ export interface PlanItem {
   drift: boolean;
 }
 
+export interface EngineRemoval {
+  key: string;
+  type: string;
+  action: 'delete' | 'skip-drift' | 'gone';
+  existing: TargetArtifact | null;
+  children: Array<{ key: string; type: string; existing: TargetArtifact }>;
+  usedBy: Array<{ key: string; kind: string; reason: string; onlyTarget: boolean }>;
+  notes: string[];
+  restore: string | null;
+  hash: string | null;
+  // A sub-collection entry's removal.
+  entry?: { itemKey: string; field: string; name: string | null };
+}
+
 export interface EnginePlan {
   items: PlanItem[];
   targetOnly: Array<{ key: string; type: string; existing: TargetArtifact; excluded?: boolean }>;
+  removals: EngineRemoval[];
   errors: string[];
   warnings: string[];
 }
@@ -74,11 +93,13 @@ interface RunCommon { projectDir: string; env: EngineEnv; onEvent?: OnEvent; sig
 export const runExport: (opts: RunCommon & { dest?: string }) => Promise<{ code: number; artifacts: number; counts: Record<string, number> }> = commandsModule.runExport;
 export const computePlan: (opts: RunCommon & {
   envName: string; from?: string; sourceName?: string; sourceDir?: string; sourceArtifacts?: Artifact[]; sourceUnresolved?: Map<string, string>; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
+  remove?: string[]; removeExpected?: Record<string, string>;
 }) => Promise<{ env: EngineEnv; config: EngineConfig; plan: EnginePlan; targetList: TargetArtifact[] }> = commandsModule.computePlan;
 export const runApply: (opts: RunCommon & {
   envName: string; from?: string; sourceName?: string; sourceDir?: string; yes: boolean; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
+  remove?: string[]; removeExpected?: Record<string, string>;
   onPlan?: (plan: EnginePlan) => void;
-}) => Promise<{ code: number; done: number; backupDir?: string }> = commandsModule.runApply;
+}) => Promise<{ code: number; done: number; backupDir?: string; failed?: string[] }> = commandsModule.runApply;
 export const stamp: () => string = commandsModule.stamp;
 export const compareArtifacts: (opts: { modules: EngineModule[]; left: Map<string, { data: unknown }>; right: Map<string, { data: unknown }> }) => {
   items: Array<{ key: string; type: string; status: 'same' | 'differs' | 'only-left' | 'only-right'; diff: DiffEntry[] }>;
@@ -124,3 +145,15 @@ export const isSecretProperty: (p: unknown) => boolean = secretsModule.isSecretP
 export const secretFieldKey: (field: string) => string = envModule.secretFieldKey;
 export const parsePath: (path: string) => string[] = overridesModule.parsePath;
 export const loadState: (projectDir: string, env: string) => Record<string, string> = stateModule.loadState;
+// Why a key can never be removed, or null (see lib/sync/removals.mjs).
+export const notRemovable: (key: string, mod: EngineModule | undefined) => string | null = removalsModule.notRemovable;
+// The same for any removal key, an item's or a sub-collection entry's.
+// Whether a removal key (item or entry) is in a source tree.
+export const removalInSource: (key: string, tree: Map<string, unknown>, modules: EngineModule[]) => boolean = removalsModule.removalInSource;
+export const removalRefusal: (key: string, modules: EngineModule[]) => string | null = removalsModule.removalRefusal;
+// Sub-collection entries (`<item>#<collection>/<name>`, see lib/sync/entries.mjs).
+export interface TargetOnlyEntry { key: string; collection: string; name: string }
+export const targetOnlyEntries: (mod: EngineModule | undefined, itemKey: string, source: unknown, target: unknown) => TargetOnlyEntry[] = entriesModule.targetOnlyEntries;
+export const parseEntryKey: (key: string) => { itemKey: string; field: string; segment: string } | null = entriesModule.parseEntryKey;
+export const isEntryKey: (key: string) => boolean = entriesModule.isEntryKey;
+export const collectionWord: (field: string) => string = entriesModule.collectionWord;

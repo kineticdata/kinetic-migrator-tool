@@ -13,7 +13,8 @@ import { resolveCommit } from './pinned.ts';
 import { readTreeAt } from './repo.ts';
 import { loadConfig, loadOverrides, type ClientFactory, type EngineEnv } from './engine.ts';
 import {
-  MODULES, buildPlan, buildRelationships, compareArtifacts, computePlan, diffValues, loadState, suggest, unresolvedErrors, type EnginePlan, type LoadedTree, type Relationships,
+  MODULES, buildPlan, buildRelationships, collectionWord, compareArtifacts, computePlan, diffValues, loadState, moduleFor, suggest, targetOnlyEntries, unresolvedErrors,
+  type EnginePlan, type LoadedTree, type Relationships, type TargetOnlyEntry,
 } from './engine-sync.ts';
 import { readEnvironmentFile, resolveEnv } from './environments.ts';
 import type { Emit } from './jobs.ts';
@@ -31,6 +32,8 @@ interface ItemFull {
   diff: DiffEntry[];
   incoming: unknown;
   current: unknown;
+  // Sub-collection entries only in the target (each removable on purpose).
+  entries?: TargetOnlyEntry[];
 }
 
 interface CompareRecord {
@@ -39,6 +42,8 @@ interface CompareRecord {
   items: Map<string, ItemFull>;
   index: TreeIndex;
   rollup: Map<string, Partial<Record<CompareStatus, number>>>;
+  // Items below each node that have target-only entries.
+  entriesBelow: Map<string, number>;
   source: Map<string, unknown>;
   relationships?: Relationships;
   scrub: Scrubber;
@@ -103,6 +108,21 @@ function rollupCounts(index: TreeIndex, items: Map<string, ItemFull>): Map<strin
   return out;
 }
 
+function entriesBelow(index: TreeIndex, items: Map<string, ItemFull>): Map<string, number> {
+  const out = new Map<string, number>();
+  const walk = (id: string): number => {
+    let n = 0;
+    for (const c of index.nodes.get(id)!.children) {
+      const child = index.nodes.get(c)!;
+      n += walk(c) + (child.key && items.get(child.key)?.entries?.length ? 1 : 0);
+    }
+    out.set(id, n);
+    return n;
+  };
+  index.roots.forEach(walk);
+  return out;
+}
+
 async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
   env: EngineEnv | null; clientFactory?: ClientFactory; emit: Emit; signal: AbortSignal;
 }): Promise<CompareResult> {
@@ -151,6 +171,13 @@ async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
     }));
     progress(emit, 3, 3, 'compare');
   }
+  // Entries the target's copy of an item has and the source's does not.
+  for (const i of items) {
+    const source = opts.source.artifacts.get(i.key);
+    if (!source || !i.current) continue;
+    const entries = targetOnlyEntries(moduleFor(i.key), i.key, source, i.current);
+    if (entries.length) i.entries = entries;
+  }
   const byKey = new Map(items.map((i) => [i.key, i]));
   const index = buildTreeIndex(byKey.keys(), (k) => byKey.get(k)!.incoming ?? byKey.get(k)!.current);
   const counts: Partial<Record<CompareStatus, number>> = {};
@@ -160,7 +187,7 @@ async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
     sourceCommit: opts.source.commit, counts, preselected: (opts.preselected ?? []).filter((k) => byKey.has(k)),
   };
   compares.set(result.compareId, {
-    projectDir: ref.dir, result, items: byKey, index, rollup: rollupCounts(index, byKey),
+    projectDir: ref.dir, result, items: byKey, index, rollup: rollupCounts(index, byKey), entriesBelow: entriesBelow(index, byKey),
     source: opts.source.artifacts, scrub: makeScrubber(env ? envSecrets(env) : []),
   });
   while (compares.size > MAX_COMPARES) compares.delete(compares.keys().next().value!);
@@ -218,6 +245,10 @@ export function registerCompareRoutes(router: Router, ctx: SyncContext): void {
       json: nodes.map((n): CompareTreeNode => {
         const out: CompareTreeNode = { ...toTreeNode(n), counts: c.rollup.get(n.id) ?? {} };
         if (n.key) out.status = c.items.get(n.key)?.status;
+        const own = n.key ? c.items.get(n.key)?.entries?.length ?? 0 : 0;
+        if (own) out.entries = own;
+        const below = c.entriesBelow.get(n.id) ?? 0;
+        if (below) out.entriesBelow = below;
         return out;
       }),
     };
@@ -230,6 +261,7 @@ export function registerCompareRoutes(router: Router, ctx: SyncContext): void {
     const i = c.items.get(key);
     if (!i) throw notFound('No such item in this comparison.');
     const item: CompareItem = { key, type: i.type, label: label(c, key), status: i.status, diff: i.diff, incoming: i.incoming, current: i.current };
+    if (i.entries?.length) item.targetOnlyEntries = i.entries.map((e) => ({ ...e, word: collectionWord(e.collection) }));
     if (i.status === 'drifted') {
       const last = await lastPromoted(ref, c.result.to, key);
       item.threeWay = {

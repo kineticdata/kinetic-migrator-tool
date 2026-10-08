@@ -4,7 +4,7 @@
 import { expect, test } from 'vitest';
 import type { EnvironmentValue, PlanItemOut, PlanResult } from '../../../shared/sync-api';
 import {
-  applyOutcome, carryOver, satisfied, settleChecklist, attentionList, checklistFrom, errorFix, groupByPhase, parseValueText, restoreHref, backupHref, valueText, valuesPayload, writes,
+  PHASES, planWithRemovals, removalRows, applyOutcome, carryOver, satisfied, settleChecklist, attentionList, checklistFrom, errorFix, groupByPhase, parseValueText, restoreHref, backupHref, valueText, valuesPayload, writes,
 } from './plan';
 
 const item = (key: string, type: string, action: PlanItemOut['action'] = 'create', drift = false): PlanItemOut => ({
@@ -13,7 +13,7 @@ const item = (key: string, type: string, action: PlanItemOut['action'] = 'create
 
 function plan(over: Partial<PlanResult> = {}): PlanResult {
   return {
-    planId: 'pl1', name: '2 items from Dev', to: 'test', from: 'dev', changesetId: null, sourceCommit: 'c1',
+    planId: 'pl1', name: '2 items from Dev', to: 'test', from: 'dev', changesetId: null, sourceCommit: 'c1', selected: [], remove: [], removals: [],
     items: [], counts: { create: 0, update: 0, unchanged: 0, manual: 0, 'skip-drift': 0, delete: 0 },
     needsAttention: [], environmentValues: [], secretsNeeded: [], errors: [], warnings: [], ...over,
   };
@@ -201,4 +201,28 @@ test('a finished run leaves nothing running, and Resume carries only finished ro
   expect(carryOver(checklistFrom([
     { type: 'item', key: 'a', status: 'done' }, { type: 'item', key: 'b', status: 'running' }, { type: 'item', key: 'c', status: 'failed' }, { type: 'item', key: 'd', status: 'skipped' },
   ]))).toEqual({ a: { status: 'done' }, d: { status: 'skipped' } });
+});
+
+test('removal warnings are shown with the removals, not as things to tick; routines apply after handlers', () => {
+  const p = plan({ warnings: [
+    'routines/R: still used by workflows/E/W; removing it may break them',
+    'teams/Gone: already gone from the target',
+    'teams/Old: changed in the target since it was reviewed; it is not removed',
+    'Something else',
+  ] });
+  expect(attentionList(p).map((a) => a.message)).toEqual(['Something else']);
+  const order = PHASES.map((ph) => ph.id);
+  expect(order.indexOf('handlers')).toBeLessThan(order.indexOf('routines'));
+  expect(order.indexOf('routines')).toBeLessThan(order.indexOf('workflows'));
+  expect(errorFix('space: The space itself can never be removed', 'dev', 'test').fix).toMatch(/out of the removals/);
+});
+
+test('planWithRemovals re-plans with the same inputs plus the extra removals; removalRows lists children after their parent', () => {
+  const removals = [{ key: 'kapps/k/kapp', type: 'kapps', label: 'K', action: 'delete' as const, children: [{ key: 'kapps/k/forms/f/form', type: 'forms', label: 'F' }], usedBy: [], notes: [], restore: null }];
+  const p = plan({ selected: ['teams/A'], remove: ['kapps/k/kapp'], removals, items: [item('teams/A', 'teams', 'update', true)] });
+  expect(planWithRemovals(p, ['teams/Z'])).toEqual({
+    to: 'test', from: 'dev', selected: ['teams/A'], remove: ['kapps/k/kapp', 'teams/Z'], sourceCommit: 'c1', resolutions: { 'teams/A': 'overwrite' },
+  });
+  expect(planWithRemovals({ ...p, changesetId: 'cs-1' }, ['teams/Z'])).toEqual({ to: 'test', changesetId: 'cs-1', remove: ['kapps/k/kapp', 'teams/Z'], resolutions: { 'teams/A': 'overwrite' } });
+  expect(removalRows(p)).toEqual([{ key: 'kapps/k/kapp', label: 'K' }, { key: 'kapps/k/forms/f/form', label: 'F', sub: 'with K' }]);
 });

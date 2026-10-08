@@ -156,7 +156,7 @@ test('create a project, compare dev with test, promote a form and its dependenci
     await expect(page.getByRole('heading', { name: 'Applied to Test' })).toBeVisible();
     const progress = page.getByRole('region', { name: 'Progress' });
     await expect(progress.getByRole('status')).toContainText('done');
-    for (const item of ['Ticketing', 'Mail Send', 'IT Request']) {
+    for (const item of ['Ticketing', 'Mail Send', 'Notify Requester', 'IT Request']) {
       await expect(progress.getByRole('listitem', { name: `${item}: Done` })).toBeVisible();
     }
     await snap(page, 'apply-done');
@@ -165,7 +165,7 @@ test('create a project, compare dev with test, promote a form and its dependenci
   await test.step('history shows the apply', async () => {
     await page.getByRole('link', { name: 'View in History' }).click();
     const timeline = page.getByRole('list', { name: 'Timeline' });
-    const applied = timeline.getByRole('button', { name: /Applied '5 items from Dev' to Test/ });
+    const applied = timeline.getByRole('button', { name: /Applied '6 items from Dev' to Test/ });
     await expect(applied).toBeVisible();
     await expect(timeline.getByRole('button', { name: /Backup of Test before applying/ })).toBeVisible();
     await applied.click();
@@ -186,6 +186,35 @@ test('create a project, compare dev with test, promote a form and its dependenci
     for (const left of [/^Leave Request/, /^Get Ticket/]) await expect(tree.getByRole('treeitem', { name: left })).toBeVisible();
     for (const gone of [/^IT Request/, /^Create Ticket/, /^Mail Send/]) await expect(tree.getByRole('treeitem', { name: gone })).toHaveCount(0);
     await snap(page, 'compare-after-apply');
+  });
+
+  await test.step('remove a team that is only in test', async () => {
+    const tree = page.getByRole('tree', { name: 'Differences, Dev to Test' });
+    const team = tree.getByRole('treeitem', { name: /^Contractors/ });
+    await team.click();
+    await page.getByRole('button', { name: 'Remove from Test' }).click();
+    const tray = page.getByRole('complementary');
+    await expect(tray.getByRole('region', { name: 'Remove from Test' }).getByText('Contractors')).toBeVisible();
+    await snap(page, 'compare-removal');
+    await tray.getByRole('button', { name: 'Review plan' }).click();
+    const removals = page.getByRole('region', { name: 'Remove from Test' });
+    await expect(removals.getByText('Contractors', { exact: true })).toBeVisible();
+    await expect(removals).toContainText('memberships');
+    await snap(page, 'plan-removal');
+    await page.getByRole('button', { name: 'Next: Environment values' }).click();
+    await page.getByRole('button', { name: 'Next: Confirm' }).click();
+    await expect(page.getByRole('region', { name: 'Removals from Test' })).toContainText('1 item will be removed from Test');
+    await page.getByLabel('Type test to confirm').fill('test');
+    await snap(page, 'confirm-removal');
+    await page.getByRole('button', { name: 'Apply to Test' }).click();
+    await expect(page.getByRole('heading', { name: 'Applied to Test' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Progress' }).getByRole('listitem', { name: /^Contractors: Done/ })).toBeVisible();
+    await page.getByRole('link', { name: 'View in History' }).click();
+    await expect(page.getByRole('list', { name: 'Timeline' }).getByRole('button', { name: /Removed 1 item from Test/ })).toBeVisible();
+    await snap(page, 'history-removal');
+    await page.getByRole('link', { name: 'Overview', exact: true }).click();
+    await page.getByRole('link', { name: 'Compare with Test' }).click();
+    await expect(page.getByRole('tree', { name: 'Differences, Dev to Test' }).getByRole('treeitem', { name: /^Kapps/ })).toBeVisible();
   });
 
   await test.step('dark theme', async () => {

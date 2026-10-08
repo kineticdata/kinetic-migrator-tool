@@ -29,6 +29,8 @@ interface FakeSpace {
   workflows: Workflow[];
   connections: Obj[];
   handlers: Array<{ handler: Obj; zip: Buffer }>;
+  // Global routines (Task trees), keyed by title (= name).
+  routines: Obj[];
 }
 
 // Shared by both spaces so an installed handler's package compares equal.
@@ -41,6 +43,11 @@ const form = (slug: string, name: string, fields: string[], extra: Obj = {}) => 
   ...extra,
 });
 const tree = (nodes: string[]) => ({ nodes: nodes.map((n, i) => ({ id: `node_${i + 1}`, name: n, definitionId: 'system_noop_v1' })) });
+const routine = (name: string, definitionId: string, nodes: string[]) => ({
+  name, title: name, type: 'Global Routine', definitionId, status: 'Active', notes: '', versionId: '0',
+  inputs: [{ name: 'Submission Id', required: true }], outputs: [{ name: 'Sent' }],
+  treeJson: { nodes: nodes.map((n, i) => ({ id: `node_${i + 1}`, name: n, definitionId: 'system_noop_v1' })), connectors: [] },
+});
 const team = (name: string, description: string) => ({ name, slug: name.toLowerCase().replace(/\s+/g, '-'), description, attributes: [] });
 
 function devSpace(): FakeSpace {
@@ -65,7 +72,10 @@ function devSpace(): FakeSpace {
       },
     ],
     workflows: [
-      { id: 'w-dev-1', scope: 'form:services/it-request', name: 'Create Ticket', event: 'Submission Submitted', filter: '', status: 'Active', notes: '', treeJson: tree(['Start', 'Create Ticket', 'Notify Requester']) },
+      {
+        id: 'w-dev-1', scope: 'form:services/it-request', name: 'Create Ticket', event: 'Submission Submitted', filter: '', status: 'Active', notes: '',
+        treeJson: { nodes: [...tree(['Start', 'Create Ticket']).nodes, { id: 'node_3', name: 'Notify Requester', definitionId: 'routine_notify_requester_v1' }] },
+      },
       { id: 'w-dev-2', scope: 'form:services/leave', name: 'Manager Approval', event: 'Submission Submitted', filter: '', status: 'Active', notes: '', treeJson: tree(['Start', 'Ask Manager', 'Close']) },
       { id: 'w-dev-3', scope: 'kapp:facilities', name: 'Notify Facilities', event: 'Submission Created', filter: '', status: 'Active', notes: '', treeJson: tree(['Start', 'Email Team']) },
     ],
@@ -92,6 +102,7 @@ function devSpace(): FakeSpace {
         properties: [{ name: 'Server', type: 'Plaintext', value: 'smtp.dev.example.com' }, { name: 'Password', type: 'Encrypted' }],
       },
     }],
+    routines: [routine('Notify Requester', 'routine_notify_requester_v1', ['Start', 'Find Requester', 'Send Email'])],
   };
 }
 
@@ -100,7 +111,8 @@ function testSpace(): FakeSpace {
   const [services, facilities] = dev.kapps;
   return {
     space: { ...dev.space, name: 'Test Space', slug: 'test' },
-    teams: [team('Operations', 'Service desk'), team('Facilities', 'Buildings and rooms')],
+    // Contractors is only in Test (something to remove).
+    teams: [team('Operations', 'Service desk'), team('Facilities', 'Buildings and rooms'), team('Contractors', 'Former contractor access')],
     kapps: [
       { ...services, forms: [form('it-request', 'IT Request', ['Summary', 'Priority']), services.forms[1], services.forms[2]] },
       { ...facilities, forms: [facilities.forms[0], form('maintenance', 'Maintenance', ['Location', 'Issue', 'Urgency'])] },
@@ -111,6 +123,7 @@ function testSpace(): FakeSpace {
     ],
     connections: [dev.connections[1]],
     handlers: [],
+    routines: [],
   };
 }
 
@@ -137,7 +150,12 @@ function routes(s: FakeSpace): Obj {
     'GET core/fileResources': { fileResources: [] },
     'GET core/kapps': { kapps: s.kapps.map((k) => ({ slug: k.slug, name: k.name })) },
     'GET integrator/connections': s.connections.map((c) => ({ id: c.id, name: c.name })),
-    'GET task/trees': { trees: [], count: 0 },
+    'GET task/trees': ({ query }: { query?: Obj }) => {
+      const trees = s.routines.filter((t) => !query?.type || t.type === query.type).map(clone);
+      const offset = Number(query?.offset ?? 0);
+      const limit = Number(query?.limit ?? 100);
+      return { trees: trees.slice(offset, offset + limit), count: trees.length };
+    },
     'GET task/handlers': { handlers: s.handlers.map((h) => h.handler), count: s.handlers.length },
   };
   for (const k of s.kapps) r[`GET core/kapps/${enc(k.slug)}`] = { kapp: k };
@@ -154,6 +172,7 @@ function routes(s: FakeSpace): Obj {
     r[`GET integrator/export/connections/${enc(c.id)}`] = { connection: c };
     for (const op of c.operations) r[`GET integrator/connections/${enc(c.id)}/operations/${enc(op.id)}`] = { operation: op };
   }
+  for (const t of s.routines) r[`GET task/trees/${enc(t.title)}`] = clone(t);
   for (const h of s.handlers) {
     r[`GET task/handlers/${enc(h.handler.definitionId)}`] = { handler: h.handler };
     r[`GET task/handlers/${enc(h.handler.definitionId)}/zip`] = h.zip;
@@ -234,6 +253,26 @@ function write(s: FakeSpace, catalog: FakeSpace, api: string, method: string, pa
     return {};
   }
   if (api === 'task') {
+    if (method === 'POST' && path === '/trees') {
+      const { sourceName, sourceGroup, ...tree } = clone(body ?? {});
+      if (s.routines.some((t) => t.title === tree.name)) throw Object.assign(new Error(`400 a tree named ${tree.name} exists`), { status: 400 });
+      const created = { ...tree, title: tree.name, versionId: '0' };
+      s.routines.push(created);
+      return { tree: created };
+    }
+    if ((m = /^\/trees\/([^/]+)$/.exec(path))) {
+      const title = dec(m[1]);
+      const cur = s.routines.find((t) => t.title === title);
+      if (method === 'PUT') {
+        if (!cur) throw Object.assign(new Error(`404 task${path}`), { status: 404 });
+        if (String(body?.versionId) !== String(cur.versionId)) throw Object.assign(new Error('400 stale_record'), { status: 400 });
+        const { versionId, ...changes } = clone(body);
+        Object.assign(cur, changes, { versionId: String(Number(versionId) + 1) });
+        return { tree: cur };
+      }
+      if (method === 'DELETE') s.routines = s.routines.filter((t) => t !== cur);
+      return {};
+    }
     if (method === 'POST' && path === '/handlers') {
       const file = form?.get('package') as File | null;
       const id = file?.name?.replace(/\.zip$/, '');

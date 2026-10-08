@@ -40,6 +40,8 @@ export function ancestorsOf(key: string): string[] {
 
 // The kind of item a key names (as the tree shows it).
 export function kindOfKey(key: string): NodeKind {
+  // A sub-collection entry (`<item>#<collection>/<name>`) shows as its item.
+  if (/^(space|kapps\/[^/#]+\/kapp)#/.test(key)) key = key.slice(0, key.indexOf('#'));
   const p = key.split('/');
   if (key === 'space') return 'space';
   if (p[0] === 'workflows' || (p[0] === 'kapps' && (p[2] === 'workflows' || p[4] === 'workflows'))) return 'workflow';

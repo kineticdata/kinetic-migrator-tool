@@ -7,7 +7,7 @@ import type {
   ProjectCatalog, ProjectDetail, ProjectSummary, PutCredentialsRequest, PutEnvironmentRequest, SessionInfo,
 } from '../../../shared/api';
 import type {
-  Changeset, CompareItem, CompareMode, CompareRequest, CompareResult, CompareTreeNode, CreateChangesetRequest, ExploreItem, HistoryEvent,
+  Changeset, CompareItem, CompareMode, CompareRequest, CompareResult, CompareTreeNode, CreateChangesetRequest, UpdateChangesetRequest, ExploreItem, HistoryEvent,
   PlanRequest, SearchResponse, SuggestionOut, TreeNode,
 } from '../../../shared/sync-api';
 import { api, projectPath } from './client';
@@ -241,6 +241,8 @@ export const useChangeset = (p: string, id: string) => useQuery({
 });
 
 export const useCreateChangeset = (p: string) => useProjectMutation(p, (body: CreateChangesetRequest) => api.post<Changeset>(projectPath(p, 'changesets'), body));
+
+export const useUpdateChangeset = (p: string, id: string) => useProjectMutation(p, (body: UpdateChangesetRequest) => api.put<Changeset>(projectPath(p, 'changesets', id), body));
 
 export const useDeleteChangeset = (p: string) => useProjectMutation(p, (id: string) => api.del<{ deleted: string }>(projectPath(p, 'changesets', id)));
 

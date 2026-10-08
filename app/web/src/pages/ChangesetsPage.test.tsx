@@ -106,3 +106,21 @@ test('Compare with… shows how the pinned items differ from an environment', as
   await user.click(within(list).getByText('Leave request'));
   expect(await screen.findByRole('table', { name: 'Changes' })).toHaveTextContent('Description');
 });
+
+test('removals show the environment they were chosen for; ones saved without it are confirmed for one first', async () => {
+  const unbound: Changeset = { ...CS, id: 'tidy-000001', name: 'Tidy', keys: [], remove: ['teams/contractors'] };
+  const m = mockApi({
+    'GET /api/projects/:p': project(),
+    'GET /api/projects/:p/history': [historyEvent({ commit: 'c-pinned', at: '2026-10-05T09:00:00Z' })],
+    'GET /api/projects/:p/changesets/:id': unbound,
+    'PUT /api/projects/:p/changesets/:id': { ...unbound, removeFrom: 'test' },
+  });
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: `/p/acme-demo/changesets/${unbound.id}` });
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('These removals are for');
+  expect(screen.getByRole('list', { name: 'Removals' })).toHaveTextContent('contractors');
+  await user.click(within(alert).getByRole('button', { name: /Confirm removals for/ }));
+  await waitFor(() => expect(m.callsTo('PUT', `/api/projects/acme-demo/changesets/${unbound.id}`)).toHaveLength(1));
+  expect(m.callsTo('PUT', `/api/projects/acme-demo/changesets/${unbound.id}`)[0].body).toEqual({ removeFrom: 'test' });
+});
