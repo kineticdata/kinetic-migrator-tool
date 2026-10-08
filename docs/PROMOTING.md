@@ -60,10 +60,42 @@ KINETIC_DEV_PASSWORD=...
 and digits turned into `_`. The same credentials are used for the Core, Task
 and Integrator APIs; the tool fetches the Integrator token itself.
 
-The Integrator token comes from the platform's OAuth implicit-grant sign-in.
-Some platform versions do not offer it (Kinetic Platform 7.0.0-rc3 answers
-404). Then exports keep everything else and leave connections and
-operations out, saying why; the snapshot records it. Plans and comparisons
+### Platform versions
+
+The tool works with Kinetic Platform 6.x and 7.x. It asks each environment
+which version it runs (`/app/integrator/api/version`, which needs no
+sign-in, then `/app/api/v1/version`) and chooses its behaviour from that.
+Test connection shows the version ("Kinetic Platform 7.0.0-rc3"); the app
+remembers the last one seen for each environment in `plans/platforms.json`
+(local, not committed: it follows the live server, and committing it would
+add a commit per test), and each snapshot commit records the version it was
+taken from in a `Platform:` trailer.
+
+What depends on the version, and nothing else does:
+
+| Behaviour | 6.x | 7.x |
+|-----------|-----|-----|
+| Integrator token | OAuth implicit grant with the username and password (`/app/oauth/authorize`), valid 12 hours | Sign-in through `/app/login.do`, then the authorization code flow with PKCE (`/app/oauth2/authorize`, `/app/oauth2/token`); the token lasts 5 minutes and is renewed from the same sign-in session as needed, so long snapshots and applies keep working |
+
+Core and Task API calls use the username and password (Basic auth) on both.
+When the version cannot be read, the implicit grant is tried first and the
+7.x sign-in after it on a 404. A 7.x space that signs people in only with
+single sign-on (OpenID Connect or SAML) cannot be used: the tool needs a
+local account with a password, and says so.
+
+Promoting between environments on different major versions is allowed;
+Compare and Plan show a warning in their header (`Dev runs 6.1.7 and Prod
+runs 7.0.0-rc3 — review differences carefully.`), because the platform may
+store the same item differently. Nothing is blocked by it.
+
+Session cookies, sign-in codes, PKCE verifiers and tokens are never written
+to the log file, job events, run records or errors.
+
+### When the Integrator sign-in is not offered
+
+If neither sign-in is offered (both answer 404), exports keep everything
+else and leave connections and operations out, saying why; the snapshot
+records it. Plans and comparisons
 where either side has no connections recorded this way leave connections
 and operations out entirely: none show as new, only in the target or
 removable, and references to them are not checked (one warning lists the
@@ -594,6 +626,10 @@ What happens:
   in the source again (the snapshot being promoted, or the source's newest
   snapshot when a changeset is pinned to an older one: "still exists in
   <source> — not removed") is never sent to apply.
+- A connection or operation removal that cannot be checked, because the
+  source's snapshot has no connections recorded (`couldn't check <source>'s
+  connections`), is dropped from the plan with a warning. It is never sent,
+  and the rest of the plan can still be applied.
 - They are deleted after every create and update, in
   reverse dependency order (workflows and WebAPIs before the routines and
   handlers they run, operations before connections).
@@ -714,6 +750,11 @@ contain reference-data values, so `compares/` is git-ignored.
 - **`Connections and operations were left out`**: the Integrator sign-in is
   not available on that platform version (see section 2). Everything else
   is exported, compared and promoted; connections are not, until it is.
+- **`This space signs in with single sign-on`**: the 7.x sign-in page refused
+  a password the Core API accepts, or sent the tool to an identity provider.
+  Use a local account with a password for the environment.
+- **`… runs 6.1.7 and … runs 7.0.0-rc3 — review differences carefully`**:
+  the two environments run different major versions (see section 2).
 - **Plan shows changes right after an apply**: the platform added defaults
   on write. Report it; the tool's normalizer should ignore that field.
 - **`The Kinetic Platform rejected the change (400): …`** (in the app): the

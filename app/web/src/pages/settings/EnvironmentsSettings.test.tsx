@@ -5,7 +5,7 @@ import { afterEach, expect, test, vi } from 'vitest';
 import { AppRoutes } from '../../routes';
 import { mockApi } from '../../test/mock-api';
 import { renderWithApp } from '../../test/render';
-import { env, project } from '../../test/fixtures';
+import { env, project, V7 } from '../../test/fixtures';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -21,7 +21,7 @@ function setup() {
       detail = { ...detail, environments: envs };
       return detail;
     },
-    'POST /api/projects/:p/environments/:env/test': { ok: true, steps: [{ step: 'core', label: 'Core sign-in', ok: true }, { step: 'integrator', label: 'Integrator token', ok: true }] },
+    'POST /api/projects/:p/environments/:env/test': { ok: true, steps: [{ step: 'core', label: 'Core sign-in', ok: true }, { step: 'integrator', label: 'Integrator token', ok: true }], platform: V7 },
   });
 }
 
@@ -52,4 +52,6 @@ test('shows protected and credentials status, and tests a connection', async () 
   expect(within(prod).getByText(/Password set/)).toBeInTheDocument();
   await user.click(within(prod).getByRole('button', { name: 'Test Prod' }));
   expect(await within(prod).findByText('Connected')).toBeInTheDocument();
+  // The version Test connection detected.
+  expect(within(prod).getByText('Kinetic Platform 7.0.0-rc3')).toBeInTheDocument();
 });

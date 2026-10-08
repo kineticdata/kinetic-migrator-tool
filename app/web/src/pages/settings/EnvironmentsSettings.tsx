@@ -12,6 +12,7 @@ import { Dialog, DialogClose, DialogContent } from '../../components/ui/Dialog';
 import { EmptyState, InlineError } from '../../components/ui/EmptyState';
 import { useToast } from '../../components/ui/Toast';
 import { envLabel, timeAgo } from '../../lib/format';
+import { platformText } from '../../lib/platform';
 import { useProjectContext } from '../../lib/project';
 
 function credentialsText(e: EnvironmentInfo): string {
@@ -70,6 +71,7 @@ export function EnvironmentsSettings() {
             {envs.map((e, i) => {
               const label = envLabel(e.name);
               const t = tests[e.name];
+              const platform = platformText((t && t !== 'running' && !(t instanceof Error) && t.platform) || e.platform);
               return (
                 <li key={e.name} data-env={e.name} className="flex flex-wrap items-center gap-4 px-5 py-4">
                   <span aria-hidden className="flex size-7 shrink-0 items-center justify-center rounded-full bg-surface-2 text-xs font-semibold text-muted tabular-nums">{i + 1}</span>
@@ -80,6 +82,7 @@ export function EnvironmentsSettings() {
                       {e.lastSnapshot && <span className="text-xs text-subtle">Snapshot {timeAgo(e.lastSnapshot.at)}</span>}
                     </div>
                     <p className="truncate font-mono text-xs text-subtle">{e.url}</p>
+                    {platform && <p className="text-xs text-muted">{platform}</p>}
                     <p className={e.credentials.password ? 'mt-1 text-xs text-muted' : 'mt-1 text-xs text-drift'}>{credentialsText(e)}</p>
                     {t && t !== 'running' && <div className="mt-1.5">{t instanceof Error ? <InlineError error={t} /> : <TestOutcome result={t} />}</div>}
                   </div>

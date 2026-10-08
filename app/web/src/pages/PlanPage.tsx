@@ -22,6 +22,7 @@ import { ApplyChecklist, type ApplyChecklistProps } from '../components/ApplyChe
 import { EnvironmentValuesForm } from '../components/EnvironmentValuesForm';
 import { FieldDiffTable } from '../components/FieldDiffTable';
 import { NeedsAttention } from '../components/NeedsAttention';
+import { Notes } from '../components/Notes';
 import { KindIcon } from '../components/ObjectTree';
 import { Stepper } from '../components/Stepper';
 import { Badge, type Tone } from '../components/ui/Badge';
@@ -179,6 +180,7 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
               </span>
               {plan.changesetId && <span className="text-subtle">· saved changeset</span>}
             </p>
+            {plan.crossVersion && <Notes notes={[plan.crossVersion]} label="Platform versions" className="mt-3" />}
           </div>
         </div>
         <Stepper steps={STEPS} current={step} className="mt-6" />
