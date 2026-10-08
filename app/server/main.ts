@@ -11,36 +11,30 @@ import { createRequestHandler } from './http.ts';
 import { JobRegistry, registerJobRoutes } from './jobs.ts';
 import { Router } from './router.ts';
 import { generateKey } from './security.ts';
+import type { ClientFactory } from './engine.ts';
+import { registerProjectRoutes } from './projects.ts';
+import { createDefaultStore, type SecretStore } from './secrets.ts';
 import { defaultLogger, type Logger } from './log.ts';
 
 export const VERSION: string = pkg.version;
 
-// Keychain-backed in production, in-memory in tests. Values never cross the API.
-export interface SecretsStore {
-  get(account: string): Promise<string | undefined>;
-  set(account: string, value: string): Promise<void>;
-  delete(account: string): Promise<void>;
-  has(account: string): Promise<boolean>;
-  // True when backed by the OS keychain rather than session memory.
-  readonly persistent?: boolean;
-}
-
-// The engine's injectable client factory (see lib/sync); typed loosely until
-// the routes that use it arrive.
-export type ClientFactory = (...args: never[]) => unknown;
+// The secrets store moved to secrets.ts; the old name stays as an alias.
+export type { SecretStore as SecretsStore } from './secrets.ts';
+export type { ClientFactory } from './engine.ts';
 
 export interface StartServerOptions {
   workspace: string;
   port?: number;
   webDir?: string;
-  secrets?: SecretsStore;
+  // Defaults to the OS keychain when available, else session memory.
+  secrets?: SecretStore;
   clientFactory?: ClientFactory;
   logger?: Logger;
 }
 
 export interface ServerContext {
   workspace: string;
-  secrets?: SecretsStore;
+  secrets: SecretStore;
   clientFactory?: ClientFactory;
   jobs: JobRegistry;
   router: Router;
@@ -57,10 +51,11 @@ export interface ServerHandle {
 export function buildRouter(ctx: Omit<ServerContext, 'router'>): Router {
   const router = new Router();
   router.get('/api/session', () => {
-    const session: SessionInfo = { version: VERSION, workspace: ctx.workspace, keychain: { available: Boolean(ctx.secrets?.persistent) } };
+    const session: SessionInfo = { version: VERSION, workspace: ctx.workspace, keychain: { available: Boolean(ctx.secrets.persistent) } };
     return { json: session };
   });
   registerJobRoutes(router, ctx.jobs);
+  registerProjectRoutes(router, ctx);
   return router;
 }
 
@@ -69,7 +64,8 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
   const logger = opts.logger ?? defaultLogger;
   const jobs = new JobRegistry({ logger });
   const workspace = path.resolve(opts.workspace);
-  const router = buildRouter({ workspace, secrets: opts.secrets, clientFactory: opts.clientFactory, jobs });
+  const secrets = opts.secrets ?? await createDefaultStore();
+  const router = buildRouter({ workspace, secrets, clientFactory: opts.clientFactory, jobs });
   let port = 0;
   const server = http.createServer(createRequestHandler({ key, port: () => port, router, webDir: opts.webDir, logger }));
   await new Promise<void>((resolve, reject) => {

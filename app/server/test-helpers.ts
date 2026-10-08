@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { startServer, type ServerHandle, type StartServerOptions } from './main.ts';
+import { MemoryStore } from './secrets.ts';
 
 export interface RawResponse {
   status: number;
@@ -46,7 +47,8 @@ export interface TestServer extends ServerHandle {
 
 export async function startTestServer(opts: Partial<StartServerOptions> = {}): Promise<TestServer> {
   const workspace = mkdtempSync(path.join(tmpdir(), 'km-ws-'));
-  const server = await startServer({ workspace, ...opts });
+  // Session memory by default: tests never touch the OS keychain.
+  const server = await startServer({ workspace, secrets: new MemoryStore(), ...opts });
   const key = new URL(server.url).searchParams.get('key') ?? '';
   const cookie = `km_session_${server.port}=${key}`;
   const good = { cookie, 'x-kinetic-migrate': '1' };

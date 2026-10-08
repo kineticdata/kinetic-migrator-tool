@@ -27,6 +27,7 @@
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^6.1.2",
     "esbuild": "^0.28.2",
+    "isomorphic-git": "^1.43.1",
     "jsdom": "^29.1.1",
     "postcss": "^8.5.29",
     "react": "^18.3.1",

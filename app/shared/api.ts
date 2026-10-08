@@ -44,3 +44,94 @@ export interface JobEndEvent {
 export interface JobStarted {
   jobId: string;
 }
+
+// Projects and environments. Secrets are never returned: only `has` flags.
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  path: string;
+}
+
+export interface CredentialsStatus {
+  username: boolean;
+  password: boolean;
+}
+
+export interface SnapshotInfo {
+  commit: string;
+  at: string;
+  message: string;
+}
+
+export interface EnvironmentInfo {
+  name: string;
+  url: string;
+  readOnly: boolean;
+  credentials: CredentialsStatus;
+  lastSnapshot: SnapshotInfo | null;
+}
+
+export interface ProjectDetail extends ProjectSummary {
+  // In pipeline order.
+  environments: EnvironmentInfo[];
+}
+
+export interface NewEnvironment {
+  name: string;
+  url: string;
+  readOnly?: boolean;
+}
+
+export interface CreateProjectRequest {
+  name: string;
+  environment?: NewEnvironment;
+}
+
+export interface OpenProjectRequest {
+  path: string;
+}
+
+export interface PutEnvironmentRequest {
+  url: string;
+  readOnly?: boolean;
+  // 0-based pipeline position; omitted keeps the current one (new: last).
+  position?: number;
+}
+
+// Write-only.
+export interface PutCredentialsRequest {
+  username?: string;
+  password?: string;
+}
+
+export type ConnectionStep = 'core' | 'integrator';
+
+export interface ConnectionTestStep {
+  step: ConnectionStep;
+  label: string;
+  ok: boolean;
+  skipped?: boolean;
+  message?: string;
+}
+
+export interface ConnectionTestResult {
+  ok: boolean;
+  steps: ConnectionTestStep[];
+}
+
+export interface DataEntry {
+  kapp: string;
+  form: string;
+  key: string[];
+}
+
+export interface ProjectConfig {
+  data: DataEntry[];
+  exclude: { kapps: string[]; forms: string[] };
+  envBoundAttributes: Record<string, string[]>;
+}
+
+export interface EnvironmentOverrides {
+  artifacts: Record<string, Record<string, unknown>>;
+  replace: Array<{ from: string; to: string }>;
+}
