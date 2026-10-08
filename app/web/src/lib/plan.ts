@@ -24,6 +24,8 @@ export interface AttentionEntry {
 const COVERED = [
   /: creating\/updating rows will run these workflows in the target: /,
   /: will be created without credentials/,
+  // Shown as an offered value under Environment values instead.
+  /: "[^"]+" is kept per environment and empty in the target; the source has a value/,
 ];
 
 // Engine warnings in plain words, where they are recognised.
@@ -38,6 +40,9 @@ function plainWarning(w: string, plan: PlanResult): { message: string; key: stri
       message: `${name} of ${nameOfKey(key)} is empty in ${To} and nothing sets it.${value ? ' Fill it in under Environment values, or tick to go ahead without it.' : ''}`,
       ...(value ? { valueId: value.id } : {}),
     };
+  }
+  if (w.startsWith('Drift check for the space skipped: ')) {
+    return { key: 'space', message: `The space's kept settings changed since it was last promoted to ${To}, so changes made to it in ${To} since then cannot be detected this time; this plan does not report the space as drifted. Applying records the current settings, and later plans check again.` };
   }
   m = /^Override for "(.+)" matches nothing in the export/.exec(w);
   if (m) return { key: m[1], message: `A saved environment value for ${nameOfKey(m[1])} matches nothing being promoted, so it is ignored.` };

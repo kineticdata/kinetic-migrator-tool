@@ -204,14 +204,15 @@ test('saving one card keeps unsaved edits in the other, and picking another form
 });
 
 const DEFAULT_KEPT = ['displayType', 'displayValue', 'trustedFrameDomains', 'trustedResourceDomains', 'allowedIps', 'allowedIpsEnabled'];
+const DEFAULT_BOXES = ['displayType + displayValue', 'trustedFrameDomains', 'trustedResourceDomains', 'allowedIps + allowedIpsEnabled'];
 
-test('space settings: shows the saved list with the always-kept fields fixed, and saves ticked extras', async () => {
+test('space settings: one box per setting or linked pair, the always-kept fields fixed, and ticked extras saved', async () => {
   const m = setup({ envBoundSpaceFields: DEFAULT_KEPT });
   const user = userEvent.setup();
   open();
   const space = await card('Space settings kept per environment');
-  for (const f of DEFAULT_KEPT) expect(within(space).getByRole('checkbox', { name: f })).toBeChecked();
-  expect(within(space).getByRole('checkbox', { name: 'displayValue' })).toHaveAccessibleDescription("Where the space's UI is served from");
+  for (const f of DEFAULT_BOXES) expect(within(space).getByRole('checkbox', { name: f })).toBeChecked();
+  expect(within(space).getByRole('checkbox', { name: 'trustedFrameDomains' })).toHaveAccessibleDescription('Sites allowed to show the space inside a frame');
   expect(within(space).getByRole('checkbox', { name: 'loginPage' })).not.toBeChecked();
   for (const f of ['name', 'slug', 'platformComponents', 'bundlePath', 'sharedBundleBase']) {
     const box = within(space).getByRole('checkbox', { name: f });
@@ -219,13 +220,49 @@ test('space settings: shows the saved list with the always-kept fields fixed, an
     expect(box).toBeDisabled();
   }
   await user.click(within(space).getByRole('checkbox', { name: 'defaultLocale' }));
-  await user.click(within(space).getByRole('checkbox', { name: 'allowedIps' }));
+  // A pair is unticked (and saved) as a whole.
+  await user.click(within(space).getByRole('checkbox', { name: 'allowedIps + allowedIpsEnabled' }));
   await user.click(within(space).getByRole('checkbox', { name: 'loginPage' }));
   await user.click(within(space).getByRole('button', { name: 'Save space settings' }));
   await waitFor(() => expect(m.callsTo('PUT', '/api/projects/acme-demo/config')).toHaveLength(1));
   expect(lastPut(m)).toEqual({
-    envBoundSpaceFields: ['displayType', 'displayValue', 'trustedFrameDomains', 'trustedResourceDomains', 'allowedIpsEnabled', 'loginPage', 'defaultLocale'],
+    envBoundSpaceFields: ['displayType', 'displayValue', 'trustedFrameDomains', 'trustedResourceDomains', 'loginPage', 'defaultLocale'],
   });
+});
+
+test('space settings: a half pair from the server shows the pair unticked; ticking it saves both halves', async () => {
+  const m = setup({ envBoundSpaceFields: ['displayValue'] });
+  const user = userEvent.setup();
+  open();
+  const space = await card('Space settings kept per environment');
+  const pair = within(space).getByRole('checkbox', { name: 'displayType + displayValue' });
+  expect(pair).not.toBeChecked();
+  await user.click(pair);
+  await user.click(within(space).getByRole('button', { name: 'Save space settings' }));
+  await waitFor(() => expect(m.callsTo('PUT', '/api/projects/acme-demo/config')).toHaveLength(1));
+  expect(lastPut(m)).toEqual({ envBoundSpaceFields: ['displayType', 'displayValue'] });
+});
+
+test('space settings: the boxes follow the list the server saved', async () => {
+  let config: ProjectConfig = { data: [], exclude: { kapps: [], forms: [] }, envBoundAttributes: {}, envBoundSpaceFields: [] };
+  mockApi({
+    'GET /api/projects/:p': project(),
+    'GET /api/projects/:p/history': [],
+    'GET /api/projects/:p/catalog': CATALOG,
+    'GET /api/projects/:p/config': () => config,
+    // The server stores what it accepts; here it also keeps defaultTimezone.
+    'PUT /api/projects/:p/config': (c: { body: Partial<ProjectConfig> }) => {
+      config = { ...config, envBoundSpaceFields: [...(c.body.envBoundSpaceFields ?? []), 'defaultTimezone'] };
+      return config;
+    },
+  });
+  const user = userEvent.setup();
+  open();
+  const space = await card('Space settings kept per environment');
+  await user.click(within(space).getByRole('checkbox', { name: 'loginPage' }));
+  await user.click(within(space).getByRole('button', { name: 'Save space settings' }));
+  await waitFor(() => expect(within(space).getByRole('checkbox', { name: 'defaultTimezone' })).toBeChecked());
+  expect(within(space).getByRole('checkbox', { name: 'loginPage' })).toBeChecked();
 });
 
 test('space settings: a reply without the list (an older server) shows the defaults; saving another card keeps unsaved boxes', async () => {
@@ -233,7 +270,7 @@ test('space settings: a reply without the list (an older server) shows the defau
   const user = userEvent.setup();
   open();
   const space = await card('Space settings kept per environment');
-  for (const f of DEFAULT_KEPT) expect(within(space).getByRole('checkbox', { name: f })).toBeChecked();
+  for (const f of DEFAULT_BOXES) expect(within(space).getByRole('checkbox', { name: f })).toBeChecked();
   await user.click(within(space).getByRole('checkbox', { name: 'defaultTimezone' }));
   const rules = await card('Environment-specific attributes');
   await user.click(within(rules).getByRole('button', { name: 'Save attributes' }));
@@ -244,7 +281,7 @@ test('space settings: a reply without the list (an older server) shows the defau
 
 test('space settings: names ignored in the project file are shown on this card only', async () => {
   setup({
-    envBoundSpaceFields: ['displayValue'],
+    envBoundSpaceFields: ['trustedFrameDomains'],
     warnings: [
       'kinetic-sync.config.json: "envBoundSpaceFields": "colour" cannot be kept per environment; it is ignored.',
       'kinetic-sync.config.json: "envBoundAttributes": unknown level "forms" (use space, kapp, form, team, category); it is ignored.',
@@ -257,5 +294,5 @@ test('space settings: names ignored in the project file are shown on this card o
   expect(within(space).queryByText(/unknown level "forms"/)).toBeNull();
   expect(within(rules).getByText(/unknown level "forms"/)).toBeInTheDocument();
   expect(within(rules).queryByText(/"colour"/)).toBeNull();
-  expect(within(space).getByRole('checkbox', { name: 'displayType' })).not.toBeChecked();
+  expect(within(space).getByRole('checkbox', { name: 'displayType + displayValue' })).not.toBeChecked();
 });
