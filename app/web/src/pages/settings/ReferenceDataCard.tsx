@@ -37,15 +37,17 @@ const isBlank = (r: EntryRow) => !r.kapp.trim() && !r.form.trim() && !r.filter.l
 const isValid = (e: DataEntry) => Boolean(e.kapp && e.form && (e.filter ?? []).every((c) => c.field && c.value.trim()));
 
 // Picks from the catalog, or a text box when there is nothing to pick from.
-function Picker({ label, value, placeholder, options, onChange }: {
-  label: string; value: string; placeholder: string; options: Array<{ value: string; label: string }> | null; onChange: (v: string) => void;
+function Picker({ label, value, placeholder, options, errorId, onChange }: {
+  label: string; value: string; placeholder: string; options: Array<{ value: string; label: string }> | null; errorId?: string; onChange: (v: string) => void;
 }) {
+  const bad = Boolean(errorId) && !value.trim();
+  const a11y = { 'aria-label': label, 'aria-invalid': bad || undefined, 'aria-describedby': bad ? errorId : undefined };
   if (!options) {
-    return <input aria-label={label} className={inputClasses} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} spellCheck={false} />;
+    return <input {...a11y} className={inputClasses} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} spellCheck={false} />;
   }
   const known = options.some((o) => o.value === value);
   return (
-    <select aria-label={label} className={inputClasses} value={value} onChange={(e) => onChange(e.target.value)}>
+    <select {...a11y} className={inputClasses} value={value} onChange={(e) => onChange(e.target.value)}>
       <option value="">{placeholder}</option>
       {!known && value && <option value={value}>{value}</option>}
       {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -94,9 +96,10 @@ function MatchFields({ n, fields, value, onChange }: { n: number; fields: string
   );
 }
 
-function EntryEditor({ row, index, catalog, onChange, onRemove }: {
-  row: EntryRow; index: number; catalog: ProjectCatalog | null; onChange: (patch: Partial<EntryRow>) => void; onRemove: () => void;
+function EntryEditor({ row, index, catalog, errorId, onChange, onRemove }: {
+  row: EntryRow; index: number; catalog: ProjectCatalog | null; errorId?: string; onChange: (patch: Partial<EntryRow>) => void; onRemove: () => void;
 }) {
+  const flag = (empty: boolean) => (errorId && empty ? { 'aria-invalid': true, 'aria-describedby': errorId } : {});
   const n = index + 1;
   const fieldListId = useId();
   const has = Boolean(catalog?.env);
@@ -112,8 +115,16 @@ function EntryEditor({ row, index, catalog, onChange, onRemove }: {
   return (
     <div className="space-y-3 rounded-lg border border-border p-3" data-entry={n}>
       <div className="grid items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2rem]">
-        <Picker label={`Kapp for entry ${n}`} value={row.kapp} placeholder="Choose a kapp" options={kappOptions} onChange={(v) => onChange({ kapp: v, form: '' })} />
-        <Picker label={`Form for entry ${n}`} value={row.form} placeholder="Choose a form" options={formOptions} onChange={(v) => onChange({ form: v })} />
+        {/* Picking another kapp or form drops conditions and match fields that
+            name the previous form's fields; typing a slug keeps them. */}
+        <Picker
+          label={`Kapp for entry ${n}`} value={row.kapp} placeholder="Choose a kapp" options={kappOptions} errorId={errorId}
+          onChange={(v) => onChange(kappOptions ? { kapp: v, form: '', filter: [], key: [] } : { kapp: v })}
+        />
+        <Picker
+          label={`Form for entry ${n}`} value={row.form} placeholder="Choose a form" options={formOptions} errorId={errorId}
+          onChange={(v) => onChange(formOptions ? { form: v, filter: [], key: [] } : { form: v })}
+        />
         <IconButton label={`Remove entry ${n}`} onClick={onRemove}><Trash2 size={15} aria-hidden /></IconButton>
       </div>
 
@@ -132,6 +143,7 @@ function EntryEditor({ row, index, catalog, onChange, onRemove }: {
               <div key={i} className="grid items-center gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_2rem]">
                 <input
                   aria-label={`Field for condition ${i + 1} of entry ${n}`}
+                  {...flag(!c.field.trim())}
                   className={inputClasses}
                   list={fields ? fieldListId : undefined}
                   value={c.field}
@@ -142,6 +154,7 @@ function EntryEditor({ row, index, catalog, onChange, onRemove }: {
                 <span className="text-center text-sm text-muted">=</span>
                 <input
                   aria-label={`Value for condition ${i + 1} of entry ${n}`}
+                  {...flag(!c.value.trim())}
                   className={inputClasses}
                   value={c.value}
                   placeholder="Value"
@@ -169,7 +182,10 @@ export function ReferenceDataCard({ projectId, config, catalog }: { projectId: s
   const toast = useToast();
   const [rows, setRows] = useState<EntryRow[]>(() => toEntryRows(config.data));
   const [invalid, setInvalid] = useState(false);
-  useEffect(() => setRows(toEntryRows(config.data)), [config]);
+  const errorId = useId();
+  // Only this card's slice: saving the other card must not reset these rows.
+  const saved = JSON.stringify(config.data);
+  useEffect(() => setRows(toEntryRows(JSON.parse(saved))), [saved]);
 
   const set = (i: number, patch: Partial<EntryRow>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
 
@@ -196,13 +212,13 @@ export function ReferenceDataCard({ projectId, config, catalog }: { projectId: s
         ) : (
           <div className="space-y-3">
             {rows.map((r, i) => (
-              <EntryEditor key={i} row={r} index={i} catalog={catalog} onChange={(p) => set(i, p)} onRemove={() => setRows((rs) => rs.filter((_, j) => j !== i))} />
+              <EntryEditor key={i} row={r} index={i} catalog={catalog} errorId={invalid && !isBlank(r) ? errorId : undefined} onChange={(p) => set(i, p)} onRemove={() => setRows((rs) => rs.filter((_, j) => j !== i))} />
             ))}
           </div>
         )}
         <div className="mt-3 space-y-2">
           <CatalogHint catalog={catalog} />
-          {invalid && <InlineError error="Each entry needs a kapp and a form, and each condition a field and a value." />}
+          {invalid && <div id={errorId}><InlineError error="Each entry needs a kapp and a form, and each condition a field and a value." /></div>}
           <InlineError error={save.error} />
         </div>
       </div>

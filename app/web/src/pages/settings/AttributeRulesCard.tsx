@@ -79,9 +79,10 @@ function WhereControl({ label, anyLabel, value, options, onChange }: {
   );
 }
 
-function RuleEditor({ row, index, catalog, onChange, onRemove }: {
-  row: RuleRow; index: number; catalog: ProjectCatalog | null; onChange: (patch: Partial<RuleRow>) => void; onRemove: () => void;
+function RuleEditor({ row, index, catalog, errorId, onChange, onRemove }: {
+  row: RuleRow; index: number; catalog: ProjectCatalog | null; errorId?: string; onChange: (patch: Partial<RuleRow>) => void; onRemove: () => void;
 }) {
+  const missingName = Boolean(errorId) && !row.name.trim() && !isBlank(row);
   const listId = useId();
   const n = index + 1;
   const has = Boolean(catalog?.env);
@@ -129,6 +130,8 @@ function RuleEditor({ row, index, catalog, onChange, onRemove }: {
       <div>
         <input
           aria-label={`Attribute for rule ${n}`}
+          aria-invalid={missingName || undefined}
+          aria-describedby={missingName ? errorId : undefined}
           className={inputClasses}
           list={listId}
           value={row.name}
@@ -148,7 +151,10 @@ export function AttributeRulesCard({ projectId, config, catalog }: { projectId: 
   const toast = useToast();
   const [rows, setRows] = useState<RuleRow[]>(() => toRuleRows(config.envBoundAttributes));
   const [invalid, setInvalid] = useState(false);
-  useEffect(() => setRows(toRuleRows(config.envBoundAttributes)), [config]);
+  const errorId = useId();
+  // Only this card's slice: saving the other card must not reset these rows.
+  const saved = JSON.stringify(config.envBoundAttributes);
+  useEffect(() => setRows(toRuleRows(JSON.parse(saved))), [saved]);
 
   const set = (i: number, patch: Partial<RuleRow>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
 
@@ -180,13 +186,19 @@ export function AttributeRulesCard({ projectId, config, catalog }: { projectId: 
               <span>Level</span><span>Where</span><span>Attribute</span><span />
             </div>
             {rows.map((r, i) => (
-              <RuleEditor key={i} row={r} index={i} catalog={catalog} onChange={(p) => set(i, p)} onRemove={() => setRows((rs) => rs.filter((_, j) => j !== i))} />
+              <RuleEditor key={i} row={r} index={i} catalog={catalog} errorId={invalid ? errorId : undefined} onChange={(p) => set(i, p)} onRemove={() => setRows((rs) => rs.filter((_, j) => j !== i))} />
             ))}
           </div>
         )}
         <div className="mt-3 space-y-2">
           <CatalogHint catalog={catalog} />
-          {invalid && <InlineError error="Each rule needs an attribute name." />}
+          {config.warnings?.length ? (
+            <div className="space-y-1">
+              <p className="text-xs text-muted">Ignored in the project file (saving the rules replaces them):</p>
+              {config.warnings.map((w) => <InlineError key={w} error={w} />)}
+            </div>
+          ) : null}
+          {invalid && <div id={errorId}><InlineError error="Each rule needs an attribute name." /></div>}
           <InlineError error={save.error} />
         </div>
       </div>

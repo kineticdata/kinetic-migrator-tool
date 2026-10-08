@@ -166,3 +166,39 @@ test('reference data: a kapp and a form are required', async () => {
   expect(await within(data).findByText(/Each entry needs a kapp and a form/)).toBeInTheDocument();
   expect(m.callsTo('PUT', '/api/projects/acme-demo/config')).toHaveLength(0);
 });
+
+test('shows parts of the project file that are ignored, and marks the rule missing a name', async () => {
+  setup({ envBoundAttributes: { kapp: ['Logo'] }, warnings: ['kinetic-sync.config.json: "envBoundAttributes": unknown level "forms" (use space, kapp, form, team, category); it is ignored.'] });
+  const user = userEvent.setup();
+  open();
+  const rules = await card('Environment-specific attributes');
+  expect(await within(rules).findByText(/unknown level "forms"/)).toBeInTheDocument();
+  await user.click(within(rules).getByRole('button', { name: 'Add rule' }));
+  await user.selectOptions(within(rules).getByLabelText('Kapp for rule 2'), 'services');
+  await user.click(within(rules).getByRole('button', { name: 'Save attributes' }));
+  const attr = within(rules).getByLabelText('Attribute for rule 2');
+  expect(attr).toHaveAttribute('aria-invalid', 'true');
+  expect(document.getElementById(attr.getAttribute('aria-describedby')!)).toHaveTextContent('Each rule needs an attribute name.');
+  expect(within(rules).getByLabelText('Attribute for rule 1')).not.toHaveAttribute('aria-invalid');
+});
+
+test('saving one card keeps unsaved edits in the other, and picking another form drops its old conditions and match fields', async () => {
+  const m = setup({ data: [{ kapp: 'services', form: 'lookups', key: ['Code'], filter: [{ field: 'Type', value: 'Lookup' }] }] });
+  const user = userEvent.setup();
+  open();
+  const rules = await card('Environment-specific attributes');
+  const data = await card('Reference data');
+  await user.click(within(rules).getByRole('button', { name: 'Add rule' }));
+  await user.type(within(rules).getByLabelText('Attribute for rule 1'), 'Url');
+  await user.click(within(data).getByRole('button', { name: 'Add entry' }));
+  await user.click(within(rules).getByRole('button', { name: 'Save attributes' }));
+  await waitFor(() => expect(m.callsTo('PUT', '/api/projects/acme-demo/config')).toHaveLength(1));
+  // The unsaved new entry survives the other card's save.
+  expect(within(data).getByLabelText('Kapp for entry 2')).toBeInTheDocument();
+
+  await user.selectOptions(within(data).getByLabelText('Form for entry 1'), 'it-request');
+  expect(within(data).getAllByText('All records').length).toBeGreaterThan(0);
+  const match1 = within(data).getByRole('group', { name: 'Match fields for entry 1' });
+  expect(within(match1).queryByRole('checkbox', { name: 'Code' })).toBeNull();
+  expect(within(match1).getByRole('checkbox', { name: 'Priority' })).not.toBeChecked();
+});
