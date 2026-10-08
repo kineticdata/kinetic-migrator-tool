@@ -24,7 +24,7 @@ import { envBoundNamesFor, envKey, loadConfig, loadOverrides, stableStringify, t
 import {
   ENV_BOUND_FIELDS, computePlan, isSecretName, isSecretProperty, parsePath, readTree, runApply, segmentLabel, stamp, type EnginePlan, type PlanItem,
 } from './engine-sync.ts';
-import { readChangeset, recordApplied } from './changesets.ts';
+import { currentKeys, readChangeset, recordApplied } from './changesets.ts';
 import { hasEnvSecret, readEnvironmentFile, readOverrides, resolveEnv, setEnvSecret } from './environments.ts';
 import type { Emit } from './jobs.ts';
 import { materializeTree, resolveCommit } from './pinned.ts';
@@ -234,7 +234,9 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
   if (body.changesetId !== undefined) {
     if (typeof body.changesetId !== 'string') throw badRequest('"changesetId" must be a changeset id.');
     const cs = readChangeset(ref, body.changesetId);
-    ({ from, keys, sourceCommit: commit, name } = cs);
+    ({ from, sourceCommit: commit, name } = cs);
+    // Keys of a changeset from before the file-name change follow its pinned tree.
+    keys = await currentKeys(ref, cs);
     changesetId = cs.id;
   } else {
     from = requireEnvironment(ref, body.from);

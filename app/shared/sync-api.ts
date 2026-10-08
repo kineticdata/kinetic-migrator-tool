@@ -178,6 +178,10 @@ export interface Changeset {
   keys: string[];
   createdAt: string;
   appliedTo: AppliedTo[];
+  // 2: `keys` use today's file-name encoding. Absent: saved against a
+  // snapshot from before it, so the keys are mapped through that snapshot's
+  // re-keying wherever they are used (see currentKeys).
+  layoutVersion?: number;
 }
 
 export interface CreateChangesetRequest {

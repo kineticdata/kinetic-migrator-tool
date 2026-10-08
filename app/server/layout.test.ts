@@ -12,7 +12,7 @@ import { log, readTreeAt } from './repo.ts';
 import { harness } from './sync-fixtures.ts';
 import { commitMessage } from './trailers.ts';
 // @ts-expect-error -- untyped engine module
-import { legacySafeName } from '../../lib/sync/layout.mjs';
+import { legacySafeName, upgradeProjectLayout } from '../../lib/sync/layout.mjs';
 // @ts-expect-error -- untyped engine module
 import { decodeSegment, MARKER } from '../../lib/sync/store.mjs';
 
@@ -60,7 +60,7 @@ function downgrade(dir: string): void {
   writeFileSync(config, JSON.stringify(rest));
 }
 
-test('opening a pre-upgrade project upgrades it in one commit; its old changeset still plans with nothing created', async (t) => {
+for (const order of ['app', 'cli'] as const) test(`a pre-upgrade project upgraded by the ${order === 'app' ? 'app on open' : 'CLI first, then opened in the app'}: its old changeset still plans with nothing created`, async (t) => {
   const h = await harness(t, { dev: true, test: false, prod: true });
   h.spaces.dev = space('Dev');
   h.spaces.test = space('Test');
@@ -76,14 +76,27 @@ test('opening a pre-upgrade project upgrades it in one commit; its old changeset
   }));
   await commitChange(ref, 'Saved changeset Old');
 
+  if (order === 'cli') {
+    // As `kinetic-migrate export` would: files only, the user commits.
+    assert.equal(upgradeProjectLayout(h.dir).changed, true);
+    await commitChange(ref, 'Upgraded by the CLI');
+  }
   const opened = await h.call('POST', '/api/projects/open', { path: h.dir });
   assert.equal(opened.status, 200, opened.body);
   const [head] = await log(h.dir, { limit: 1 });
-  assert.match(head.message, /^Upgraded project layout/);
-  assert.match(head.message, /changesets\/old-abc123\.json: re-keyed/);
   assert.ok(existsSync(path.join(h.dir, 'snapshots', 'dev', 'teams', 'Departments%3A%3AIT.json')));
   assert.ok(!existsSync(path.join(h.dir, 'snapshots', 'dev', 'teams', 'Departments__IT.json')));
-  assert.deepEqual(JSON.parse(readFileSync(path.join(h.dir, 'changesets', 'old-abc123.json'), 'utf8')).keys, [TEAM_KEY, WF_KEY]);
+  const saved = JSON.parse(readFileSync(path.join(h.dir, 'changesets', 'old-abc123.json'), 'utf8')).keys;
+  if (order === 'app') {
+    assert.match(head.message, /^Upgraded project layout/);
+    assert.match(head.message, /changesets\/old-abc123\.json: re-keyed/);
+    assert.deepEqual(saved, [TEAM_KEY, WF_KEY]);
+  } else {
+    assert.equal(head.message, 'Upgraded by the CLI', 'nothing left for the app to upgrade');
+    assert.deepEqual(saved, [OLD_TEAM_KEY, OLD_WF_KEY], 'still the old keys on disk');
+  }
+  // Either way the API shows today's keys.
+  assert.deepEqual((await h.call('GET', `${P}/changesets/old-abc123`)).json.keys, [TEAM_KEY, WF_KEY]);
   // The old commit reads back under today's keys.
   const before = await readTreeAt(h.dir, oldCommit!, 'snapshots/dev');
   assert.ok(before.has(TEAM_KEY) && before.has(WF_KEY) && !before.has(OLD_TEAM_KEY));

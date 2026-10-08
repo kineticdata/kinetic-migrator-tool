@@ -40,7 +40,7 @@ test('values longer than one credential holds are split into parts under a heade
   const big = `b64:${'A'.repeat(5 * 1024)}`;
   await w.set('p/dev/secret/PEM', big);
   const parts = Math.ceil(big.length / WIN_PART_CHARS);
-  assert.equal(creds.get('svc:p/dev/secret/PEM'), `km-parts:${parts}`);
+  assert.match(creds.get('svc:p/dev/secret/PEM') ?? '', new RegExp(`^km-parts:${parts}:${big.length}:[0-9a-f]{16}$`));
   for (const [, blob] of creds) assert.ok(Buffer.byteLength(blob) <= BLOB_MAX);
   assert.equal(creds.size, parts + 1);
   assert.equal(await w.get('p/dev/secret/PEM'), big);
@@ -135,7 +135,7 @@ function spawner(make: (n: number) => FakeChild) {
   return { spawn, calls, children };
 }
 
-const echo = (req: any) => JSON.stringify(req.op === 'get' ? { code: 0, value: `got:${req.target}` } : { code: 0 });
+const echo = (req: any) => JSON.stringify(req.op === 'get' ? { id: req.id, code: 0, value: `got:${req.target}` } : { id: req.id, code: 0 });
 
 test('one helper serves every request: the fixed script by -EncodedCommand, requests and secrets only on stdin', async () => {
   const sp = spawner(() => new FakeChild(echo));
@@ -159,7 +159,7 @@ test('one helper serves every request: the fixed script by -EncodedCommand, requ
 });
 
 test('concurrent requests are answered in order, one at a time', async () => {
-  const sp = spawner(() => new FakeChild((req) => JSON.stringify({ code: 0, value: req.target })));
+  const sp = spawner(() => new FakeChild((req) => JSON.stringify({ id: req.id, code: 0, value: req.target })));
   const h = new PowerShellHelper({ spawn: sp.spawn });
   const answers = await Promise.all(['a', 'b', 'c'].map((t) => h.request({ op: 'get', target: t })));
   assert.deepEqual(answers.map((a) => a.value), ['a', 'b', 'c']);
@@ -169,7 +169,7 @@ test('concurrent requests are answered in order, one at a time', async () => {
 test('a helper that crashes is restarted and the request retried once', async () => {
   const sp = spawner((n) => new FakeChild((req, child) => {
     if (n === 0) { setImmediate(() => child.crash()); return null; }
-    return JSON.stringify({ code: 0, value: req.target });
+    return JSON.stringify({ id: req.id, code: 0, value: req.target });
   }));
   const h = new PowerShellHelper({ spawn: sp.spawn });
   assert.deepEqual(await h.request({ op: 'get', target: 't' }), { code: 0, value: 't' });
@@ -258,4 +258,55 @@ test('a secret whose value fails to store is still listed, so deleting the envir
   await deleteEnvSecret(store, ref, 'dev', 'secret', 'MAIL__PASSWORD');
   assert.equal(await store.get(`${sid}/dev/secret/MAIL__PASSWORD`), undefined);
   assert.equal(await store.get(`${sid}/dev/index/names`), undefined);
+});
+
+test('an answer that is unreadable or for another request stops the helper; it never hands one account another account\'s secret', async () => {
+  // The first helper answers with a stray line, then is one answer late.
+  const sp = spawner((n) => new FakeChild((req, child) => {
+    if (n === 0) {
+      setImmediate(() => child.stdout.write('WARNING: something\r\n'));
+      return JSON.stringify({ id: req.id - 1, code: 0, value: 'b64:QQ==' });
+    }
+    return JSON.stringify({ id: req.id, code: 0, value: `secret-of:${req.target}` });
+  }));
+  const h = new PowerShellHelper({ spawn: sp.spawn });
+  const r = await h.request({ op: 'get', target: 'svc:B' });
+  assert.equal(r.value, 'secret-of:svc:B');
+  assert.equal(sp.children[0].killed, true, 'the confused helper is stopped');
+  assert.equal(h.starts, 2);
+  // An answer with the wrong id is never accepted.
+  const wrong = spawner(() => new FakeChild((req) => JSON.stringify({ id: req.id + 100, code: 0, value: 'b64:QQ==' })));
+  const w = new PowerShellHelper({ spawn: wrong.spawn });
+  await assert.rejects(w.request({ op: 'get', target: 'svc:B' }), (e: Error) => e instanceof HelperError && e.reason === 'protocol');
+  w.close();
+  h.close();
+});
+
+test('a long value whose parts do not add up to the header (interrupted overwrite) is an error, never a wrong value', async () => {
+  const { creds, helper } = fakeCredMan();
+  const w = new WinCredentials(helper, 'svc');
+  await w.set('a', `b64:${'A'.repeat(WIN_PART_CHARS * 2 + 5)}`);
+  // An overwrite that wrote new parts 1-2 and died before the header.
+  creds.set('svc:a#1', 'B'.repeat(WIN_PART_CHARS));
+  await assert.rejects(w.get('a'), /could not read/);
+  const header = creds.get('svc:a') ?? '';
+  creds.set('svc:a', header.replace(/:(\d+):/, (_m, n) => `:${Number(n) + 1}:`));
+  await assert.rejects(w.get('a'), /could not read/);
+});
+
+test('the keychain is chosen in the background: the server never waits for the probe to listen', async () => {
+  const { DeferredStore } = await import('./secrets.ts');
+  let resolve!: (s: MemoryStore) => void;
+  const real = new MemoryStore();
+  const deferred = new DeferredStore(() => new Promise((r) => { resolve = r; }));
+  assert.equal(deferred.persistent, false, 'not known yet');
+  const pending = deferred.set('a', 'v');
+  resolve(real);
+  await pending;
+  await deferred.ready();
+  assert.equal(await deferred.get('a'), 'v');
+  assert.equal(await real.get('a'), 'v');
+  const broken = new DeferredStore(async () => { throw new Error('probe crashed'); });
+  await broken.ready();
+  assert.equal(await broken.has('x'), false, 'falls back to memory');
 });

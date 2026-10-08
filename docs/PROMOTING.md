@@ -103,6 +103,15 @@ by hand so its content no longer matches its name) is left as it is, and a
 plan that includes it stops with an error naming it: take a new snapshot.
 Nothing is ever created or pruned on a guess.
 
+The upgrade is safe to interrupt: files are moved one at a time inside each
+snapshot folder (it is never missing), the renames and the original contents
+of `state/` and `overrides/` files are kept in `plans/layout-upgrade.json`
+(git-ignored) until it finishes, and running it again carries on where it
+stopped. A project with nothing to rename gets no changes at all, only a
+local note in `plans/`. Changesets saved before the upgrade keep working
+whichever way the project was upgraded: their keys are mapped through the
+snapshot they are pinned to.
+
 Each installed handler is exported as `handlers/<definitionId>/handler.json`
 (its settings without secret values, with a `packageSha256` of its package) beside
 `handlers/<definitionId>/package.zip`. The zip holds the handler's code and

@@ -21,6 +21,7 @@
 // Not the WinRT PasswordVault: it holds at most 20 credentials per app and
 // roams them with a Microsoft account.
 import { spawn as nodeSpawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import type { Readable, Writable } from 'node:stream';
 
 export const WIN_HELPER_SCRIPT = String.raw`$ErrorActionPreference = 'Stop'
@@ -86,6 +87,7 @@ while ($true) {
   if ($line.Trim() -eq '') { continue }
   $code = 1
   $value = $null
+  $req = $null
   try {
     $req = $line | ConvertFrom-Json
     switch ($req.op) {
@@ -98,7 +100,7 @@ while ($true) {
       'delete' { $e = [KineticMigrateCred]::Delete($req.target); if ($e -eq 0) { $code = 0 } elseif ($e -eq 1168) { $code = 44 } }
     }
   } catch { $code = 1 }
-  $out = @{ code = $code }
+  $out = @{ id = $req.id; code = $code }
   if ($null -ne $value) { $out.value = $value }
   [Console]::Out.WriteLine(($out | ConvertTo-Json -Compress))
   [Console]::Out.Flush()
@@ -116,7 +118,7 @@ export const winArgs = (): string[] => [
 ];
 
 // JSON with every non-ASCII character as a \u escape.
-export const asciiJson = (value: unknown): string => JSON.stringify(value).replace(/[\u0080-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+export const asciiJson = (value: unknown): string => JSON.stringify(value).replace(/[\u0080-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
 export interface HelperChild {
   stdin: Writable;
@@ -137,12 +139,17 @@ const defaultSpawn: SpawnHelper = (file, args) => {
 };
 
 export interface WinRequest { op: 'probe' | 'set' | 'get' | 'delete'; target: string; account?: string; value?: string }
+// What goes on the wire: the request plus an id the answer must echo.
+type WireRequest = WinRequest & { id: number };
 export interface WinResponse { code: number; value?: string }
 
 export class HelperError extends Error {
   // 'start-timeout': the helper did not get ready in time (a slow first
   // compile); 'timeout': a request got no answer; 'exited': it stopped.
-  constructor(readonly reason: 'start-timeout' | 'timeout' | 'exited' | 'spawn', message: string) {
+  // 'protocol': an answer that was unreadable or for another request (the
+  // helper is stopped first, so a late answer can never be taken for the
+  // next request's).
+  constructor(readonly reason: 'start-timeout' | 'timeout' | 'exited' | 'spawn' | 'protocol', message: string) {
     super(message);
     this.name = 'HelperError';
   }
@@ -168,6 +175,7 @@ export class PowerShellHelper {
   private buffer = '';
   private waiter: Waiter | null = null;
   private queue: Promise<unknown> = Promise.resolve();
+  private nextId = 1;
   starts = 0;
 
   constructor(opts: HelperOptions = {}) {
@@ -184,8 +192,9 @@ export class PowerShellHelper {
       try {
         return await this.once(req);
       } catch (err) {
-        // A crashed helper is restarted once; a timeout is not retried.
-        if (err instanceof HelperError && err.reason === 'exited') return this.once(req);
+        // A crashed or confused helper is replaced and the request retried
+        // once; a timeout is not retried.
+        if (err instanceof HelperError && (err.reason === 'exited' || err.reason === 'protocol')) return this.once(req);
         throw err;
       }
     };
@@ -278,23 +287,32 @@ export class PowerShellHelper {
     await this.start();
     const child = this.child;
     if (!child) throw new HelperError('exited', 'The Windows Credential Manager helper stopped.');
+    const id = this.nextId++;
+    const wire: WireRequest = { ...req, id };
     const answer = this.nextLine(this.opts.requestTimeoutMs, () => new HelperError('timeout', 'The Windows Credential Manager helper did not answer.'));
-    child.stdin.write(`${asciiJson(req)}\n`);
+    child.stdin.write(`${asciiJson(wire)}\n`);
     const line = await answer;
-    let parsed: unknown;
+    let r: { id?: unknown; code?: unknown; value?: unknown } | null = null;
     try {
-      parsed = JSON.parse(line);
-    } catch {
-      throw new HelperError('exited', 'The Windows Credential Manager helper gave an unreadable answer.');
+      r = JSON.parse(line);
+    } catch { /* below */ }
+    if (!r || typeof r !== 'object' || r.id !== id) {
+      // Out of step with the helper: stop it before anything else is read.
+      this.reset();
+      child.kill();
+      throw new HelperError('protocol', 'The Windows Credential Manager helper gave an answer that does not match the request.');
     }
-    const r = parsed as { code?: unknown; value?: unknown };
     return { code: typeof r.code === 'number' ? r.code : 1, ...(typeof r.value === 'string' ? { value: r.value } : {}) };
   }
 }
 
 // CRED_MAX_CREDENTIAL_BLOB_SIZE is 2560 bytes; parts stay well under it.
 export const WIN_PART_CHARS = 2000;
-const HEADER = /^km-parts:(\d{1,4})$/;
+// Header: part count, total length and the first 16 hex digits of the
+// value's SHA-256; a read that does not reassemble to exactly that is an
+// error (a write interrupted over a longer old value), never a wrong value.
+const HEADER = /^km-parts:(\d{1,4}):(\d{1,7}):([0-9a-f]{16})$/;
+const digest = (v: string) => createHash('sha256').update(v).digest('hex').slice(0, 16);
 // Leftover parts after the last known one are looked for up to this far.
 const MAX_PARTS = 512;
 
@@ -330,12 +348,12 @@ export class WinCredentials {
     }
   }
 
-  private async partCount(account: string): Promise<{ exists: boolean; parts: number; value?: string }> {
+  private async partCount(account: string): Promise<{ exists: boolean; parts: number; length?: number; hash?: string; value?: string }> {
     const r = await this.call('get', account);
     if (r.code === 44) return { exists: false, parts: 0 };
     if (r.code !== 0) throw new WinCredentialError('read', r.code);
     const m = HEADER.exec(r.value ?? '');
-    return m ? { exists: true, parts: Number(m[1]) } : { exists: true, parts: 0, value: r.value ?? '' };
+    return m ? { exists: true, parts: Number(m[1]), length: Number(m[2]), hash: m[3] } : { exists: true, parts: 0, value: r.value ?? '' };
   }
 
   // The stored value, reassembled; undefined when there is none.
@@ -349,6 +367,7 @@ export class WinCredentials {
       if (r.code !== 0) throw new WinCredentialError('read', r.code);
       out += r.value ?? '';
     }
+    if (out.length !== head.length || digest(out) !== head.hash) throw new WinCredentialError('read', 1);
     return out;
   }
 
@@ -371,7 +390,7 @@ export class WinCredentials {
         const r = await this.call('set', account, i, value.slice((i - 1) * WIN_PART_CHARS, i * WIN_PART_CHARS));
         if (r.code !== 0) throw new WinCredentialError('store', r.code);
       }
-      const r = await this.call('set', account, undefined, `km-parts:${parts}`);
+      const r = await this.call('set', account, undefined, `km-parts:${parts}:${value.length}:${digest(value)}`);
       if (r.code !== 0) throw new WinCredentialError('store', r.code);
     }
     await this.removeParts(account, parts + 1, before.parts);

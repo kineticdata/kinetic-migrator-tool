@@ -122,13 +122,13 @@ export async function upgradeLayoutLocked(ref: ProjectRef): Promise<string | nul
     const dir = path.join(ref.dir, 'changesets');
     for (const f of existsSync(dir) ? readdirSync(dir).filter((n) => n.endsWith('.json')).sort() : []) {
       const file = path.join(dir, f);
-      let cs: { from?: unknown; sourceCommit?: unknown; keys?: unknown };
+      let cs: { from?: unknown; sourceCommit?: unknown; keys?: unknown; layoutVersion?: unknown };
       try { cs = JSON.parse(readFileSync(file, 'utf8')); } catch { continue; }
-      if (typeof cs.from !== 'string' || typeof cs.sourceCommit !== 'string' || !Array.isArray(cs.keys)) continue;
+      if (typeof cs.from !== 'string' || typeof cs.sourceCommit !== 'string' || !Array.isArray(cs.keys) || cs.layoutVersion === LAYOUT_VERSION) continue;
       const tree = await readTreeAt(ref.dir, cs.sourceCommit, `snapshots/${cs.from}`);
       const keys = cs.keys.map((k) => (typeof k === 'string' ? tree.rekeyed?.get(k) ?? k : k));
-      if (keys.some((k, i) => k !== (cs.keys as unknown[])[i])) {
-        writeFileSync(file, stableStringify({ ...cs, keys }));
+      if ((tree.layout ?? LAYOUT_VERSION) < LAYOUT_VERSION && keys.some((k, i) => k !== (cs.keys as unknown[])[i])) {
+        writeFileSync(file, stableStringify({ ...cs, keys, layoutVersion: LAYOUT_VERSION }));
         notes.push(`changesets/${f}: re-keyed`);
         changed = true;
       }

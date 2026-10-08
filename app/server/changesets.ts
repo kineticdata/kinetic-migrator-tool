@@ -7,7 +7,7 @@ import path from 'node:path';
 import type { AppliedTo, Changeset } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
 import { stableStringify } from './engine.ts';
-import { moduleFor } from './engine-sync.ts';
+import { LAYOUT_VERSION, moduleFor } from './engine-sync.ts';
 import { resolveCommit } from './pinned.ts';
 import { commitChange, isPlainObject, withProjectLock, type ProjectRef } from './project-meta.ts';
 import { slugify } from './projects.ts';
@@ -62,6 +62,29 @@ function keyList(v: unknown): string[] {
   return [...new Set(v as string[])].sort();
 }
 
+// A changeset's keys in today's encoding. One saved against a pre-encoding
+// snapshot holds that snapshot's old file names: they are mapped through the
+// pinned tree's own re-keying (from content), whichever way the project was
+// upgraded (app or CLI). Keys of later changesets are used as they are.
+const rekeyCache = new Map<string, Map<string, string>>();
+export async function currentKeys(ref: ProjectRef, cs: Changeset): Promise<string[]> {
+  if (cs.layoutVersion === LAYOUT_VERSION) return cs.keys;
+  const id = `${ref.dir}\0${cs.sourceCommit}\0${cs.from}`;
+  let map = rekeyCache.get(id);
+  if (!map) {
+    const tree = await readTreeAt(ref.dir, cs.sourceCommit, `snapshots/${cs.from}`);
+    map = (tree.layout ?? LAYOUT_VERSION) < LAYOUT_VERSION ? tree.rekeyed ?? new Map() : new Map();
+    rekeyCache.set(id, map);
+    while (rekeyCache.size > 64) rekeyCache.delete(rekeyCache.keys().next().value!);
+  }
+  return cs.keys.map((k) => map!.get(k) ?? k);
+}
+
+// A changeset as the API shows it: keys in today's encoding.
+async function shown(ref: ProjectRef, cs: Changeset): Promise<Changeset> {
+  return { ...cs, keys: await currentKeys(ref, cs) };
+}
+
 async function keysAt(ref: ProjectRef, env: string, commit: string): Promise<Set<string>> {
   if (commit === (await latestSnapshotCommit(ref, env))) return new Set((await loadSnapshot(ref, env)).artifacts.keys());
   return new Set((await readTreeAt(ref.dir, commit, `snapshots/${env}`)).keys());
@@ -93,7 +116,7 @@ export async function createChangeset(ref: ProjectRef, body: unknown): Promise<C
   }
   await checkKeys(ref, from, sourceCommit, keys);
   const id = `${slugify(name) || 'changeset'}-${randomBytes(3).toString('hex')}`;
-  const cs: Changeset = { id, name, description, from, sourceCommit, keys, createdAt: new Date().toISOString(), appliedTo: [] };
+  const cs: Changeset = { id, name, description, from, sourceCommit, keys, createdAt: new Date().toISOString(), appliedTo: [], layoutVersion: LAYOUT_VERSION };
   await withProjectLock(ref, async () => {
     writeChangeset(ref, cs);
     await commitChange(ref, commitMessage(`Saved changeset '${name}'`, { Changeset: id, Environment: from }));
@@ -111,12 +134,13 @@ export async function updateChangeset(ref: ProjectRef, id: string, body: unknown
   if (body.keys !== undefined) {
     next.keys = keyList(body.keys);
     await checkKeys(ref, current.from, current.sourceCommit, next.keys);
+    next.layoutVersion = LAYOUT_VERSION;
   }
   await withProjectLock(ref, async () => {
     writeChangeset(ref, next);
     await commitChange(ref, commitMessage(`Updated changeset '${next.name}'`, { Changeset: id, Environment: next.from }));
   });
-  return next;
+  return shown(ref, next);
 }
 
 export async function deleteChangeset(ref: ProjectRef, id: string): Promise<void> {
@@ -128,9 +152,15 @@ export async function deleteChangeset(ref: ProjectRef, id: string): Promise<void
 }
 
 export function registerChangesetRoutes(router: Router, ctx: SyncContext): void {
-  router.get('/api/projects/:p/changesets', ({ params }) => ({ json: listChangesets(ctx.find(params.p)) }));
+  router.get('/api/projects/:p/changesets', async ({ params }) => {
+    const ref = ctx.find(params.p);
+    return { json: await Promise.all(listChangesets(ref).map((cs) => shown(ref, cs))) };
+  });
   router.post('/api/projects/:p/changesets', async ({ params, body }) => ({ status: 201, json: await createChangeset(ctx.find(params.p), body) }));
-  router.get('/api/projects/:p/changesets/:id', ({ params }) => ({ json: readChangeset(ctx.find(params.p), params.id) }));
+  router.get('/api/projects/:p/changesets/:id', async ({ params }) => {
+    const ref = ctx.find(params.p);
+    return { json: await shown(ref, readChangeset(ref, params.id)) };
+  });
   router.put('/api/projects/:p/changesets/:id', async ({ params, body }) => ({ json: await updateChangeset(ctx.find(params.p), params.id, body) }));
   router.delete('/api/projects/:p/changesets/:id', async ({ params }) => {
     await deleteChangeset(ctx.find(params.p), params.id);

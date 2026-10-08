@@ -17,7 +17,7 @@ import type { ClientFactory } from './engine.ts';
 import { registerProjectRoutes, upgradeWorkspace } from './projects.ts';
 import { registerSyncRoutes } from './sync-routes.ts';
 import { registerRepositoryRoutes } from './repository.ts';
-import { createDefaultStore, type SecretStore } from './secrets.ts';
+import { createDefaultStore, DeferredStore, type SecretStore } from './secrets.ts';
 import { defaultLogger, type Logger } from './log.ts';
 import { fakeMode } from './fake-mode.ts';
 
@@ -62,7 +62,10 @@ export interface ServerHandle {
 
 export function buildRouter(ctx: Omit<ServerContext, 'router'>): Router {
   const router = new Router();
-  router.get('/api/session', () => {
+  router.get('/api/session', async () => {
+    // A keychain still being probed gets a few seconds to report.
+    const ready = (ctx.secrets as { ready?: () => Promise<void> }).ready;
+    if (ready) await Promise.race([ready.call(ctx.secrets), new Promise((r) => { setTimeout(r, 3000).unref(); })]);
     const session: SessionInfo = { version: VERSION, workspace: ctx.workspace, keychain: { available: Boolean(ctx.secrets.persistent) } };
     return { json: session };
   });
@@ -85,7 +88,8 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
   const workspace = path.resolve(opts.workspace);
   // Fake mode only fills in what the caller did not inject.
   const fake = opts.clientFactory || opts.secrets ? undefined : fakeMode(opts.fake ? { KINETIC_MIGRATE_FAKE: '1' } : process.env);
-  const secrets = opts.secrets ?? fake?.secrets ?? await createDefaultStore((m) => process.stderr.write(`[kinetic-migrate] ${m}\n`));
+  // Chosen in the background: the server listens without waiting for the keychain probe.
+  const secrets: SecretStore = opts.secrets ?? fake?.secrets ?? new DeferredStore(() => createDefaultStore((m) => process.stderr.write(`[kinetic-migrate] ${m}\n`)));
   const clientFactory = opts.clientFactory ?? fake?.clientFactory;
   // Built bundle: dist/server.mjs serves dist/web next to itself.
   const webDir = opts.webDir ?? defaultWebDir();
@@ -110,7 +114,7 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
     router,
     close: () => new Promise<void>((resolve, reject) => {
       jobs.abortAll();
-      (secrets as SecretStore).close?.();
+      secrets.close?.();
       server.closeAllConnections();
       server.close((err) => (err ? reject(err) : resolve()));
     }),

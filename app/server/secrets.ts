@@ -228,6 +228,27 @@ export class KeychainStore implements SecretStore {
   }
 }
 
+// A store that is chosen in the background (createDefaultStore can take a
+// while: Windows compiles its helper on first start), so the server listens
+// at once. Every operation waits for the choice; `persistent` reads false
+// until it is made; `ready()` settles when it is.
+export class DeferredStore implements SecretStore {
+  private store: SecretStore | null = null;
+  private pending: Promise<SecretStore>;
+
+  constructor(make: () => Promise<SecretStore>) {
+    this.pending = make().catch(() => new MemoryStore()).then((s) => (this.store = s));
+  }
+
+  get persistent(): boolean { return Boolean(this.store?.persistent); }
+  ready(): Promise<void> { return this.pending.then(() => undefined); }
+  async get(account: string) { return (await this.pending).get(account); }
+  async set(account: string, value: string) { return (await this.pending).set(account, value); }
+  async delete(account: string) { return (await this.pending).delete(account); }
+  async has(account: string) { return (await this.pending).has(account); }
+  close(): void { void this.pending.then((s) => s.close?.()); }
+}
+
 // The OS keychain when its tool works, otherwise session memory. A Windows
 // helper that is only slow to start (a cold compile) keeps the keychain: each
 // operation starts it again with the same generous limit. `log` hears which
