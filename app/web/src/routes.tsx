@@ -7,6 +7,8 @@ import { ProjectLayout } from './pages/ProjectLayout';
 import { OverviewPage } from './pages/OverviewPage';
 import { ExploreIndex, Placeholder } from './pages/Placeholder';
 import { ExplorePage } from './pages/ExplorePage';
+import { ComparePage } from './pages/ComparePage';
+import { ChangesetDetailPage, ChangesetsPage } from './pages/ChangesetsPage';
 import { SettingsLayout } from './pages/settings/SettingsLayout';
 import { EnvironmentsSettings } from './pages/settings/EnvironmentsSettings';
 import { DataSettings } from './pages/settings/DataSettings';
@@ -22,9 +24,9 @@ export function AppRoutes() {
         <Route path="overview" element={<OverviewPage />} />
         <Route path="explore" element={<ExploreIndex />} />
         <Route path="explore/:env/*" element={<ExplorePage />} />
-        <Route path="compare" element={<Placeholder screen="compare" />} />
-        <Route path="changesets" element={<Placeholder screen="changesets" />} />
-        <Route path="changesets/:changesetId" element={<Placeholder screen="changesets" />} />
+        <Route path="compare" element={<ComparePage />} />
+        <Route path="changesets" element={<ChangesetsPage />} />
+        <Route path="changesets/:changesetId" element={<ChangesetDetailPage />} />
         <Route path="plan/:planId" element={<Placeholder screen="plan" />} />
         <Route path="history" element={<Placeholder screen="history" />} />
         <Route path="settings" element={<SettingsLayout />}>

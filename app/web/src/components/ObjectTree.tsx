@@ -3,10 +3,12 @@
 // load lazily as nodes open. Keyboard: Up/Down move, Right opens or goes to
 // the first child, Left closes or goes to the parent, Home/End jump, Enter or
 // Space selects an item (or toggles a group), and typing jumps to a label.
+// Selection mode (Compare): with `checkState`, rows carry tri-state checkboxes
+// (aria-checked on the treeitem); Space ticks, Enter selects.
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
-  Box, ChevronRight, Database, FileText, Folder, Globe, KeyRound, Layers, Package, Plug, Puzzle, Repeat, Settings2, Users, Workflow,
+  Box, Check, ChevronRight, Database, FileText, Folder, Globe, KeyRound, Layers, Minus, Package, Plug, Puzzle, Repeat, Settings2, Users, Workflow,
 } from 'lucide-react';
 import type { NodeKind, TreeNode } from '../../../shared/sync-api';
 import { Spinner } from './ui/Spinner';
@@ -78,10 +80,42 @@ export interface ObjectTreeProps {
   onToggle: (id: string, open: boolean) => void;
   // Extra content at the end of a row (status chips in Compare).
   renderAside?: (row: TreeRow) => ReactNode;
+  // Selection mode: each row's checkbox state ('none' = no checkbox).
+  checkState?: (row: TreeRow) => CheckState;
+  onCheck?: (row: TreeRow) => void;
+  // Item counts on parent rows (Compare shows rolled-up statuses instead).
+  showCounts?: boolean;
   className?: string;
 }
 
-export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, renderAside, className }: ObjectTreeProps) {
+export type CheckState = 'checked' | 'unchecked' | 'mixed' | 'none';
+
+const ariaChecked = (s: CheckState) => (s === 'none' ? undefined : s === 'mixed' ? 'mixed' : s === 'checked');
+
+// The visual checkbox; the treeitem itself carries aria-checked.
+function CheckBox({ state, onClick }: { state: CheckState; onClick: () => void }) {
+  if (state === 'none') return <span aria-hidden className="size-4 shrink-0" />;
+  const on = state !== 'unchecked';
+  return (
+    <span
+      aria-hidden
+      data-check
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={cn(
+        'flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-[4px] border transition-colors',
+        on ? 'border-accent bg-accent text-accent-fg' : 'border-border-strong bg-surface hover:border-accent',
+      )}
+    >
+      {state === 'checked' && <Check size={11} strokeWidth={3} />}
+      {state === 'mixed' && <Minus size={11} strokeWidth={3} />}
+    </span>
+  );
+}
+
+export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, renderAside, checkState, onCheck, showCounts = true, className }: ObjectTreeProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const typed = useRef({ text: '', at: 0 });
@@ -169,8 +203,14 @@ export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, rende
         if (activeRow.expanded) onToggle(node.id, false);
         else if (activeRow.parentId !== null) moveTo(indexById.get(activeRow.parentId) ?? activeIndex);
         break;
-      case 'Enter':
       case ' ':
+        if (checkState) {
+          if (checkState(activeRow) !== 'none') onCheck?.(activeRow);
+          break;
+        }
+        activate(activeRow);
+        break;
+      case 'Enter':
         activate(activeRow);
         break;
       default:
@@ -199,6 +239,7 @@ export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, rende
           const { node } = row;
           const selected = Boolean(node.key && node.key === selectedKey);
           const isActive = v.index === activeIndex;
+          const check = checkState ? checkState(row) : null;
           return (
             <div
               key={node.id}
@@ -209,6 +250,7 @@ export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, rende
               aria-setsize={row.size}
               aria-expanded={node.hasChildren ? row.expanded : undefined}
               aria-selected={selected}
+              aria-checked={check ? ariaChecked(check) : undefined}
               aria-busy={row.loading || undefined}
               onClick={() => click(row)}
               style={{ position: 'absolute', top: 0, left: 0, right: 0, height: v.size, transform: `translateY(${v.start}px)`, paddingLeft: 8 + row.depth * 16 }}
@@ -230,12 +272,13 @@ export function ObjectTree({ label, rows, selectedKey, onSelect, onToggle, rende
               >
                 {row.loading ? <Spinner size={12} /> : node.hasChildren && <ChevronRight size={14} className={cn('transition-transform', row.expanded && 'rotate-90')} />}
               </span>
+              {check && <CheckBox state={check} onClick={() => { setActiveId(node.id); onCheck?.(row); }} />}
               <KindIcon kind={node.kind} className={selected ? 'text-accent' : 'text-subtle'} />
               <span className={cn('min-w-0 truncate', !node.key && 'font-medium')} title={node.label}>{node.label}</span>
               {row.detail && <span className="min-w-0 truncate text-xs text-subtle">{row.detail}</span>}
               <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
                 {renderAside?.(row)}
-                {node.hasChildren && node.count > 0 && (
+                {showCounts && node.hasChildren && node.count > 0 && (
                   <span className="text-xs text-subtle tabular-nums" aria-label={`${node.count.toLocaleString('en')} items`}>{node.count.toLocaleString('en')}</span>
                 )}
               </span>

@@ -6,7 +6,10 @@ import type {
   ConnectionTestResult, CreateProjectRequest, CredentialsStatus, JobStarted, OpenProjectRequest, ProjectConfig,
   ProjectDetail, ProjectSummary, PutCredentialsRequest, PutEnvironmentRequest, SessionInfo,
 } from '../../../shared/api';
-import type { CompareResult, ExploreItem, HistoryEvent, SearchResponse, TreeNode } from '../../../shared/sync-api';
+import type {
+  Changeset, CompareItem, CompareMode, CompareRequest, CompareResult, CompareTreeNode, CreateChangesetRequest, ExploreItem, HistoryEvent,
+  PlanRequest, SearchResponse, SuggestionOut, TreeNode,
+} from '../../../shared/sync-api';
 import { api, projectPath } from './client';
 import { waitForJob } from './useJob';
 
@@ -23,6 +26,15 @@ export const qk = {
   // Outside the project prefix: keyed by snapshot commits, so it never goes
   // stale, and invalidating the project must not start new compare jobs.
   rawDiff: (p: string, from: string, to: string, a: string, b: string) => ['raw-diff', p, from, to, a, b] as const,
+  // A finished comparison, keyed by its inputs and both snapshot commits (so
+  // a new snapshot means a new comparison). Outside the project prefix too.
+  compareRun: (p: string, from: string, to: string, mode: CompareMode, live: boolean, a: string, b: string) => ['compare-run', p, from, to, mode, live, a, b] as const,
+  // A comparison's tree, items and suggestions never change: keyed by its id.
+  compareTree: (p: string, id: string, parent: string) => ['compare', p, id, 'tree', parent] as const,
+  compareItem: (p: string, id: string, key: string) => ['compare', p, id, 'item', key] as const,
+  suggestions: (p: string, id: string, keys: string[]) => ['compare', p, id, 'suggestions', keys] as const,
+  changesets: (p: string) => ['project', p, 'changesets'] as const,
+  changeset: (p: string, id: string) => ['project', p, 'changesets', id] as const,
 };
 
 // Accepts a bare list or an object wrapping one (`{ events: [...] }`).
@@ -163,3 +175,63 @@ export function usePutConfig(p: string) {
 }
 
 export const startSnapshot = (p: string, env: string) => api.post<JobStarted>(projectPath(p, 'snapshots'), { env });
+
+// ---- Compare -----------------------------------------------------------------
+
+export const startCompare = (p: string, body: CompareRequest) => api.post<JobStarted>(projectPath(p, 'compare'), body);
+
+export const fetchCompareChildren = async (p: string, id: string, parent: string, signal?: AbortSignal) => asList<CompareTreeNode>(
+  await api.get<unknown>(`${projectPath(p, 'compare', id, 'tree')}${parent ? `?parent=${encodeURIComponent(parent)}` : ''}`, signal),
+  'nodes',
+);
+
+export const compareChildrenQuery = (p: string, id: string, parent: string) => ({
+  queryKey: qk.compareTree(p, id, parent),
+  staleTime: Infinity,
+  retry: false,
+  queryFn: ({ signal }: { signal?: AbortSignal }) => fetchCompareChildren(p, id, parent, signal),
+});
+
+// The children of each listed node of a comparison ('' = the roots).
+export function useCompareChildren(p: string, id: string | undefined, parents: string[]) {
+  return useQueries({
+    queries: parents.map((parent) => ({ ...compareChildrenQuery(p, id ?? '', parent), enabled: Boolean(id) })),
+  });
+}
+
+export const useCompareItem = (p: string, id: string | undefined, key: string | null) => useQuery({
+  queryKey: qk.compareItem(p, id ?? '', key ?? ''),
+  enabled: Boolean(id && key),
+  staleTime: Infinity,
+  retry: false,
+  queryFn: () => api.get<CompareItem>(`${projectPath(p, 'compare', id ?? '', 'item')}?key=${encodeURIComponent(key ?? '')}`),
+});
+
+// Dependencies of the selection that are new or changed and not selected,
+// recomputed whenever the selection changes.
+export const useSuggestions = (p: string, id: string | undefined, keys: string[]) => useQuery({
+  queryKey: qk.suggestions(p, id ?? '', keys),
+  enabled: Boolean(id && keys.length),
+  staleTime: Infinity,
+  retry: false,
+  placeholderData: keepPreviousData,
+  queryFn: () => api.post<SuggestionOut[]>(projectPath(p, 'compare', id ?? '', 'suggestions'), { selected: keys }),
+});
+
+// ---- Changesets and plans --------------------------------------------------
+
+export const useChangesets = (p: string) => useQuery({
+  queryKey: qk.changesets(p),
+  queryFn: async () => asList<Changeset>(await api.get<unknown>(projectPath(p, 'changesets')), 'changesets'),
+});
+
+export const useChangeset = (p: string, id: string) => useQuery({
+  queryKey: qk.changeset(p, id),
+  queryFn: () => api.get<Changeset>(projectPath(p, 'changesets', id)),
+});
+
+export const useCreateChangeset = (p: string) => useProjectMutation(p, (body: CreateChangesetRequest) => api.post<Changeset>(projectPath(p, 'changesets'), body));
+
+export const useDeleteChangeset = (p: string) => useProjectMutation(p, (id: string) => api.del<{ deleted: string }>(projectPath(p, 'changesets', id)));
+
+export const startPlan = (p: string, body: PlanRequest) => api.post<JobStarted>(projectPath(p, 'plans'), body);

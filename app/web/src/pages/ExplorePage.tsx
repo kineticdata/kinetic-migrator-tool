@@ -24,43 +24,10 @@ import { useToast } from '../components/ui/Toast';
 import { cn } from '../components/ui/cn';
 import { envLabel, plural, timeAgo } from '../lib/format';
 import { useProjectContext } from '../lib/project';
+import { ancestorsOf, sectionOf } from '../lib/tree-layout';
 
 const SEARCH_DELAY_MS = 250;
 const ALL = 'all';
-
-// Which top-level section an item key belongs to (for the type filter).
-export function sectionOf(key: string): string {
-  const head = key.split('/')[0];
-  if (key === 'space' || head === 'workflows' || head === 'webapis') return 'space';
-  const groups: Record<string, string> = {
-    kapps: 'group:kapps', connections: 'group:connections', handlers: 'group:handlers', teams: 'group:teams',
-    models: 'group:models', 'file-resources': 'group:file-resources', routines: 'group:routines',
-  };
-  return groups[head] ?? 'group:other';
-}
-
-// The tree nodes above an item, root first (mirrors the server's tree
-// layout), so an item opened by link can be revealed.
-export function ancestorsOf(key: string): string[] {
-  const p = key.split('/');
-  if (key === 'space') return [];
-  if (p[0] === 'workflows') return ['space', 'group:space/workflows'];
-  if (p[0] === 'webapis') return ['space', 'group:space/webapis'];
-  if (p[0] === 'kapps' && p.length >= 3) {
-    const kapp = ['group:kapps'];
-    if (p[2] === 'kapp') return kapp;
-    kapp.push(`kapps/${p[1]}/kapp`);
-    if (p[2] === 'forms' && p.length >= 5) {
-      const forms = [...kapp, `group:kapps/${p[1]}/forms`];
-      return p[4] === 'form' ? forms : [...forms, `kapps/${p[1]}/forms/${p[3]}/form`];
-    }
-    if (p[2] === 'workflows' || p[2] === 'webapis') return [...kapp, `group:kapps/${p[1]}/${p[2]}`];
-  }
-  if (p[0] === 'connections' && p.length >= 3) {
-    return p[2] === 'operations' ? ['group:connections', `connections/${p[1]}/connection`] : ['group:connections'];
-  }
-  return [sectionOf(key)];
-}
 
 // Where a search result lives, in a few words.
 function whereOf(r: SearchResult): string {

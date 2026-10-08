@@ -156,3 +156,44 @@ test('Space continues a type-ahead word instead of selecting', () => {
   fireEvent.keyDown(tree, { key: ' ' });
   expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ key: 'kapps/hr/forms/leave/form' }));
 });
+
+test('selection mode: rows carry aria-checked, Space ticks, Enter still selects, the box ticks without selecting', () => {
+  const onSelect = vi.fn();
+  const onCheck = vi.fn();
+  const rows = flattenTree(ROOTS, CHILDREN, new Set(['group:kapps', 'kapps/hr/kapp']));
+  const states: Record<string, 'checked' | 'unchecked' | 'mixed' | 'none'> = {
+    space: 'none', 'group:kapps': 'mixed', 'kapps/hr/kapp': 'mixed', 'kapps/hr/forms/leave/form': 'checked', 'kapps/hr/forms/onboard/form': 'unchecked', 'group:teams': 'unchecked',
+  };
+  render(
+    <ObjectTree
+      label="Items"
+      rows={rows}
+      selectedKey={null}
+      onSelect={onSelect}
+      onToggle={() => {}}
+      checkState={(row) => states[row.node.id] ?? 'none'}
+      onCheck={onCheck}
+    />,
+  );
+  expect(screen.getByRole('treeitem', { name: /Space/ })).not.toHaveAttribute('aria-checked');
+  expect(screen.getByRole('treeitem', { name: /Kapps/ })).toHaveAttribute('aria-checked', 'mixed');
+  expect(screen.getByRole('treeitem', { name: /Leave request/ })).toHaveAttribute('aria-checked', 'true');
+  expect(screen.getByRole('treeitem', { name: /Onboarding/ })).toHaveAttribute('aria-checked', 'false');
+
+  const tree = screen.getByRole('tree');
+  tree.focus();
+  fireEvent.keyDown(tree, { key: 'ArrowDown' });
+  fireEvent.keyDown(tree, { key: ' ' });
+  expect(onCheck).toHaveBeenLastCalledWith(expect.objectContaining({ node: expect.objectContaining({ id: 'group:kapps' }) }));
+  // Space on a row without a checkbox does nothing.
+  fireEvent.keyDown(tree, { key: 'Home' });
+  fireEvent.keyDown(tree, { key: ' ' });
+  expect(onCheck).toHaveBeenCalledTimes(1);
+  expect(onSelect).not.toHaveBeenCalled();
+  fireEvent.keyDown(tree, { key: 'Enter' });
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ key: 'space' }));
+
+  fireEvent.click(screen.getByRole('treeitem', { name: /Onboarding/ }).querySelector('[data-check]')!);
+  expect(onCheck).toHaveBeenLastCalledWith(expect.objectContaining({ node: expect.objectContaining({ id: 'kapps/hr/forms/onboard/form' }) }));
+  expect(onSelect).toHaveBeenCalledTimes(1);
+});
