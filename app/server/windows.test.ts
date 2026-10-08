@@ -83,3 +83,14 @@ test('git file paths are always forward-slashed relative paths, whatever the OS'
   assert.equal(inLayout('.gitattributes'), true);
   assert.equal(inLayout('snapshots\\dev\\space.json'), false);
 });
+
+test('the catalog lists kapp and form slugs, not their encoded file names', async () => {
+  const { buildCatalog } = await import('./explore.ts');
+  const { snapshotFrom } = await import('./snapshots.ts');
+  const artifacts = new Map<string, unknown>([
+    ['kapps/%63on/kapp', { slug: 'con', name: 'Console' }],
+    ['kapps/%63on/forms/%61ux/form', { slug: 'aux', name: 'Aux form', fields: [] }],
+  ]);
+  const cat = buildCatalog(snapshotFrom('dev', 'c0ffee', '/x', artifacts));
+  assert.deepEqual(cat.kapps.map((k) => [k.slug, k.forms.map((f) => f.slug)]), [['con', ['aux']]]);
+});

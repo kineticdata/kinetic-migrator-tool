@@ -39,7 +39,7 @@ export function driftedKeys(projectDir: string, env: string, artifacts: Map<stri
   return Object.keys(state).filter((key) => {
     if (!artifacts.has(key)) return false;
     const mod = moduleFor(key);
-    return Boolean(mod) && hashOf(withoutEnvBound(mod!.scope, artifacts.get(key), eba)) !== state[key];
+    return Boolean(mod) && hashOf(withoutEnvBound(mod!.scope, artifacts.get(key), eba, key)) !== state[key];
   }).sort();
 }
 

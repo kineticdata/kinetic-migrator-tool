@@ -1,10 +1,11 @@
 // Explore: the object tree of an environment's newest snapshot (lazy by
 // parent), one item's summary / relationships / JSON / history, and search.
 // Secrets never appear: snapshots hold none, and summaries get only has-flags.
+import type { CatalogKapp, ProjectCatalog } from '../shared/api.ts';
 import type { ExploreItem, RelatedItem, SearchResponse, SearchResult } from '../shared/sync-api.ts';
 import { badRequest, notFound } from './errors.ts';
-import { moduleFor, summarize, type Edge } from './engine-sync.ts';
-import { hasEnvSecret } from './environments.ts';
+import { compareText, moduleFor, segmentLabel, summarize, type Edge } from './engine-sync.ts';
+import { hasEnvSecret, pipelineOrder } from './environments.ts';
 import type { ProjectRef } from './project-meta.ts';
 import { log } from './repo.ts';
 import type { Router } from './router.ts';
@@ -12,7 +13,9 @@ import type { SecretStore } from './secrets.ts';
 import {
   connectionSecretFields, connectionSecretName, handlerSecretName, handlerSecretProperties,
 } from './secret-names.ts';
-import { fileSize, loadSnapshot, packagePath, requireEnvironment, type Snapshot, type SyncContext } from './snapshots.ts';
+import {
+  fileSize, latestSnapshotCommit, loadSnapshot, packagePath, requireEnvironment, type Snapshot, type SyncContext,
+} from './snapshots.ts';
 import { childrenOf, labelFor, toTreeNode } from './tree-index.ts';
 
 export const SEARCH_LIMIT = 200;
@@ -129,11 +132,85 @@ export function search(snap: Snapshot, q: string): SearchResponse {
   return { results, truncated };
 }
 
+// ---- Catalog: names for the settings pickers --------------------------------
+
+const names = (list: unknown): string[] => (Array.isArray(list) ? list.map((x) => obj(x).name).filter((n): n is string => typeof n === 'string' && n !== '') : []);
+const sorted = (xs: Iterable<string>): string[] => [...new Set(xs)].sort(compareText);
+
+// Kapps (with forms, fields and categories), teams and attribute names per
+// level, read from one snapshot. Attribute names are the definitions plus any
+// attribute in use, so a name set without a definition can still be picked.
+export function buildCatalog(snap: Snapshot | null): ProjectCatalog {
+  const empty: ProjectCatalog = { env: null, kapps: [], teams: [], attributes: { space: [], kapp: [], form: [], team: [], category: [] } };
+  if (!snap) return empty;
+  const space = obj(snap.artifacts.get('space'));
+  const at = { space: [...names(space.spaceAttributeDefinitions), ...names(space.attributes)], kapp: [] as string[], form: [] as string[], team: [...names(space.teamAttributeDefinitions)], category: [] as string[] };
+  const kapps = new Map<string, CatalogKapp>();
+  const kappOf = (slug: string): CatalogKapp => {
+    let k = kapps.get(slug);
+    if (!k) kapps.set(slug, (k = { slug, name: slug, forms: [], categories: [], attributes: { kapp: [], form: [], category: [] } }));
+    return k;
+  };
+  const teams: string[] = [];
+  for (const [key, raw] of snap.artifacts) {
+    const d = obj(raw);
+    let m: RegExpExecArray | null;
+    // Key segments are encoded file names; slugs come from the data, else decoded.
+    const slug = (seg: string, v: unknown) => (typeof v === 'string' && v ? v : segmentLabel(seg));
+    if ((m = /^kapps\/([^/]+)\/kapp$/.exec(key))) {
+      const k = kappOf(slug(m[1], d.slug));
+      k.name = typeof d.name === 'string' && d.name ? d.name : k.slug;
+      const cats = Array.isArray(d.categories) ? d.categories.map(obj) : [];
+      k.categories = cats.filter((c) => typeof c.slug === 'string').map((c) => ({ slug: c.slug, name: typeof c.name === 'string' ? c.name : c.slug }))
+        .sort((a, b) => compareText(a.name, b.name));
+      k.attributes.kapp.push(...names(d.kappAttributeDefinitions), ...names(d.attributes));
+      k.attributes.form.push(...names(d.formAttributeDefinitions));
+      k.attributes.category.push(...names(d.categoryAttributeDefinitions), ...cats.flatMap((c) => names(c.attributes)));
+    } else if ((m = /^kapps\/([^/]+)\/forms\/([^/]+)\/form$/.exec(key))) {
+      const k = kappOf(segmentLabel(m[1]));
+      const formSlug = slug(m[2], d.slug);
+      k.forms.push({ slug: formSlug, name: typeof d.name === 'string' && d.name ? d.name : formSlug, fields: sorted(fieldNames(d)) });
+      k.attributes.form.push(...names(d.attributes));
+    } else if (/^teams\//.test(key) && typeof d.name === 'string') {
+      teams.push(d.name);
+      at.team.push(...names(d.attributes));
+    }
+  }
+  const list = [...kapps.values()].sort((a, b) => compareText(a.name, b.name));
+  for (const k of list) {
+    k.forms.sort((a, b) => compareText(a.name, b.name));
+    k.attributes = { kapp: sorted(k.attributes.kapp), form: sorted(k.attributes.form), category: sorted(k.attributes.category) };
+    at.kapp.push(...k.attributes.kapp);
+    at.form.push(...k.attributes.form);
+    at.category.push(...k.attributes.category);
+  }
+  return {
+    env: snap.env,
+    kapps: list,
+    teams: sorted(teams),
+    attributes: { space: sorted(at.space), kapp: sorted(at.kapp), form: sorted(at.form), team: sorted(at.team), category: sorted(at.category) },
+  };
+}
+
+// The named environment, or else the first in pipeline order with a snapshot.
+async function catalogSnapshot(ref: ProjectRef, env: string | null): Promise<Snapshot | null> {
+  const candidates = env ? [requireEnvironment(ref, env)] : pipelineOrder(ref.dir);
+  for (const name of candidates) {
+    if (await latestSnapshotCommit(ref, name)) return loadSnapshot(ref, name);
+  }
+  return null;
+}
+
 export function registerExploreRoutes(router: Router, ctx: SyncContext): void {
   const snapshotOf = async (p: string, env: string) => {
     const ref = ctx.find(p);
     return { ref, snap: await loadSnapshot(ref, requireEnvironment(ref, env)) };
   };
+  // Read-only, from the latest snapshot only: never the live environment.
+  router.get('/api/projects/:p/catalog', async ({ params, query }) => {
+    const ref = ctx.find(params.p);
+    return { json: buildCatalog(await catalogSnapshot(ref, query.get('env'))) };
+  });
   router.get('/api/projects/:p/explore/:env/tree', async ({ params, query }) => {
     const { snap } = await snapshotOf(params.p, params.env);
     const nodes = childrenOf(snap.index, query.get('parent'));

@@ -31,13 +31,13 @@ export function AppFrame({ project, activeEnv, drift, children }: AppFrameProps)
   ];
   return (
     <div className="flex h-screen flex-col">
-      <header className="z-30 shrink-0 border-b border-border bg-surface/90 backdrop-blur">
+      <header className="z-30 shrink-0 border-b border-header-border bg-header">
         <div className="flex h-14 items-center gap-4 px-6">
           <BrandMark />
-          <span aria-hidden className="text-border-strong">/</span>
-          <Link to="/" className="group flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-fg hover:bg-surface-2" title="Switch project">
+          <span aria-hidden className="text-header-subtle/60">/</span>
+          <Link to="/" className="group flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-header-fg hover:bg-header-hover" title="Switch project">
             <span className="truncate">{project.name}</span>
-            <ChevronsUpDown size={14} aria-hidden className="text-subtle group-hover:text-muted" />
+            <ChevronsUpDown size={14} aria-hidden className="text-header-subtle group-hover:text-header-muted" />
           </Link>
           <div className="ml-2 min-w-0 flex-1">
             <PipelineStrip projectId={project.id} environments={project.environments} drift={drift} active={activeEnv} />
@@ -54,7 +54,7 @@ export function AppFrame({ project, activeEnv, drift, children }: AppFrameProps)
                 aria-current={active ? 'page' : undefined}
                 className={cn(
                   'relative px-3 pt-1.5 pb-2.5 text-sm font-medium transition-colors',
-                  active ? 'text-fg after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-accent' : 'text-muted hover:text-fg',
+                  active ? 'text-header-fg after:absolute after:inset-x-2 after:-bottom-px after:h-[3px] after:rounded-t-full after:bg-primary' : 'text-header-muted hover:text-header-fg',
                 )}
               >
                 {t.label}

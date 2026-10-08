@@ -14,7 +14,7 @@ export function ThemeToggle() {
   const Current = choices.find((c) => c.value === choice)?.Icon ?? Monitor;
   return (
     <Menu.Root>
-      <Menu.Trigger aria-label="Theme" title="Theme" className="flex size-8 items-center justify-center rounded-lg text-muted hover:bg-surface-2 hover:text-fg">
+      <Menu.Trigger aria-label="Theme" title="Theme" className="flex size-8 shrink-0 items-center justify-center rounded-lg text-header-muted hover:bg-header-hover hover:text-header-fg">
         <Current size={16} aria-hidden />
       </Menu.Trigger>
       <Menu.Portal>

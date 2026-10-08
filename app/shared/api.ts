@@ -119,16 +119,64 @@ export interface ConnectionTestResult {
   steps: ConnectionTestStep[];
 }
 
+// A Field = Value condition; a reference-data entry copies only the records
+// that meet all of its conditions.
+export interface DataFilterCondition {
+  field: string;
+  value: string;
+}
+
+// `key` (match fields) is optional: without it a record is matched by all of
+// its values, so an edited record is copied as a new one.
 export interface DataEntry {
   kapp: string;
   form: string;
-  key: string[];
+  key?: string[];
+  filter?: DataFilterCondition[];
 }
+
+export type EnvBoundLevel = 'space' | 'kapp' | 'form' | 'team' | 'category';
+
+// An attribute name applies to every item at its level; an object narrows it
+// to a kapp (slug), a form (slug), a team (name) or a category (slug or name).
+export interface EnvBoundScopedRule {
+  name: string;
+  kapp?: string;
+  form?: string;
+  team?: string;
+  category?: string;
+}
+export type EnvBoundRule = string | EnvBoundScopedRule;
 
 export interface ProjectConfig {
   data: DataEntry[];
   exclude: { kapps: string[]; forms: string[] };
-  envBoundAttributes: Record<string, string[]>;
+  envBoundAttributes: Partial<Record<EnvBoundLevel, EnvBoundRule[]>>;
+  // Parts of the file that could not be used and are ignored (read-only).
+  warnings?: string[];
+}
+
+// What the latest snapshot of an environment holds, for the settings pickers.
+// `env` is null when no environment has a snapshot yet.
+export interface CatalogForm {
+  slug: string;
+  name: string;
+  fields: string[];
+}
+
+export interface CatalogKapp {
+  slug: string;
+  name: string;
+  forms: CatalogForm[];
+  categories: Array<{ slug: string; name: string }>;
+  attributes: { kapp: string[]; form: string[]; category: string[] };
+}
+
+export interface ProjectCatalog {
+  env: string | null;
+  kapps: CatalogKapp[];
+  teams: string[];
+  attributes: Record<EnvBoundLevel, string[]>;
 }
 
 export interface EnvironmentOverrides {
