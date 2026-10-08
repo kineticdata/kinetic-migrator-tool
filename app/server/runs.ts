@@ -22,7 +22,8 @@ import type {
 import { ApiError, badRequest, notFound, toApiError } from './errors.ts';
 import { envBoundNamesFor, envKey, loadConfig, loadOverrides, stableStringify, type EngineEnv } from './engine.ts';
 import {
-  ENV_BOUND_FIELDS, computePlan, isSecretName, isSecretProperty, parsePath, readTree, runApply, segmentLabel, stamp, type EnginePlan, type PlanItem,
+  ENV_BOUND_FIELDS, collectionWord, computePlan, isSecretName, isSecretProperty, parseEntryKey, parsePath, readTree, runApply, segmentLabel, stamp,
+  type EngineRemoval, type EnginePlan, type PlanItem,
 } from './engine-sync.ts';
 import { currentKeys, readChangeset, recordApplied, removeList } from './changesets.ts';
 import { hasEnvSecret, readEnvironmentFile, readOverrides, resolveEnv, setEnvSecret } from './environments.ts';
@@ -194,9 +195,18 @@ function needsAttention(to: string, items: PlanItem[], warnings: string[], secre
   return out;
 }
 
+// An entry's removal reads "Hardware (category of Services)".
+function removalLabel(r: EngineRemoval): Pick<PlanRemovalOut, 'label' | 'entry'> {
+  if (!r.entry) return { label: labelFor(r.key, r.existing?.data) };
+  const p = parseEntryKey(r.key)!;
+  const name = r.entry.name ?? segmentLabel(p.segment);
+  const itemLabel = labelFor(r.entry.itemKey, undefined);
+  return { label: `${name} (${collectionWord(r.entry.field)} of ${itemLabel})`, entry: { item: r.entry.itemKey, itemLabel, collection: r.entry.field, name } };
+}
+
 function removalsOut(plan: EnginePlan): PlanRemovalOut[] {
   return (plan.removals ?? []).map((r) => ({
-    key: r.key, type: r.type, label: labelFor(r.key, r.existing?.data), action: r.action,
+    key: r.key, type: r.type, action: r.action, ...removalLabel(r),
     children: r.children.map((c) => ({ key: c.key, type: c.type, label: labelFor(c.key, c.existing?.data) })),
     usedBy: r.usedBy.map((u) => ({ key: u.key, label: labelFor(u.key, undefined), reason: u.reason, onlyTarget: u.onlyTarget })),
     notes: r.notes, restore: r.restore,

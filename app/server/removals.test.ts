@@ -179,3 +179,38 @@ test('run titles name removals and History reads them as applies', () => {
     assert.equal(typeOf(t), 'applied', t);
   }
 });
+
+test('a sub-collection entry only in the target: listed on its item in Compare, saved and planned as a removal, deleted alone, restored with its item', async (t) => {
+  const h = await harness(t);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  const KAPP = 'kapps/services/kapp';
+  const ENTRY = `${KAPP}#categories/old-hardware`;
+  h.spaces.test = () => {
+    const r = testRoutes();
+    const kapp = (r['GET core/kapps/services'] as { kapp: Record<string, unknown> }).kapp;
+    return { ...r, 'GET core/kapps/services': { kapp: { ...kapp, categories: [{ slug: 'old-hardware', name: 'Old Hardware' }] } } };
+  };
+  const cmp = (await h.job('POST', `${P}/compare`, { from: 'dev', to: 'test', mode: 'preview' })).result as CompareResult;
+  const item = (await h.call('GET', `${P}/compare/${cmp.compareId}/item?key=${encodeURIComponent(KAPP)}`)).json;
+  assert.equal(item.status, 'same', 'a target-only entry never makes the item differ');
+  assert.deepEqual(item.targetOnlyEntries, [{ key: ENTRY, collection: 'categories', word: 'category', name: 'old-hardware' }]);
+  const kapps = (await h.call('GET', `${P}/compare/${cmp.compareId}/tree?parent=group%3Akapps`)).json;
+  assert.equal(kapps.find((n: { key?: string }) => n.key === KAPP).entries, 1);
+  const roots = (await h.call('GET', `${P}/compare/${cmp.compareId}/tree`)).json;
+  assert.equal(roots.find((n: { id: string }) => n.id === 'group:kapps').entriesBelow, 1);
+
+  const cs = (await h.call('POST', `${P}/changesets`, { name: 'Tidy categories', from: 'dev', keys: [], remove: [ENTRY] })).json as Changeset;
+  assert.deepEqual(cs.remove, [ENTRY]);
+  assert.equal((await h.call('POST', `${P}/changesets`, { name: 'x', from: 'dev', keys: [], remove: [`${KAPP}#attributes/x`] })).status, 400);
+  const p = await plan(h, { to: 'test', changesetId: cs.id });
+  assert.deepEqual(p.errors, []);
+  assert.deepEqual(p.removals.map((r) => [r.key, r.label, r.action, r.entry?.collection]), [[ENTRY, 'old-hardware (category of services)', 'delete', 'categories']]);
+  const done = (await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result as ApplyResult;
+  assert.equal(done.status, 'applied', String(done.error));
+  assert.deepEqual(h.writes('test'), ['DELETE /kapps/services/categories/old-hardware']);
+  assert.match((await log(h.dir, { limit: 3 })).map((e) => e.message).join('\n'), /^Removed 1 item from Test/m);
+
+  h.spaces.test = testRoutes;
+  const rr = (await h.job('POST', `${P}/restore`, { commit: done.backupCommit })).result as CompareResult;
+  assert.deepEqual(rr.preselected, [KAPP]);
+});

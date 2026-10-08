@@ -98,7 +98,8 @@ export function registerHistoryRoutes(router: Router, ctx: SyncContext): void {
       from: env, fromName: `the ${type} of ${day}`, to: env, mode, liveTarget: true,
       source: { artifacts, commit: entry.oid },
       // Run records keep the keys of their day; an older backup is re-keyed.
-      preselected: touched ? touched.items.filter((i) => i.status === 'done').map((i) => artifacts.rekeyed?.get(i.key) ?? i.key) : [],
+      // A removed sub-collection entry is restored with its item.
+      preselected: touched ? [...new Set(touched.items.filter((i) => i.status === 'done').map((i) => i.key.split('#')[0]).map((k) => artifacts.rekeyed?.get(k) ?? k))] : [],
     });
     return { status: 202, json: { jobId } };
   });

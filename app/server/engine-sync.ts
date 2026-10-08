@@ -29,6 +29,8 @@ import * as stateModule from '../../lib/sync/state.mjs';
 import * as layoutModule from '../../lib/sync/layout.mjs';
 // @ts-expect-error -- untyped engine module
 import * as removalsModule from '../../lib/sync/removals.mjs';
+// @ts-expect-error -- untyped engine module
+import * as entriesModule from '../../lib/sync/entries.mjs';
 import type { ClientFactory, EngineConfig, EngineEnv, EngineOverrides, EnvBoundAttributes } from './engine.ts';
 
 export interface Artifact { key: string; data: unknown; files?: Record<string, Uint8Array> }
@@ -60,6 +62,8 @@ export interface EngineRemoval {
   notes: string[];
   restore: string | null;
   hash: string | null;
+  // A sub-collection entry's removal.
+  entry?: { itemKey: string; field: string; name: string | null };
 }
 
 export interface EnginePlan {
@@ -137,3 +141,11 @@ export const parsePath: (path: string) => string[] = overridesModule.parsePath;
 export const loadState: (projectDir: string, env: string) => Record<string, string> = stateModule.loadState;
 // Why a key can never be removed, or null (see lib/sync/removals.mjs).
 export const notRemovable: (key: string, mod: EngineModule | undefined) => string | null = removalsModule.notRemovable;
+// The same for any removal key, an item's or a sub-collection entry's.
+export const removalRefusal: (key: string, modules: EngineModule[]) => string | null = removalsModule.removalRefusal;
+// Sub-collection entries (`<item>#<collection>/<name>`, see lib/sync/entries.mjs).
+export interface TargetOnlyEntry { key: string; collection: string; name: string }
+export const targetOnlyEntries: (mod: EngineModule | undefined, itemKey: string, source: unknown, target: unknown) => TargetOnlyEntry[] = entriesModule.targetOnlyEntries;
+export const parseEntryKey: (key: string) => { itemKey: string; field: string; segment: string } | null = entriesModule.parseEntryKey;
+export const isEntryKey: (key: string) => boolean = entriesModule.isEntryKey;
+export const collectionWord: (field: string) => string = entriesModule.collectionWord;

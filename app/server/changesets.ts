@@ -9,7 +9,7 @@ import path from 'node:path';
 import type { AppliedTo, Changeset } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
 import { stableStringify } from './engine.ts';
-import { LAYOUT_VERSION, moduleFor, notRemovable } from './engine-sync.ts';
+import { LAYOUT_VERSION, MODULES, isEntryKey, moduleFor, removalRefusal } from './engine-sync.ts';
 import { resolveCommit } from './pinned.ts';
 import { commitChange, isPlainObject, withProjectLock, type ProjectRef } from './project-meta.ts';
 import { slugify } from './projects.ts';
@@ -70,7 +70,7 @@ export function removeList(v: unknown): string[] {
   if (v === undefined) return [];
   if (!Array.isArray(v) || !v.every((k) => typeof k === 'string')) throw badRequest('"remove" must be a list of item keys.');
   const keys = [...new Set(v as string[])].sort();
-  const refused = keys.map((k) => notRemovable(k, moduleFor(k))).filter((m): m is string => Boolean(m));
+  const refused = keys.map((k) => removalRefusal(k, MODULES)).filter((m): m is string => Boolean(m));
   if (refused.length) throw badRequest(refused.length === 1 ? refused[0] : 'Some items can never be removed.', { refused });
   return keys;
 }
@@ -111,7 +111,8 @@ async function checkKeys(ref: ProjectRef, env: string, commit: string, keys: str
   const have = await keysAt(ref, env, commit);
   const missing = keys.filter((k) => !have.has(k));
   if (missing.length) throw badRequest('Some items are not in the pinned snapshot.', { missing });
-  const inSource = remove.filter((k) => have.has(k));
+  // (Whether an entry is in the source's copy of its item is checked by the plan.)
+  const inSource = remove.filter((k) => !isEntryKey(k) && have.has(k));
   if (inSource.length) throw badRequest('Only items that are not in the source can be removed.', { inSource });
 }
 

@@ -86,6 +86,11 @@ const ITEMS: Record<string, CompareItem> = {
   },
 };
 
+ITEMS['kapps/hr/kapp'] = {
+  key: 'kapps/hr/kapp', type: 'kapp', label: 'HR', status: 'same', diff: [], current: { name: 'HR' }, incoming: { name: 'HR' },
+  targetOnlyEntries: [{ key: 'kapps/hr/kapp#categories/old-hardware', collection: 'categories', word: 'category', name: 'old-hardware' }],
+};
+
 ITEMS['teams/ops'] = {
   key: 'teams/ops', type: 'team', label: 'Operations', status: 'only-target', diff: [], current: { name: 'Operations' }, incoming: null,
 };
@@ -426,4 +431,25 @@ test('the tree\'s Remove shortcut marks and unmarks; Keep in the tray takes it o
   expect(within(tray).getByRole('region', { name: 'Remove from Test' })).toBeInTheDocument();
   await user.click(within(tray).getByRole('button', { name: 'Keep Operations' }));
   expect(within(tray).queryByRole('region', { name: 'Remove from Test' })).toBeNull();
+});
+
+test('an item\'s entries only in the target are listed on it, each with its own Remove action that goes into the removals', async () => {
+  const m = setup();
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare' });
+  const t = await screen.findByRole('tree', { name: /Differences/ });
+  await user.click(await within(t).findByText('Kapps'));
+  await user.click(await within(t).findByText('HR'));
+  const only = await screen.findByRole('region', { name: 'Only in Test' });
+  expect(only).toHaveTextContent('old-hardware');
+  expect(only).toHaveTextContent('category');
+  await user.click(within(only).getByRole('button', { name: 'Remove old-hardware from Test' }));
+  const tray = screen.getByRole('complementary', { name: /Changeset/ });
+  expect(within(within(tray).getByRole('region', { name: 'Remove from Test' })).getByText('old-hardware (category)')).toBeInTheDocument();
+  expect(within(only).getByRole('button', { name: 'Keep old-hardware in Test' })).toHaveAttribute('aria-pressed', 'true');
+  await user.click(within(tray).getByRole('button', { name: /Review plan/ }));
+  await waitFor(() => expect(m.callsTo('POST', '/api/projects/acme-demo/plans')).toHaveLength(1));
+  expect(m.callsTo('POST', '/api/projects/acme-demo/plans')[0].body).toEqual({
+    to: 'test', from: 'dev', selected: [], remove: ['kapps/hr/kapp#categories/old-hardware'], sourceCommit: 'c-dev',
+  });
 });

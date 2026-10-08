@@ -41,6 +41,20 @@ export interface CompareTreeNode extends TreeNode {
   status?: CompareStatus;
   // Statuses of the items below this node, rolled up.
   counts: Partial<Record<CompareStatus, number>>;
+  // Sub-collection entries only in the target: on this item, and below it.
+  entries?: number;
+  entriesBelow?: number;
+}
+
+// One entry of an item's sub-collection (an attribute definition, a
+// category…) that only the target has. Kept unless removed on purpose.
+export interface TargetOnlyEntryOut {
+  // `<item key>#<collection>/<encoded name>`: the removal key.
+  key: string;
+  collection: string;
+  // The collection in words ("category", "form attribute definition").
+  word: string;
+  name: string;
 }
 
 // ---- Explore ---------------------------------------------------------------
@@ -145,6 +159,8 @@ export interface CompareItem {
   incoming: unknown;
   current: unknown;
   threeWay?: ThreeWay;
+  // Sub-collection entries only in the target (space and kapps).
+  targetOnlyEntries?: TargetOnlyEntryOut[];
 }
 
 export interface SuggestionsRequest {
@@ -258,6 +274,8 @@ export interface PlanRemovalOut {
   notes: string[];
   // What restoring it from the backup cannot bring back (null: everything).
   restore: string | null;
+  // For one entry of an item's sub-collection (key `<item>#<collection>/<name>`).
+  entry?: { item: string; itemLabel: string; collection: string; name: string };
 }
 
 export type AttentionKind = 'handler' | 'index' | 'data-workflows' | 'connection-secrets' | 'drift';

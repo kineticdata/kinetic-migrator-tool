@@ -47,6 +47,7 @@ import {
   setResolution, tickKind, toggleItem, toggleNode, toggleRemoval, underCounts, unmarkRemovals, type CheckState, type KeyStatus, type Selection,
 } from '../lib/selection';
 import { ancestorsOf, kindOfKey, nameOfKey } from '../lib/tree-layout';
+import { entryItemKey, entryLabel, isEntryKey } from '../lib/key-label';
 
 const ALL = 'all';
 
@@ -148,7 +149,8 @@ function useCompareRun(p: string, opts: { from: string; to: string; mode: Compar
 
 // ---- Tree ---------------------------------------------------------------------
 
-const differs = (n: CompareTreeNode) => (n.status !== undefined && n.status !== 'same') || Object.entries(n.counts).some(([s, c]) => s !== 'same' && (c ?? 0) > 0);
+const differs = (n: CompareTreeNode) => (n.status !== undefined && n.status !== 'same') || Object.entries(n.counts).some(([s, c]) => s !== 'same' && (c ?? 0) > 0)
+  || (n.entries ?? 0) > 0 || (n.entriesBelow ?? 0) > 0;
 const hasStatus = (n: CompareTreeNode, s: CompareStatus) => n.status === s || (n.counts[s] ?? 0) > 0;
 const selectableBelow = (n: CompareTreeNode) => [...SELECTABLE].some((s) => (n.counts[s] ?? 0) > 0);
 
@@ -343,6 +345,14 @@ function CompareTree({ projectId, result, sel, setSel, selectedKey, onSelect, fi
       <>
         {node.hasChildren && <RollupCounts counts={node.counts} to={result.to} />}
         {node.key && node.status && !marked && <ItemStatus status={node.status} to={result.to} />}
+        {(node.entries ?? 0) > 0 && (
+          <span
+            title={`${plural(node.entries!, 'entry', 'entries')} only in ${envLabel(result.to)} (open the item to remove them)`}
+            className="inline-flex h-5 items-center rounded-md border border-transparent bg-removed-soft px-1.5 text-xs font-medium text-removed"
+          >
+            <span aria-hidden>−</span>{node.entries}<span className="sr-only"> entries only in {envLabel(result.to)}</span>
+          </span>
+        )}
         {removable && (
           // Mouse shortcut for the detail pane's Remove from … button (the
           // treeitem itself stays the one focusable row).
@@ -522,6 +532,35 @@ function ItemDetail({ projectId, result, itemKey, sel, setSel, suggestions, onAd
           <DiffNamesProvider value={names}><ThreeWayDiff threeWay={it.threeWay} incoming={it.diff} from={from} to={to} resolution={resolution} onResolve={(r) => setSel((s) => setResolution(s, it.key, it.status, r))} /></DiffNamesProvider>
         )}
         {mine.length > 0 && <SuggestionsList title="This item needs" suggestions={mine} onAdd={onAddSuggestion} />}
+        {(it.targetOnlyEntries?.length ?? 0) > 0 && (
+          <section aria-label={`Only in ${envLabel(to)}`} className="overflow-hidden rounded-xl border border-border">
+            <h3 className="border-b border-border bg-surface-2/60 px-4 py-2 text-[13px] font-semibold text-fg">
+              Only in {envLabel(to)} <span className="font-normal text-muted">· kept when promoting; remove one on purpose to delete it</span>
+            </h3>
+            <ul className="divide-y divide-border">
+              {it.targetOnlyEntries!.map((e) => {
+                const on = isMarkedForRemoval(sel, e.key);
+                return (
+                  <li key={e.key} className="flex items-center gap-3 px-4 py-2">
+                    <span className="min-w-0 flex-1">
+                      <span className={cn('block truncate text-sm text-fg', on && 'line-through decoration-danger/60')}>{e.name}</span>
+                      <span className="block text-xs text-muted">{e.word}</span>
+                    </span>
+                    <Button
+                      size="sm"
+                      variant={on ? 'secondary' : 'danger'}
+                      aria-pressed={on}
+                      aria-label={on ? `Keep ${e.name} in ${envLabel(to)}` : `Remove ${e.name} from ${envLabel(to)}`}
+                      onClick={() => setSel((cur) => toggleRemoval(cur, e.key, 'only-target'))}
+                    >
+                      {on ? `Keep in ${envLabel(to)}` : `Remove from ${envLabel(to)}`}
+                    </Button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
         <Tabs value={view} onValueChange={setView}>
           <TabsList label="View">
             <TabsTrigger value="changes">Changes{diff.length > 0 && it.status === 'changed' && <span className="ml-1.5 text-subtle tabular-nums">{diff.length}</span>}</TabsTrigger>
@@ -674,7 +713,8 @@ export function ComparePage() {
   const [sel, setSel] = useSelection(project.id, restore ? `restore:${restore}` : from, to);
   const keys = useMemo(() => selectedKeys(sel), [sel]);
   const removing = useMemo(() => removalKeys(sel), [sel]);
-  const looked = useMemo(() => [...keys, ...removing], [keys, removing]);
+  // Entry removals have no tree node of their own.
+  const looked = useMemo(() => [...keys, ...removing.filter((k) => !isEntryKey(k))], [keys, removing]);
   const [filters, setFilterState] = useState<TreeFilters>({ onlyDiff: true, status: null, section: ALL, text: '' });
   const setFilters = (f: Partial<TreeFilters>) => setFilterState((cur) => ({ ...cur, ...f }));
 
@@ -754,6 +794,7 @@ export function ComparePage() {
     return { key, label: node?.label ?? sug?.label ?? nameOfKey(key), kind: node?.kind ?? kindOfKey(key), status: sel.items[key] };
   });
   const trayRemovals: TrayItem[] = removing.map((key) => {
+    if (isEntryKey(key)) return { key, label: entryLabel(key), kind: kindOfKey(entryItemKey(key)), status: 'only-target' };
     const node = lookup.nodes.get(key);
     return { key, label: node?.label ?? nameOfKey(key), kind: node?.kind ?? kindOfKey(key), status: 'only-target' };
   });
@@ -797,7 +838,7 @@ export function ComparePage() {
   };
   const savedNow = saved && saved.keys === savedId ? saved : null;
 
-  const open = (key: string) => setParam({ item: key });
+  const open = (key: string) => setParam({ item: entryItemKey(key) });
 
   if (names.length < 2 && !restore) {
     return (

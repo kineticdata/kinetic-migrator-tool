@@ -25,6 +25,7 @@ import { cn } from '../components/ui/cn';
 import { envLabel, formatDateTime, plural, timeAgo } from '../lib/format';
 import { useProjectContext } from '../lib/project';
 import { kindOfKey, nameOfKey } from '../lib/tree-layout';
+import { entryLabel, isEntryKey } from '../lib/key-label';
 
 const formatDate = (iso: string) => {
   const d = new Date(iso);
@@ -165,7 +166,7 @@ function RemovalsCard({ keys }: { keys: string[] }) {
         {keys.map((k) => (
           <li key={k} className="flex min-w-0 items-center gap-2.5">
             <KindIcon kind={kindOfKey(k)} className="text-danger" />
-            <span className="text-sm text-fg">{nameOfKey(k)}</span>
+            <span className="text-sm text-fg">{isEntryKey(k) ? entryLabel(k) : nameOfKey(k)}</span>
             <span className="min-w-0 truncate font-mono text-xs text-subtle" title={k}>{k}</span>
             <Badge tone="danger" className="ml-auto"><span aria-hidden>−</span>Remove</Badge>
           </li>
