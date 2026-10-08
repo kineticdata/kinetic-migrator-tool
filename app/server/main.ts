@@ -19,6 +19,7 @@ import { registerSyncRoutes } from './sync-routes.ts';
 import { registerRepositoryRoutes } from './repository.ts';
 import { createDefaultStore, type SecretStore } from './secrets.ts';
 import { defaultLogger, type Logger } from './log.ts';
+import { fakeMode } from './fake-mode.ts';
 
 export const VERSION: string = pkg.version;
 
@@ -47,6 +48,8 @@ export interface ServerContext {
 export interface ServerHandle {
   url: string;
   port: number;
+  // True when KINETIC_MIGRATE_FAKE=1 put the server on synthetic spaces.
+  fake: boolean;
   jobs: JobRegistry;
   router: Router;
   close(): Promise<void>;
@@ -75,10 +78,13 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
   const logger = opts.logger ?? defaultLogger;
   const jobs = new JobRegistry({ logger });
   const workspace = path.resolve(opts.workspace);
-  const secrets = opts.secrets ?? await createDefaultStore();
+  // Fake mode only fills in what the caller did not inject.
+  const fake = opts.clientFactory || opts.secrets ? undefined : fakeMode(process.env);
+  const secrets = opts.secrets ?? fake?.secrets ?? await createDefaultStore();
+  const clientFactory = opts.clientFactory ?? fake?.clientFactory;
   // Built bundle: dist/server.mjs serves dist/web next to itself.
   const webDir = opts.webDir ?? defaultWebDir();
-  const router = buildRouter({ workspace, secrets, clientFactory: opts.clientFactory, jobs });
+  const router = buildRouter({ workspace, secrets, clientFactory, jobs });
   let port = 0;
   const server = http.createServer(createRequestHandler({ key, port: () => port, router, webDir, logger }));
   await new Promise<void>((resolve, reject) => {
@@ -92,6 +98,7 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
   return {
     url: `http://localhost:${port}/?key=${key}`,
     port,
+    fake: Boolean(fake),
     jobs,
     router,
     close: () => new Promise<void>((resolve, reject) => {
@@ -117,4 +124,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     webDir: argValue(args, '--web-dir'),
   });
   console.log(`kinetic-migrate is running at ${handle.url}`);
+  if (handle.fake) console.log('Fake mode: synthetic dev and test spaces, nothing leaves this machine.');
 }

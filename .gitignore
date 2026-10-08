@@ -6,3 +6,4 @@ dist/
 projects/
 .env*
 .superpowers/
+e2e-artifacts/
