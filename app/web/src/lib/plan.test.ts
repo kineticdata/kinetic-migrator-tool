@@ -4,7 +4,7 @@
 import { expect, test } from 'vitest';
 import type { EnvironmentValue, PlanItemOut, PlanResult } from '../../../shared/sync-api';
 import {
-  attentionList, checklistFrom, errorFix, groupByPhase, parseValueText, restoreHref, backupHref, valueText, valuesPayload, writes,
+  applyOutcome, carryOver, satisfied, settleChecklist, attentionList, checklistFrom, errorFix, groupByPhase, parseValueText, restoreHref, backupHref, valueText, valuesPayload, writes,
 } from './plan';
 
 const item = (key: string, type: string, action: PlanItemOut['action'] = 'create', drift = false): PlanItemOut => ({
@@ -40,7 +40,26 @@ test('the attention list keeps server entries, skips kept drift and adds the oth
   const list = attentionList(p);
   expect(list.map((a) => a.id)).toEqual(['drift:kapps/hr/forms/a/form', 'handler:handlers/x/handler', 'warning:2']);
   expect(list.map((a) => a.send)).toEqual([true, true, false]);
-  expect(list[2]).toMatchObject({ kind: 'warning', message: 'kapps/hr/kapp: environment-bound attribute "Web Server Url" is empty in the target and no override sets it' });
+  expect(list[2]).toMatchObject({ kind: 'warning', key: 'kapps/hr/kapp', message: 'Web Server Url of hr is empty in Test and nothing sets it.' });
+  expect(list[2].valueId).toBeUndefined();
+});
+
+test('warnings read plainly; a missing attribute is taken care of by filling its value', () => {
+  const p = plan({
+    environmentValues: [ev('kapps/hr/kapp#attributes.Web Server Url', { label: 'Web Server Url', origin: 'attribute', to: null, required: true })],
+    warnings: [
+      'kapps/hr/kapp: environment-bound attribute "Web Server Url" is empty in the target and no override sets it',
+      'Override for "kapps/old/kapp" matches nothing in the export (check the key against the export/ file paths)',
+      'Something new',
+    ],
+  });
+  const [attr, override, other] = attentionList(p);
+  expect(attr).toMatchObject({ valueId: 'kapps/hr/kapp#attributes.Web Server Url', message: expect.stringMatching(/Fill it in under Environment values/) });
+  expect(override.message).toBe('A saved environment value for old matches nothing being promoted, so it is ignored.');
+  expect(other).toMatchObject({ key: null, message: 'Something new' });
+  expect(satisfied(attr, new Set(), new Set())).toBe(false);
+  expect(satisfied(attr, new Set(), new Set(['kapps/hr/kapp#attributes.Web Server Url']))).toBe(true);
+  expect(satisfied(other, new Set(['warning:2']), new Set())).toBe(true);
 });
 
 test('plan errors come with a plain fix', () => {
@@ -61,7 +80,8 @@ test('value text round-trips by the original type', () => {
   expect(valueText(30)).toBe('30');
   expect(valueText({ a: 1 })).toBe('{\n  "a": 1\n}');
   expect(parseValueText('42', 30)).toEqual({ value: 42 });
-  expect(parseValueText('forty', 30)).toEqual({ value: 'forty' });
+  expect(parseValueText('forty', 30)).toEqual({ error: 'Enter a number.' });
+  expect(parseValueText('', 30)).toEqual({ error: 'Enter a number.' });
   expect(parseValueText('false', true)).toEqual({ value: false });
   expect(parseValueText('{"a":2}', { a: 1 })).toEqual({ value: { a: 2 } });
   expect(parseValueText('{oops', { a: 1 })).toEqual({ error: 'Enter valid JSON.' });
@@ -90,8 +110,15 @@ test('only edited values are sent, required ones must be filled', () => {
     'handlers/x/handler': { 'properties[timeout]': 90 },
   });
 
-  const cleared = valuesPayload(values, { 'connections/tickets/connection#baseUrl': '   ' });
+  expect(filled.filled).toHaveLength(3);
+
+  const cleared = valuesPayload(values, { 'connections/tickets/connection#baseUrl': '   ', 'kapps/hr/kapp#attributes[Web Server Url]': '' });
   expect(cleared.missing).toEqual(['connections/tickets/connection#baseUrl']);
+  // An optional value cleared is not sent: the target keeps its own.
+  expect(cleared.blank).toEqual(['kapps/hr/kapp#attributes[Web Server Url]']);
+  expect(cleared.values).toEqual({});
+
+  expect(valuesPayload(values, { 'handlers/x/handler#properties[timeout]': 'soon' }).errors).toEqual({ 'handlers/x/handler#properties[timeout]': 'Enter a number.' });
 });
 
 test('items are grouped by apply phase in the order the apply runs', () => {
@@ -130,4 +157,28 @@ test('the checklist follows step and item events', () => {
 test('links to the backup and to a restore from it', () => {
   expect(backupHref('demo', 'abc123')).toBe('/p/demo/history?commit=abc123');
   expect(restoreHref('demo', 'abc123', 'test')).toBe('/p/demo/compare?restore=abc123&to=test');
+});
+
+test('the outcome of a finished apply, with or without a result', () => {
+  const list = checklistFrom([{ type: 'item', key: 'a', status: 'done' }, { type: 'item', key: 'b', status: 'running' }]);
+  const result = { status: 'cancelled' as const, done: 1, error: 'The apply was cancelled.', backupCommit: 'c-b' };
+  expect(applyOutcome({ status: 'succeeded', result, error: null }, list)).toEqual(result);
+  expect(applyOutcome({ status: 'failed', error: 'Lost contact with the job.' }, list)).toEqual({ status: 'failed', done: 1, error: 'Lost contact with the job.', backupCommit: null });
+  expect(applyOutcome({ status: 'cancelled', error: null }, list)).toEqual({ status: 'cancelled', done: 1, error: 'The apply was cancelled.', backupCommit: null });
+});
+
+test('a finished run leaves nothing running, and Resume carries only finished rows', () => {
+  const s = checklistFrom([
+    { type: 'step', step: 'backup', status: 'done' },
+    { type: 'item', key: 'a', status: 'done' },
+    { type: 'item', key: 'b', status: 'running' },
+  ]);
+  expect(settleChecklist(s, null, ['a', 'b', 'c'])).toBe(s);
+  expect(settleChecklist(s, 'failed', ['a', 'b', 'c']).items).toEqual({ a: { status: 'done' }, b: { status: 'failed', message: 'Stopped before it finished.' } });
+  expect(settleChecklist(s, 'cancelled', ['a', 'b', 'c']).items.b).toEqual({ status: 'skipped', message: 'Cancelled before it finished.' });
+  expect(settleChecklist(s, 'applied', ['a', 'b', 'c']).items).toEqual({ a: { status: 'done' }, b: { status: 'done' }, c: { status: 'skipped' } });
+  expect(settleChecklist(checklistFrom([{ type: 'step', step: 'backup', status: 'running' }]), 'failed', []).backup).toBe('failed');
+  expect(carryOver(checklistFrom([
+    { type: 'item', key: 'a', status: 'done' }, { type: 'item', key: 'b', status: 'running' }, { type: 'item', key: 'c', status: 'failed' }, { type: 'item', key: 'd', status: 'skipped' },
+  ]))).toEqual({ a: { status: 'done' }, d: { status: 'skipped' } });
 });

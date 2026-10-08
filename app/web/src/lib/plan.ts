@@ -5,6 +5,7 @@
 import type { JobEventData } from '../../../shared/api';
 import type { AttentionKind, EnvironmentValue, PlanItemOut, PlanResult } from '../../../shared/sync-api';
 import { envLabel } from './format';
+import { nameOfKey } from './tree-layout';
 
 // ---- Needs attention -------------------------------------------------------
 
@@ -15,6 +16,8 @@ export interface AttentionEntry {
   message: string;
   // Sent as an acknowledgement (server entries); warnings are ticked here only.
   send: boolean;
+  // An environment value that, once filled in, takes care of this entry.
+  valueId?: string;
 }
 
 // Warnings the server already turns into needs-attention entries.
@@ -23,6 +26,30 @@ const COVERED = [
   /: will be created without credentials/,
 ];
 
+// Engine warnings in plain words, where they are recognised.
+function plainWarning(w: string, plan: PlanResult): { message: string; key: string | null; valueId?: string } {
+  const To = envLabel(plan.to);
+  let m = /^(.+?): environment-bound attribute "(.+)" is empty in the target and no override sets it$/.exec(w);
+  if (m) {
+    const [, key, name] = m;
+    const value = plan.environmentValues.find((v) => v.key === key && v.origin === 'attribute' && v.label === name);
+    return {
+      key,
+      message: `${name} of ${nameOfKey(key)} is empty in ${To} and nothing sets it.${value ? ' Fill it in under Environment values, or tick to go ahead without it.' : ''}`,
+      ...(value ? { valueId: value.id } : {}),
+    };
+  }
+  m = /^Override for "(.+)" matches nothing in the export/.exec(w);
+  if (m) return { key: m[1], message: `A saved environment value for ${nameOfKey(m[1])} matches nothing being promoted, so it is ignored.` };
+  m = /^(.+?): secret property "(.+)" is not set; set it in the target console$/.exec(w);
+  if (m) return { key: m[1], message: `The secret ${m[2]} of ${nameOfKey(m[1])} is not set; set it in ${To}’s console.` };
+  m = /^(.+?): this server has no space WebAPI import endpoint/.exec(w);
+  if (m) return { key: m[1], message: `${nameOfKey(m[1])} cannot be imported by this server; recreate it by hand in ${To}.` };
+  m = /^(.+?): (.+) differ but come from the package or the console; change them in the target by hand$/.exec(w);
+  if (m) return { key: m[1], message: `${m[2]} of ${nameOfKey(m[1])} come from the handler package or console; change them in ${To} by hand.` };
+  return { key: null, message: w };
+}
+
 export function attentionList(plan: PlanResult): AttentionEntry[] {
   const kept = new Set(plan.items.filter((i) => i.action === 'skip-drift').map((i) => i.key));
   const out: AttentionEntry[] = plan.needsAttention
@@ -30,9 +57,14 @@ export function attentionList(plan: PlanResult): AttentionEntry[] {
     .filter((n) => !(n.kind === 'drift' && kept.has(n.key)))
     .map((n) => ({ id: n.id, kind: n.kind, key: n.key, message: n.message, send: true }));
   plan.warnings.forEach((w, i) => {
-    if (!COVERED.some((re) => re.test(w))) out.push({ id: `warning:${i}`, kind: 'warning', key: null, message: w, send: false });
+    if (!COVERED.some((re) => re.test(w))) out.push({ id: `warning:${i}`, kind: 'warning', send: false, ...plainWarning(w, plan) });
   });
   return out;
+}
+
+// Entries taken care of: ticked, or (for a missing value) filled in.
+export function satisfied(entry: AttentionEntry, ticked: ReadonlySet<string>, filled: ReadonlySet<string>): boolean {
+  return ticked.has(entry.id) || Boolean(entry.valueId && filled.has(entry.valueId));
 }
 
 // ---- Errors ----------------------------------------------------------------
@@ -64,7 +96,7 @@ export function valueText(v: unknown): string {
 // Parses typed text back to the type of the value it replaces.
 export function parseValueText(text: string, original: unknown): { value: unknown } | { error: string } {
   const t = text.trim();
-  if (typeof original === 'number' && t !== '' && Number.isFinite(Number(t))) return { value: Number(t) };
+  if (typeof original === 'number') return t !== '' && Number.isFinite(Number(t)) ? { value: Number(t) } : { error: 'Enter a number.' };
   if (typeof original === 'boolean' && (t === 'true' || t === 'false')) return { value: t === 'true' };
   if (original !== null && typeof original === 'object') {
     try {
@@ -81,25 +113,34 @@ export interface ValuesPayload {
   values: Record<string, Record<string, unknown>>;
   // Required values with nothing entered (ids).
   missing: string[];
+  // Optional values cleared on purpose: not sent, so the target keeps its own (ids).
+  blank: string[];
+  // Values with something in them, as sent or as planned (ids).
+  filled: string[];
   // Values that could not be read ({ id: message }).
   errors: Record<string, string>;
 }
 
 // `edits` maps value ids to the text typed; untouched values are not sent.
 export function valuesPayload(list: EnvironmentValue[], edits: Record<string, string>): ValuesPayload {
-  const out: ValuesPayload = { values: {}, missing: [], errors: {} };
+  const out: ValuesPayload = { values: {}, missing: [], blank: [], filled: [], errors: {} };
   for (const v of list) {
     const text = edits[v.id] ?? valueText(v.to);
     if (!text.trim()) {
       if (v.required) out.missing.push(v.id);
+      else if (edits[v.id] !== undefined) out.blank.push(v.id);
       continue;
     }
-    if (edits[v.id] === undefined || edits[v.id] === valueText(v.to)) continue;
+    if (edits[v.id] === undefined || edits[v.id] === valueText(v.to)) {
+      out.filled.push(v.id);
+      continue;
+    }
     const parsed = parseValueText(text, v.to ?? v.from);
     if ('error' in parsed) {
       out.errors[v.id] = parsed.error;
       continue;
     }
+    out.filled.push(v.id);
     (out.values[v.key] ??= {})[v.path] = parsed.value;
   }
   return out;
@@ -175,6 +216,54 @@ export function checklistFrom(events: JobEventData[], carried: Record<string, It
     }
   }
   return state;
+}
+
+export type Outcome = 'applied' | 'partial' | 'failed' | 'cancelled';
+
+export interface ApplyOutcome {
+  status: Outcome;
+  done: number;
+  error: string | null;
+  backupCommit: string | null;
+}
+
+// The outcome of a finished apply job, with or without a result (a job that
+// failed or was cancelled before reporting has none).
+export function applyOutcome(
+  job: { status: string; result?: { status: Outcome; done: number; error: string | null; backupCommit: string | null }; error: string | null },
+  checklist: ChecklistState,
+): ApplyOutcome {
+  const r = job.status === 'succeeded' ? job.result : undefined;
+  if (r) return { status: r.status, done: r.done, error: r.error, backupCommit: r.backupCommit };
+  const status: Outcome = job.status === 'cancelled' ? 'cancelled' : 'failed';
+  const done = Object.values(checklist.items).filter((i) => i.status === 'done').length;
+  const error = job.error ?? (status === 'cancelled' ? 'The apply was cancelled.' : 'The apply did not finish.');
+  return { status, done, error, backupCommit: null };
+}
+
+// A finished run leaves no row running: on success what was never reached was
+// already as wanted; otherwise a row still running stopped (or, on a cancel,
+// was skipped).
+export function settleChecklist(state: ChecklistState, outcome: Outcome | null, keys: string[]): ChecklistState {
+  if (!outcome) return state;
+  const stopped: ItemProgress = outcome === 'cancelled' ? { status: 'skipped', message: 'Cancelled before it finished.' } : { status: 'failed', message: 'Stopped before it finished.' };
+  const settle = (p: ItemProgress | undefined): ItemProgress | undefined => {
+    if (p?.status === 'running') return outcome === 'applied' ? { status: 'done' } : stopped;
+    if (!p || p.status === 'pending') return outcome === 'applied' ? { status: 'skipped' } : p;
+    return p;
+  };
+  const items: Record<string, ItemProgress> = {};
+  for (const k of new Set([...Object.keys(state.items), ...keys])) {
+    const p = settle(state.items[k]);
+    if (p) items[k] = p;
+  }
+  const backup = settle({ status: state.backup })!.status;
+  return { backup, items };
+}
+
+// What a Resume starts from: only rows that finished (never running ones).
+export function carryOver(state: ChecklistState): Record<string, ItemProgress> {
+  return Object.fromEntries(Object.entries(state.items).filter(([, p]) => p.status === 'done' || p.status === 'skipped'));
 }
 
 // ---- Links -----------------------------------------------------------------

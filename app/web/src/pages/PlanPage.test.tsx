@@ -5,10 +5,24 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, test, vi } from 'vitest';
 import type { ApplyResult, PlanResult } from '../../../shared/sync-api';
-import { AppRoutes } from '../routes';
+import { Route, Routes } from 'react-router';
+import { PlanPage } from './PlanPage';
+import { ProjectLayout } from './ProjectLayout';
 import { mockApi, sse } from '../test/mock-api';
 import { currentLocation, renderWithApp } from '../test/render';
 import { env, project } from '../test/fixtures';
+
+// The plan screen inside the project frame (with a stand-in Compare).
+function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/p/:projectId" element={<ProjectLayout />}>
+        <Route path="plan/:planId" element={<PlanPage />} />
+        <Route path="compare" element={<p>Compare screen</p>} />
+      </Route>
+    </Routes>
+  );
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -64,7 +78,7 @@ function liveStream() {
   };
 }
 
-function setup(p: PlanResult, opts: { readOnly?: boolean; applyJobs?: Array<{ id: string; events?: string | (() => Response); result: ApplyResult }> } = {}) {
+function setup(p: PlanResult, opts: { readOnly?: boolean; applyJobs?: Array<{ id: string; events?: string | (() => Response); result?: ApplyResult; status?: string; error?: string }> } = {}) {
   const jobs = opts.applyJobs ?? [{ id: 'a1', result: { runId: 'r1', status: 'applied', commit: 'c-run', backupCommit: 'c-backup', done: 3, error: null } }];
   let started = 0;
   const routes: Record<string, unknown> = {
@@ -75,7 +89,12 @@ function setup(p: PlanResult, opts: { readOnly?: boolean; applyJobs?: Array<{ id
   };
   for (const j of jobs) {
     routes[`GET /api/jobs/${j.id}/events`] = typeof j.events === 'function' ? j.events : { sse: j.events ?? sse([]) };
-    routes[`GET /api/jobs/${j.id}`] = { id: j.id, kind: 'apply', status: j.result.status === 'applied' ? 'succeeded' : 'succeeded', createdAt: 'x', result: j.result };
+    // An apply that ends with a result succeeds whatever its outcome; a job
+    // that failed or was cancelled before reporting has only an error.
+    routes[`GET /api/jobs/${j.id}`] = {
+      id: j.id, kind: 'apply', status: j.status ?? 'succeeded', createdAt: 'x',
+      ...(j.result ? { result: j.result } : {}), ...(j.error ? { error: { code: 'failed', message: j.error } } : {}),
+    };
   }
   return mockApi(routes);
 }
@@ -250,6 +269,7 @@ test('a failed apply shows the error, and Resume applies again; View backup and 
   await user.click(screen.getByRole('button', { name: 'Apply to Test' }));
 
   const alert = await screen.findByRole('alert');
+  expect(screen.getByRole('heading', { name: 'Partly applied to Test' })).toBeInTheDocument();
   expect(alert).toHaveTextContent('Stopped after 1 change');
   expect(alert).toHaveTextContent('The Kinetic Platform returned an error (500).');
   const progress = screen.getByRole('region', { name: 'Progress' });
@@ -283,4 +303,149 @@ test('an expired plan points back to Compare', async () => {
   expect(await screen.findByText('This plan has expired; plan again.')).toBeInTheDocument();
   await user.click(screen.getByRole('link', { name: 'Back to Compare' }));
   expect(currentLocation()).toBe('/p/acme-demo/compare');
+});
+
+const go = async (user: ReturnType<typeof userEvent.setup>) => {
+  await toConfirm(user);
+  await user.type(screen.getByLabelText(/Type test to confirm/), 'test');
+  await user.click(screen.getByRole('button', { name: 'Apply to Test' }));
+};
+
+test('an apply cancelled mid-run says so, keeps what it did and links to the backup', async () => {
+  setup(simple(), {
+    applyJobs: [{
+      id: 'a1',
+      events: sse([
+        { type: 'step', data: { type: 'step', step: 'backup', status: 'done' } },
+        { type: 'item', data: { type: 'item', key: CONN, status: 'done' } },
+        { type: 'item', data: { type: 'item', key: HANDLER, status: 'running' } },
+      ]),
+      result: { runId: 'r1', status: 'cancelled', commit: 'c-run', backupCommit: 'c-backup', done: 1, error: 'The apply was cancelled.' },
+    }],
+  });
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  await go(user);
+  expect(await screen.findByRole('heading', { name: 'Cancelled applying to Test' })).toBeInTheDocument();
+  expect(screen.getByRole('alert')).toHaveTextContent('Cancelled after 1 change.');
+  const progress = screen.getByRole('region', { name: 'Progress' });
+  expect(within(progress).getByRole('listitem', { name: 'Tickets: Done' })).toBeInTheDocument();
+  expect(within(progress).getByRole('listitem', { name: /SMTP Send: Skipped — Cancelled before it finished/ })).toBeInTheDocument();
+  expect(within(progress).queryAllByRole('listitem', { name: /: Running/ })).toHaveLength(0);
+  expect(within(progress).getByRole('status')).toHaveTextContent('3 of 4 done');
+  expect(screen.getByRole('link', { name: 'View backup' })).toHaveAttribute('href', '/p/acme-demo/history?commit=c-backup');
+  expect(screen.getByRole('link', { name: 'Restore…' })).toBeInTheDocument();
+});
+
+test('a job that failed without a result: Failed, done counted from events, running rows stopped; Resume never carries them', async () => {
+  const m = setup(simple(), {
+    applyJobs: [
+      {
+        id: 'a1',
+        events: sse([
+          { type: 'step', data: { type: 'step', step: 'backup', status: 'done' } },
+          { type: 'item', data: { type: 'item', key: CONN, status: 'done' } },
+          { type: 'item', data: { type: 'item', key: HANDLER, status: 'running' } },
+        ], 'failed'),
+        status: 'failed', error: 'Lost contact with the target.',
+      },
+      {
+        id: 'a2',
+        events: sse([
+          { type: 'step', data: { type: 'step', step: 'backup', status: 'done' } },
+          { type: 'item', data: { type: 'item', key: FORM, status: 'done' } },
+        ]),
+        result: { runId: 'r2', status: 'applied', commit: 'c2', backupCommit: 'c-b2', done: 1, error: null },
+      },
+    ],
+  });
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  await go(user);
+  expect(await screen.findByRole('heading', { name: 'Failed to apply to Test' })).toBeInTheDocument();
+  expect(screen.getByRole('alert')).toHaveTextContent('Stopped after 1 change. Lost contact with the target.');
+  const progress = screen.getByRole('region', { name: 'Progress' });
+  expect(within(progress).getByRole('listitem', { name: /SMTP Send: Failed — Stopped before it finished/ })).toBeInTheDocument();
+  // No result, so no known backup.
+  expect(screen.queryByRole('link', { name: 'View backup' })).toBeNull();
+
+  await user.click(screen.getByRole('button', { name: 'Resume' }));
+  await waitFor(() => expect(m.callsTo('POST', '/api/projects/acme-demo/plans/pl1/apply')).toHaveLength(2));
+  expect(await screen.findByRole('heading', { name: 'Applied to Test' })).toBeInTheDocument();
+  expect(within(progress).getByRole('listitem', { name: 'Tickets: Done' })).toBeInTheDocument();
+  // The handler the resumed run found already as wanted is no longer running.
+  expect(within(progress).getByRole('listitem', { name: 'SMTP Send: Skipped' })).toBeInTheDocument();
+  expect(within(progress).queryAllByRole('listitem', { name: /: Running/ })).toHaveLength(0);
+});
+
+test('a job cancelled before reporting is shown as cancelled', async () => {
+  setup(simple(), { applyJobs: [{ id: 'a1', events: sse([{ type: 'step', data: { type: 'step', step: 'backup', status: 'running' } }], 'cancelled'), status: 'cancelled' }] });
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  await go(user);
+  expect(await screen.findByRole('heading', { name: 'Cancelled applying to Test' })).toBeInTheDocument();
+  expect(screen.getByRole('alert')).toHaveTextContent('Nothing was applied.');
+  expect(within(screen.getByRole('region', { name: 'Progress' })).getByRole('listitem', { name: /Backup of Test: Skipped/ })).toBeInTheDocument();
+});
+
+test('kept drift is not listed; preflight warnings must be ticked; a filled value takes care of its warning', async () => {
+  const ATTR = `${KAPP}#attributes.Web Server Url`;
+  setup(simple({
+    items: [
+      { key: FORM, type: 'forms', label: 'Leave request', action: 'skip-drift', drift: true, diff: [] },
+      { key: CONN, type: 'connections', label: 'Tickets', action: 'create', drift: false, diff: [] },
+    ],
+    needsAttention: [{ id: `drift:${FORM}`, kind: 'drift', key: FORM, message: 'Leave request was changed in Test since it was last promoted.' }],
+    environmentValues: [{ id: ATTR, key: KAPP, path: 'attributes.Web Server Url', label: 'Web Server Url', from: ['https://dev.example.com'], to: null, origin: 'attribute', required: false }],
+    warnings: [
+      `${KAPP}: environment-bound attribute "Web Server Url" is empty in the target and no override sets it`,
+      'Override for "kapps/old/kapp" matches nothing in the export (check the key against the export/ file paths)',
+    ],
+  }));
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  const attention = await screen.findByRole('region', { name: 'Needs attention' });
+  expect(attention).not.toHaveTextContent('Leave request was changed');
+  expect(within(screen.getByRole('region', { name: 'Items' })).getByText('Kept')).toBeInTheDocument();
+  const boxes = within(attention).getAllByRole('checkbox');
+  expect(boxes).toHaveLength(2);
+  expect(attention).toHaveTextContent('Web Server Url of hr is empty in Test and nothing sets it.');
+  await user.click(within(attention).getByRole('checkbox', { name: /matches nothing being promoted/ }));
+  expect(next()).toBeDisabled();
+  await user.click(within(attention).getByRole('checkbox', { name: /Web Server Url of hr/ }));
+  expect(next()).toBeEnabled();
+  await user.click(within(attention).getByRole('checkbox', { name: /Web Server Url of hr/ }));
+  expect(next()).toBeDisabled();
+  // Once the value is filled in, the entry is done by itself.
+  await user.click(within(attention).getByRole('checkbox', { name: /Web Server Url of hr/ }));
+  await user.click(next());
+  await user.type(screen.getByLabelText('Web Server Url in Test'), '[["https://test.example.com"]');
+  await user.click(screen.getByRole('button', { name: 'Back' }));
+  const filled = within(screen.getByRole('region', { name: 'Needs attention' })).getByRole('checkbox', { name: /Web Server Url of hr/ });
+  expect(filled).toBeChecked();
+  expect(filled).toBeDisabled();
+  expect(next()).toBeEnabled();
+});
+
+test('values: numbers are checked; an optional value cleared says the target keeps its own', async () => {
+  setup(simple({
+    environmentValues: [
+      { id: `${HANDLER}#properties.Timeout`, key: HANDLER, path: 'properties.Timeout', label: 'Timeout', from: 30, to: 60, origin: 'setting', required: false },
+      { id: `${KAPP}#attributes.Web Server Url`, key: KAPP, path: 'attributes.Web Server Url', label: 'Web Server Url', from: ['https://dev.example.com'], to: ['https://test.example.com'], origin: 'attribute', required: false },
+    ],
+  }));
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  await screen.findByRole('heading', { name: '3 items from Dev' });
+  await user.click(next());
+  const timeout = screen.getByLabelText('Timeout in Test');
+  await user.clear(timeout);
+  await user.type(timeout, 'soon');
+  expect(screen.getByText('Enter a number.')).toBeInTheDocument();
+  expect(next()).toBeDisabled();
+  await user.clear(timeout);
+  expect(screen.getByText('Left blank, so Test keeps its own value (60).')).toBeInTheDocument();
+  expect(next()).toBeEnabled();
+  // A list value is edited as JSON.
+  expect(screen.getByLabelText('Web Server Url in Test').tagName).toBe('TEXTAREA');
 });

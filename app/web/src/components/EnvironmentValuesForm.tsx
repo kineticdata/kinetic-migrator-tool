@@ -27,10 +27,12 @@ export interface EnvironmentValuesFormProps {
   edits: Record<string, string>;
   onEdit: (id: string, text: string) => void;
   missing: ReadonlySet<string>;
+  // Optional values cleared on purpose (not sent).
+  blank: ReadonlySet<string>;
   errors: Record<string, string>;
 }
 
-export function EnvironmentValuesForm({ values, from, to, edits, onEdit, missing, errors }: EnvironmentValuesFormProps) {
+export function EnvironmentValuesForm({ values, from, to, edits, onEdit, missing, blank, errors }: EnvironmentValuesFormProps) {
   const uid = useId();
   if (!values.length) {
     return (
@@ -50,10 +52,13 @@ export function EnvironmentValuesForm({ values, from, to, edits, onEdit, missing
       <ul className="divide-y divide-border">
         {values.map((v, index) => {
           const text = edits[v.id] ?? valueText(v.to);
-          const multiline = v.to !== null && typeof v.to === 'object';
+          const shape = v.to ?? v.from;
+          const multiline = shape !== null && typeof shape === 'object';
           const isMissing = missing.has(v.id);
           const error = errors[v.id];
-          const note = error ?? (isMissing ? `${envLabel(to)} has no value for this yet.` : undefined);
+          const note = error
+            ?? (isMissing ? `${envLabel(to)} has no value for this yet.` : undefined)
+            ?? (blank.has(v.id) ? `Left blank, so ${envLabel(to)} keeps its own value${v.to === null || v.to === undefined || v.to === '' ? '' : ` (${displayValue(v.to)})`}.` : undefined);
           const noteId = `${uid}-${index}-note`;
           const inputProps = {
             'aria-label': `${v.label} in ${envLabel(to)}`,
@@ -88,7 +93,7 @@ export function EnvironmentValuesForm({ values, from, to, edits, onEdit, missing
                 ) : (
                   <input {...inputProps} type="text" onChange={(e) => onEdit(v.id, e.target.value)} className={inputClasses} />
                 )}
-                {note && <p id={noteId} className={cn('mt-1 text-xs', error ? 'text-danger' : 'text-drift')}>{note}</p>}
+                {note && <p id={noteId} className={cn('mt-1 text-xs', error ? 'text-danger' : isMissing ? 'text-drift' : 'text-muted')}>{note}</p>}
               </div>
             </li>
           );

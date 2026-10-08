@@ -32,7 +32,8 @@ import { SecretInput } from '../components/ui/SecretInput';
 import { cn } from '../components/ui/cn';
 import { envLabel, plural } from '../lib/format';
 import {
-  attentionList, backupHref, checklistFrom, errorFix, groupByPhase, restoreHref, valuesPayload, writes, type ItemProgress,
+  applyOutcome, attentionList, backupHref, carryOver, checklistFrom, errorFix, groupByPhase, restoreHref, satisfied, settleChecklist, valuesPayload,
+  writes, type ApplyOutcome, type ItemProgress,
 } from '../lib/plan';
 import { useProjectContext } from '../lib/project';
 import { kindOfKey } from '../lib/tree-layout';
@@ -91,9 +92,14 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
   const groups = useMemo(() => groupByPhase(applied), [applied]);
 
   const job = useJob<ApplyResult>(jobId, { invalidate: [qk.project(projectId)] });
-  const checklist = useMemo(() => checklistFrom(job.events, carried), [job.events, carried]);
+  const live = useMemo(() => checklistFrom(job.events, carried), [job.events, carried]);
+  const finished = job.status !== 'idle' && job.status !== 'running';
+  const outcome = useMemo(() => (finished ? applyOutcome(job, live) : null), [finished, job, live]);
+  const checklist = useMemo(() => settleChecklist(live, outcome?.status ?? null, applied.map((i) => i.key)), [live, outcome, applied]);
+  const filled = useMemo(() => new Set(values.filled), [values.filled]);
+  const blank = useMemo(() => new Set(values.blank), [values.blank]);
 
-  const reviewOk = plan.errors.length === 0 && attention.every((a) => ticked.has(a.id));
+  const reviewOk = plan.errors.length === 0 && attention.every((a) => satisfied(a, ticked, filled));
   const valuesOk = values.missing.length === 0 && Object.keys(values.errors).length === 0;
   const confirmOk = confirm === plan.to && !isProtected;
 
@@ -122,7 +128,7 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
   };
 
   const resume = (again: Record<string, string>) => {
-    setCarried(checklist.items);
+    setCarried(carryOver(checklist));
     return send(again);
   };
 
@@ -160,7 +166,7 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
       )}
 
       {step === 0 && (
-        <Review plan={plan} attention={attention} ticked={ticked} onToggle={(id) => setTicked((cur) => {
+        <Review plan={plan} attention={attention} ticked={ticked} filled={filled} onToggle={(id) => setTicked((cur) => {
           const nextSet = new Set(cur);
           if (nextSet.has(id)) nextSet.delete(id);
           else nextSet.add(id);
@@ -175,7 +181,7 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
 
       {step === 1 && (
         <StepCard title="Environment values" description={`Values that differ per environment, ${From} beside ${To}. Changes are saved for ${To} when the apply starts.`}>
-          <EnvironmentValuesForm values={plan.environmentValues} from={plan.from} to={plan.to} edits={edits} onEdit={(id, text) => setEdits((cur) => ({ ...cur, [id]: text }))} missing={missing} errors={values.errors} />
+          <EnvironmentValuesForm values={plan.environmentValues} from={plan.from} to={plan.to} edits={edits} onEdit={(id, text) => setEdits((cur) => ({ ...cur, [id]: text }))} missing={missing} blank={blank} errors={values.errors} />
           {plan.secretsNeeded.length > 0 && (
             <section aria-label="Secrets needed" className="mt-6 rounded-xl border border-border bg-surface p-4">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-fg"><KeyRound size={15} aria-hidden className="text-muted" />Secrets needed</h3>
@@ -229,7 +235,7 @@ function PlanFlow({ projectId, plan }: { projectId: string; plan: PlanResult }) 
 
       {step === 3 && (
         <ApplyStep
-          projectId={projectId} plan={plan} groups={groups} checklist={checklist} job={job} oneRun={oneRun}
+          projectId={projectId} plan={plan} groups={groups} checklist={checklist} job={job} outcome={outcome} oneRun={oneRun}
           onResume={resume} resuming={submitting} resumeError={submitError}
         />
       )}
@@ -280,8 +286,8 @@ function Stat({ value, label, tone }: { value: number; label: string; tone: stri
   );
 }
 
-function Review({ plan, attention, ticked, onToggle, footer }: {
-  plan: PlanResult; attention: ReturnType<typeof attentionList>; ticked: Set<string>; onToggle: (id: string) => void; footer: ReactNode;
+function Review({ plan, attention, ticked, filled, onToggle, footer }: {
+  plan: PlanResult; attention: ReturnType<typeof attentionList>; ticked: Set<string>; filled: ReadonlySet<string>; onToggle: (id: string) => void; footer: ReactNode;
 }) {
   const c = plan.counts;
   const skip = c.unchanged + c.manual + c['skip-drift'];
@@ -316,7 +322,7 @@ function Review({ plan, attention, ticked, onToggle, footer }: {
         </section>
       )}
 
-      {attention.length > 0 && <NeedsAttention entries={attention} ticked={ticked} onToggle={onToggle} />}
+      {attention.length > 0 && <NeedsAttention entries={attention} ticked={ticked} filled={filled} onToggle={onToggle} />}
 
       <section aria-label="Items" className="overflow-hidden rounded-xl border border-border bg-surface">
         {all.map((g) => (
@@ -403,29 +409,32 @@ function ConfirmSummary({ plan, changedValues, secrets, remember, acknowledged }
 
 // ---- Apply -------------------------------------------------------------------
 
-function ApplyStep({ projectId, plan, groups, checklist, job, oneRun, onResume, resuming, resumeError }: {
+function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, onResume, resuming, resumeError }: {
   projectId: string;
   plan: PlanResult;
   groups: ReturnType<typeof groupByPhase>;
   checklist: ReturnType<typeof checklistFrom>;
   job: JobState<ApplyResult>;
+  outcome: ApplyOutcome | null;
   oneRun: string[];
   onResume: (secrets: Record<string, string>) => Promise<void>;
   resuming: boolean;
   resumeError: unknown;
 }) {
   const To = envLabel(plan.to);
-  const result = job.result;
-  const running = job.status === 'running' || job.status === 'idle';
-  const success = job.status === 'succeeded' && result?.status === 'applied';
-  const failed = !running && !success;
-  const error = result?.error ?? job.error ?? (job.status === 'cancelled' ? 'The apply was cancelled.' : 'The apply did not finish.');
-  const backup = result?.backupCommit ?? null;
+  const running = !outcome;
+  const success = outcome?.status === 'applied';
+  const failed = Boolean(outcome && !success);
+  const backup = outcome?.backupCommit ?? null;
   const [again, setAgain] = useState<Record<string, string>>({});
   const resumeSecrets = plan.secretsNeeded.filter((s) => oneRun.includes(s.id));
 
-  const heading = running ? `Applying to ${To}…` : success ? `Applied to ${To}` : result?.status === 'cancelled' ? 'Cancelled' : 'Stopped';
-  const stopped = result && result.done > 0 ? `Stopped after ${plural(result.done, 'change')}.` : 'Nothing was applied.';
+  const heading = !outcome ? `Applying to ${To}…` : {
+    applied: `Applied to ${To}`, partial: `Partly applied to ${To}`, failed: `Failed to apply to ${To}`, cancelled: `Cancelled applying to ${To}`,
+  }[outcome.status];
+  const summary = !outcome ? '' : outcome.done > 0
+    ? `${outcome.status === 'cancelled' ? 'Cancelled' : 'Stopped'} after ${plural(outcome.done, 'change')}.`
+    : 'Nothing was applied.';
 
   const resume = () => {
     const given = again;
@@ -443,10 +452,10 @@ function ApplyStep({ projectId, plan, groups, checklist, job, oneRun, onResume, 
         {running && <Button size="sm" variant="ghost" onClick={job.cancel}>Cancel</Button>}
       </div>
 
-      {success && result && (
+      {success && outcome && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-added/30 bg-added-soft px-4 py-3">
           <p className="text-sm text-fg">
-            {plural(result.done, 'change')} applied to {To}. A backup was taken first and the run is recorded in History.
+            {plural(outcome.done, 'change')} applied to {To}. A backup was taken first and the run is recorded in History.
           </p>
           <div className="flex items-center gap-2">
             <LinkButton size="sm" to={`/p/${projectId}/compare`} icon={<Undo2 size={14} aria-hidden />}>Back to Compare</LinkButton>
@@ -455,11 +464,11 @@ function ApplyStep({ projectId, plan, groups, checklist, job, oneRun, onResume, 
         </div>
       )}
 
-      {failed && (
-        <div role="alert" className="rounded-xl border border-danger/40 bg-danger-soft px-4 py-3">
-          <p className="flex items-start gap-2 text-sm font-medium text-danger">
+      {failed && outcome && (
+        <div role="alert" className={cn('rounded-xl border px-4 py-3', outcome.status === 'cancelled' ? 'border-drift/40 bg-drift-soft' : 'border-danger/40 bg-danger-soft')}>
+          <p className={cn('flex items-start gap-2 text-sm font-medium', outcome.status === 'cancelled' ? 'text-drift' : 'text-danger')}>
             <AlertOctagon size={16} aria-hidden className="mt-0.5 shrink-0" />
-            <span>{stopped} {error}</span>
+            <span>{summary}{outcome.error && outcome.error !== 'The apply was cancelled.' ? ` ${outcome.error}` : ''}</span>
           </p>
           <p className="mt-1 pl-6 text-[13px] text-fg">
             Nothing was rolled back. Resume plans again against {To} and continues with what is left; or restore {To} from the backup.
@@ -480,7 +489,7 @@ function ApplyStep({ projectId, plan, groups, checklist, job, oneRun, onResume, 
         </div>
       )}
 
-      <ApplyChecklist to={plan.to} groups={groups} state={checklist} finished={success} />
+      <ApplyChecklist to={plan.to} groups={groups} state={checklist} />
     </div>
   );
 }

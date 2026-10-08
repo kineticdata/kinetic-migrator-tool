@@ -50,16 +50,21 @@ function Group({ title, done, total, children }: { title: string; done: number; 
 export interface ApplyChecklistProps {
   to: string;
   groups: Array<Phase & { items: PlanItemOut[] }>;
+  // Settled by the page once the job ends (no row is left running).
   state: ChecklistState;
-  // Items the finished job never reached were already as wanted.
-  finished: boolean;
 }
 
-export function ApplyChecklist({ to, groups, state, finished }: ApplyChecklistProps) {
-  const statusOf = (key: string): StepStatus => state.items[key]?.status ?? (finished ? 'skipped' : 'pending');
+export function ApplyChecklist({ to, groups, state }: ApplyChecklistProps) {
+  const statusOf = (key: string): StepStatus => state.items[key]?.status ?? 'pending';
   const settled = (s: StepStatus) => s === 'done' || s === 'skipped';
+  const total = 1 + groups.reduce((n, g) => n + g.items.length, 0);
+  const done = (settled(state.backup) ? 1 : 0) + groups.reduce((n, g) => n + g.items.filter((i) => settled(statusOf(i.key))).length, 0);
   return (
     <section aria-label="Progress" className="overflow-hidden rounded-xl border border-border bg-surface">
+      <p role="status" aria-live="polite" className="flex items-center justify-between gap-3 px-4 py-2 text-[13px] text-muted">
+        <span>Steps</span>
+        <span className="tabular-nums">{done} of {total} done</span>
+      </p>
       <Group title="Backup" done={settled(state.backup) ? 1 : 0} total={1}>
         <Row label={`Backup of ${envLabel(to)}`} status={state.backup} />
       </Group>

@@ -28,6 +28,10 @@ export interface CreateJobOptions {
   // Write jobs pass the target (for example `<projectId>/<env>`); a second
   // job with the same key while the first runs is rejected with 409.
   lockKey?: string;
+  // The run reports its own cancellation in its result (an apply records what
+  // it wrote before stopping): a result returned after a cancel is kept and
+  // the job succeeds.
+  resultOnCancel?: boolean;
 }
 
 export class JobRegistry {
@@ -40,7 +44,7 @@ export class JobRegistry {
   }
 
   createJob<R>(kind: string, run: JobRun<R>, opts: CreateJobOptions = {}): string {
-    const { lockKey } = opts;
+    const { lockKey, resultOnCancel } = opts;
     if (lockKey !== undefined && this.locks.has(lockKey)) {
       throw new ApiError(409, 'locked', 'Another change is already running against this environment.', { jobId: this.locks.get(lockKey) });
     }
@@ -69,7 +73,7 @@ export class JobRegistry {
     const done = (async () => {
       try {
         const result = await run(emit, controller.signal);
-        if (controller.signal.aborted) return finish('cancelled');
+        if (controller.signal.aborted && !resultOnCancel) return finish('cancelled');
         job.result = result;
         return finish('succeeded');
       } catch (err) {

@@ -392,7 +392,6 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   let status: RunStatus = 'applied';
   let error: string | null = null;
   let done = 0;
-  let cancelled: unknown = null;
   try {
     const res = await runApply({
       projectDir: ref.dir, envName: r.to, env, sourceDir: plan.sourceDir, yes: true, select: plan.select, resolutions: input.resolutions,
@@ -409,7 +408,7 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
     if ((err as { name?: string } | null)?.name === 'CancelledError' || signal.aborted) {
       status = 'cancelled';
       error = 'The apply was cancelled.';
-      cancelled = err;
+      for (const o of outcomes.values()) if (o.status === 'running') Object.assign(o, { status: 'skipped', message: 'Cancelled before it finished.' });
     } else {
       status = done ? 'partial' : 'failed';
       error = failed ? `${failed.key}: ${failed.message ?? toApiError(err).message}` : toApiError(err).message;
@@ -438,10 +437,10 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   }
   const verb = plan.kind === 'restore'
     ? { applied: 'Restored', partial: 'Partly restored', failed: 'Failed to restore', cancelled: 'Partly restored' }[status]
-    : { applied: 'Applied', partial: 'Partly applied', failed: 'Failed to apply', cancelled: 'Partly applied' }[status];
+    : { applied: 'Applied', partial: 'Partly applied', failed: 'Failed to apply', cancelled: 'Cancelled applying' }[status];
   const title = plan.kind === 'restore' ? `${verb} ${To} from a backup` : `${verb} '${r.name}' to ${To}`;
   const commit = await commitChange(ref, commitMessage(title, { Environment: r.to, Run: runId, Changeset: r.changesetId, Plan: r.planId }));
-  if (cancelled) throw cancelled;
+  // A cancelled apply still reports what it did (the job keeps this result).
   return scrub({ runId, status, commit, backupCommit, done, error });
 }
 
@@ -471,6 +470,7 @@ export function registerRunRoutes(router: Router, ctx: SyncContext): void {
       }
     }, {
       lockKey: `${ref.id}/${plan.result.to}`,
+      resultOnCancel: true,
     });
     return { status: 202, json: { jobId } };
   });

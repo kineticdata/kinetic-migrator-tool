@@ -16,8 +16,13 @@ const KIND: Record<AttentionEntry['kind'], { label: string; icon: ReactNode }> =
   warning: { label: 'Preflight', icon: <Database size={15} aria-hidden /> },
 };
 
-export function NeedsAttention({ entries, ticked, onToggle }: { entries: AttentionEntry[]; ticked: ReadonlySet<string>; onToggle: (id: string) => void }) {
-  const count = entries.filter((e) => ticked.has(e.id)).length;
+// `filled` holds environment values filled in: entries they take care of are
+// shown as done without a tick.
+export function NeedsAttention({ entries, ticked, filled, onToggle }: {
+  entries: AttentionEntry[]; ticked: ReadonlySet<string>; filled: ReadonlySet<string>; onToggle: (id: string) => void;
+}) {
+  const byValue = (e: AttentionEntry) => Boolean(e.valueId && filled.has(e.valueId));
+  const count = entries.filter((e) => ticked.has(e.id) || byValue(e)).length;
   const all = count === entries.length;
   return (
     <section aria-label="Needs attention" className="overflow-hidden rounded-xl border border-drift/40 bg-surface">
@@ -27,12 +32,13 @@ export function NeedsAttention({ entries, ticked, onToggle }: { entries: Attenti
           Needs attention
         </h3>
         <span className={cn('text-xs tabular-nums', all ? 'font-medium text-added' : 'text-muted')} aria-live="polite">
-          {count} of {entries.length} ticked
+          {count} of {entries.length} done
         </span>
       </div>
       <ul className="divide-y divide-border">
         {entries.map((e) => {
-          const on = ticked.has(e.id);
+          const auto = byValue(e);
+          const on = ticked.has(e.id) || auto;
           const k = KIND[e.kind];
           return (
             <li key={e.id}>
@@ -40,6 +46,7 @@ export function NeedsAttention({ entries, ticked, onToggle }: { entries: Attenti
                 <input
                   type="checkbox"
                   checked={on}
+                  disabled={auto}
                   onChange={() => onToggle(e.id)}
                   className="mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--accent)]"
                 />
@@ -48,6 +55,7 @@ export function NeedsAttention({ entries, ticked, onToggle }: { entries: Attenti
                   <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-subtle">
                     <span className="inline-flex items-center gap-1 text-muted">{k.icon}{k.label}</span>
                     {e.key && <span className="truncate font-mono text-[11px]" title={e.key}>{e.key}</span>}
+                    {auto && <span className="font-medium text-added">Filled in under Environment values</span>}
                   </span>
                 </span>
               </label>

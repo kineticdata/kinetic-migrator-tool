@@ -163,3 +163,32 @@ test('a failed item stops the apply: partial run record, plain error, then resum
   assert.equal(resumed.result.status, 'applied', resumed.result.error);
   assertNoSecret(h, [first.events, resumed.events]);
 });
+
+test('a cancelled apply finishes with its real outcome: run record, backup, items done so far and a plain commit', async (t) => {
+  const h = await harness(t);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  const p = await plan(h, { to: 'test', from: 'dev', selected: ['teams/Ops', FORM, CONN, OP] });
+  const original = h.spaces.test;
+  let jobId = '';
+  // Cancel while the first item (the team) is being written.
+  h.spaces.test = () => ({ ...original(), 'PUT core/teams/ops': () => { h.server.jobs.abort(jobId); return { team: {} }; } });
+  const started = await h.call('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [`index:${FORM}`, `connection-secrets:${CONN}`], confirm: 'test' });
+  assert.equal(started.status, 202);
+  jobId = started.json.jobId;
+  await h.server.jobs.wait(jobId);
+  const job = (await h.call('GET', `/api/jobs/${jobId}`)).json;
+  assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
+  const result = job.result as ApplyResult;
+  assert.equal(result.status, 'cancelled');
+  assert.equal(result.error, 'The apply was cancelled.');
+  assert.equal(result.done, 1);
+  assert.ok(result.backupCommit);
+  assert.ok(result.runId);
+  assert.match((await log(h.dir, { limit: 1 }))[0].message, /^Cancelled applying '4 items from Dev' to Test/);
+  const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${result.runId}.json`), 'utf8')) as RunRecord;
+  assert.equal(run.status, 'cancelled');
+  assert.deepEqual(run.items, [{ key: 'teams/Ops', status: 'done' }]);
+  // The lock is released: the same target can be applied to again.
+  const again = await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [`index:${FORM}`, `connection-secrets:${CONN}`], confirm: 'test' });
+  assert.equal(again.result.status, 'applied', again.result.error);
+});
