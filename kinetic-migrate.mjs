@@ -1,0 +1,60 @@
+#!/usr/bin/env node
+// kinetic-migrate: export a Kinetic Platform space into a project directory and
+// promote it into another environment. See docs/PROMOTING.md.
+import { parseArgs } from 'node:util';
+import { resolve } from 'node:path';
+import { runInit, runExport, runPlan, runApply, runCompare } from './lib/sync/commands.mjs';
+import { PRUNABLE } from './lib/sync/artifacts/index.mjs';
+
+const USAGE = `Usage:
+  node kinetic-migrate.mjs init    [--project <dir>]
+  node kinetic-migrate.mjs export  [--project <dir>] --env <name>
+  node kinetic-migrate.mjs plan    [--project <dir>] --to <name> [--overwrite-drift]
+  node kinetic-migrate.mjs apply   [--project <dir>] --to <name> [--yes] [--overwrite-drift] [--prune <type>]...
+  node kinetic-migrate.mjs compare [--project <dir>] --from <name> --to <name> [--raw]
+
+--project defaults to the current directory.
+--prune types: ${PRUNABLE.join(', ')}`;
+
+const OPTIONS = {
+  project: { type: 'string' },
+  env: { type: 'string' },
+  from: { type: 'string' },
+  to: { type: 'string' },
+  yes: { type: 'boolean' },
+  raw: { type: 'boolean' },
+  'overwrite-drift': { type: 'boolean' },
+  prune: { type: 'string', multiple: true },
+  help: { type: 'boolean', short: 'h' },
+};
+
+async function main(argv) {
+  const { values, positionals } = parseArgs({ args: argv, options: OPTIONS, strict: true, allowPositionals: true });
+  const [command] = positionals;
+  if (!command || command === 'help' || values.help) {
+    console.log(USAGE);
+    return command || values.help ? 0 : 1;
+  }
+  const projectDir = resolve(values.project ?? process.cwd());
+  const log = (m) => console.log(m);
+  const need = (flag) => {
+    if (!values[flag]) throw new Error(`${command} needs --${flag} <environment>\n\n${USAGE}`);
+    return values[flag];
+  };
+  switch (command) {
+    case 'init': return runInit({ projectDir, log });
+    case 'export': return runExport({ projectDir, envName: need('env'), log });
+    case 'plan': return runPlan({ projectDir, envName: need('to'), overwriteDrift: values['overwrite-drift'], log });
+    case 'apply': return runApply({
+      projectDir, envName: need('to'), yes: values.yes, prune: values.prune ?? [],
+      overwriteDrift: values['overwrite-drift'], log,
+    });
+    case 'compare': return runCompare({ projectDir, from: need('from'), to: need('to'), raw: values.raw, log });
+    default: throw new Error(`Unknown command "${command}"\n\n${USAGE}`);
+  }
+}
+
+main(process.argv.slice(2)).then(
+  (code) => { process.exitCode = code; },
+  (e) => { console.error(`kinetic-migrate: ${e.message}`); process.exitCode = 1; },
+);

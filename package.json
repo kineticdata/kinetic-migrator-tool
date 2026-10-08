@@ -1,0 +1,12 @@
+{
+  "name": "kinetic-migrate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Explore, compare and promote Kinetic Platform configuration between environments.",
+  "type": "module",
+  "bin": { "kinetic-migrate": "./kinetic-migrate.mjs" },
+  "engines": { "node": ">=20.6" },
+  "scripts": {
+    "test": "node --test lib/sync/*.test.mjs lib/sync/artifacts/*.test.mjs"
+  }
+}

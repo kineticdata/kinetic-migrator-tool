@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+# Local customer projects, credentials, backups — never commit
+projects/
+.env*
+.superpowers/
