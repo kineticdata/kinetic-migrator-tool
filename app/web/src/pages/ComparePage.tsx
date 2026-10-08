@@ -2,7 +2,9 @@
 // status per item, rolled-up counts and tri-state checkboxes; the selected
 // item's changes (a readable table, side-by-side JSON, or the three-way view
 // of a drifted item); and the changeset tray, always visible, with explained
-// suggestions, Review plan → and Save as changeset….
+// suggestions, Review plan → and Save as changeset…. An item only in the
+// target has no checkbox: its own Remove action marks it for removal (never a
+// parent tick, never a suggestion).
 //
 // From, To, the mode and the open item live in the URL. A finished comparison
 // is cached by its inputs and both snapshot commits, so returning is instant
@@ -13,7 +15,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type Keyboard
 import { useNavigate, useSearchParams } from 'react-router';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ArrowLeftRight, ArrowRight, Camera, ChevronsDownUp, ChevronsUpDown, GitCompare, MousePointerClick, RotateCcw, Search, X,
+  ArrowLeftRight, ArrowRight, Camera, ChevronsDownUp, ChevronsUpDown, GitCompare, MousePointerClick, RotateCcw, Search, Trash2, X,
 } from 'lucide-react';
 import type { JobStarted } from '../../../shared/api';
 import type {
@@ -41,8 +43,8 @@ import { cn } from '../components/ui/cn';
 import { envLabel, formatDateTime, plural } from '../lib/format';
 import { newestFirst, useProjectContext } from '../lib/project';
 import {
-  SELECTABLE, addItems, checkStateOf, emptySelection, isSelectable, planResolutions, pruneSelection, removeKeys, selectedKeys,
-  setResolution, tickKind, toggleItem, toggleNode, underCounts, type CheckState, type KeyStatus, type Selection,
+  SELECTABLE, addItems, checkStateOf, emptySelection, isMarkedForRemoval, isRemovable, isSelectable, planResolutions, pruneSelection, removalKeys, removeKeys, selectedKeys,
+  setResolution, tickKind, toggleItem, toggleNode, toggleRemoval, underCounts, unmarkRemovals, type CheckState, type KeyStatus, type Selection,
 } from '../lib/selection';
 import { ancestorsOf, kindOfKey, nameOfKey } from '../lib/tree-layout';
 
@@ -60,7 +62,9 @@ function loadSelection(key: string): Selection {
   try {
     const raw = sessionStorage.getItem(key);
     const v = raw ? JSON.parse(raw) : null;
-    if (v && typeof v.items === 'object' && typeof v.resolutions === 'object') return v as Selection;
+    if (v && typeof v.items === 'object' && typeof v.resolutions === 'object') {
+      return { ...v, remove: Array.isArray(v.remove) ? v.remove.filter((k: unknown) => typeof k === 'string') : [] } as Selection;
+    }
   } catch {
     // Unavailable or unreadable: start empty.
   }
@@ -333,10 +337,31 @@ function CompareTree({ projectId, result, sel, setSel, selectedKey, onSelect, fi
 
   const aside = (row: TreeRow) => {
     const node = row.node as CompareTreeNode;
+    const removable = Boolean(node.key && isRemovable(node.status));
+    const marked = removable && isMarkedForRemoval(sel, node.key!);
     return (
       <>
         {node.hasChildren && <RollupCounts counts={node.counts} to={result.to} />}
-        {node.key && node.status && <ItemStatus status={node.status} to={result.to} />}
+        {node.key && node.status && !marked && <ItemStatus status={node.status} to={result.to} />}
+        {removable && (
+          // Mouse shortcut for the detail pane's Remove from … button (the
+          // treeitem itself stays the one focusable row).
+          <span
+            aria-hidden
+            data-remove
+            title={marked ? `Keep in ${envLabel(result.to)}` : `Remove from ${envLabel(result.to)}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setSel((cur) => toggleRemoval(cur, node.key!, node.status));
+            }}
+            className={cn(
+              'inline-flex h-5 cursor-pointer items-center gap-1 rounded-md border px-1.5 text-xs font-medium',
+              marked ? 'border-danger bg-danger text-danger-fg' : 'border-danger/40 text-danger hover:bg-danger-soft',
+            )}
+          >
+            <Trash2 size={11} />{marked ? 'Removing' : 'Remove'}
+          </span>
+        )}
       </>
     );
   };
@@ -445,13 +470,20 @@ function ItemDetail({ projectId, result, itemKey, sel, setSel, suggestions, onAd
   const from = result.fromName;
   const to = result.to;
   const selected = Boolean(sel.items[it.key]);
+  const marked = isMarkedForRemoval(sel, it.key);
   const resolution: Resolution | null = selected ? 'overwrite' : sel.resolutions[it.key] === 'keep' ? 'keep' : null;
   const diff = it.diff;
   const mine = suggestions.filter((s) => s.forKey === it.key);
 
   let changes;
   if (it.status === 'new') changes = <p className="text-sm text-muted">New in {from}: {envLabel(to)} doesn’t have it yet. Everything below is incoming.</p>;
-  else if (it.status === 'only-target') changes = <p className="text-sm text-muted">Only in {envLabel(to)}. Promoting never deletes it.</p>;
+  else if (it.status === 'only-target') {
+    changes = (
+      <p className="text-sm text-muted">
+        Only in {envLabel(to)}. Promoting never deletes it{marked ? `; it is marked to be removed from ${envLabel(to)} when this changeset is applied.` : `. Choose Remove from ${envLabel(to)} to delete it as part of this changeset.`}
+      </p>
+    );
+  }
   else if (!diff.length) changes = <p className="text-sm text-muted">No differences{it.status === 'manual' ? ': this item is promoted by hand.' : '.'}</p>;
   else changes = <DiffNamesProvider value={names}><FieldDiffTable diff={diff} from={from} to={to} /></DiffNamesProvider>;
 
@@ -471,6 +503,17 @@ function ItemDetail({ projectId, result, itemKey, sel, setSel, suggestions, onAd
         {(it.status === 'new' || it.status === 'changed') && (
           <Button size="sm" variant={selected ? 'secondary' : 'primary'} onClick={() => setSel((s) => toggleItem(s, it.key, it.status))}>
             {selected ? 'Remove from changeset' : 'Add to changeset'}
+          </Button>
+        )}
+        {it.status === 'only-target' && (
+          <Button
+            size="sm"
+            variant={marked ? 'secondary' : 'danger'}
+            aria-pressed={marked}
+            icon={marked ? undefined : <Trash2 size={14} aria-hidden />}
+            onClick={() => setSel((s) => toggleRemoval(s, it.key, it.status))}
+          >
+            {marked ? `Keep in ${envLabel(to)}` : `Remove from ${envLabel(to)}`}
           </Button>
         )}
       </div>
@@ -630,12 +673,14 @@ export function ComparePage() {
   const result = useMemo(() => (run.result && restore ? { ...run.result, fromName: fromLabel } : run.result), [run.result, restore, fromLabel]);
   const [sel, setSel] = useSelection(project.id, restore ? `restore:${restore}` : from, to);
   const keys = useMemo(() => selectedKeys(sel), [sel]);
+  const removing = useMemo(() => removalKeys(sel), [sel]);
+  const looked = useMemo(() => [...keys, ...removing], [keys, removing]);
   const [filters, setFilterState] = useState<TreeFilters>({ onlyDiff: true, status: null, section: ALL, text: '' });
   const setFilters = (f: Partial<TreeFilters>) => setFilterState((cur) => ({ ...cur, ...f }));
 
   // Preselected items (a restore) are ticked once per comparison.
   const preselectedFor = useRef<string | null>(null);
-  const lookup = useSelectionLookup(project.id, result?.compareId, keys);
+  const lookup = useSelectionLookup(project.id, result?.compareId, looked);
   // Their statuses come from the comparison's tree; drifted ones are left
   // for a decision.
   useEffect(() => {
@@ -708,6 +753,10 @@ export function ComparePage() {
     const sug = suggestionData?.find((s) => s.key === key);
     return { key, label: node?.label ?? sug?.label ?? nameOfKey(key), kind: node?.kind ?? kindOfKey(key), status: sel.items[key] };
   });
+  const trayRemovals: TrayItem[] = removing.map((key) => {
+    const node = lookup.nodes.get(key);
+    return { key, label: node?.label ?? nameOfKey(key), kind: node?.kind ?? kindOfKey(key), status: 'only-target' };
+  });
 
   // Review plan →: a plan job for the selection, then the plan screen.
   const [planJob, setPlanJob] = useState<string | null>(null);
@@ -724,6 +773,7 @@ export function ComparePage() {
       const resolutions = planResolutions(sel);
       const { jobId } = await startPlan(project.id, {
         to, from, selected: keys,
+        ...(removing.length ? { remove: removing } : {}),
         ...(result?.sourceCommit ? { sourceCommit: result.sourceCommit } : {}),
         ...(restore ? { restore: true } : {}),
         ...(Object.keys(resolutions).length ? { resolutions } : {}),
@@ -736,12 +786,16 @@ export function ComparePage() {
 
   const create = useCreateChangeset(project.id);
   const [saved, setSaved] = useState<{ id: string; name: string; href: string; keys: string } | null>(null);
+  const savedId = [...keys, '', ...removing].join('\n');
   const save = async (v: { name: string; description: string }) => {
-    const cs = await create.mutateAsync({ name: v.name, description: v.description, from, keys, ...(result?.sourceCommit ? { sourceCommit: result.sourceCommit } : {}) });
-    setSaved({ id: cs.id, name: cs.name, href: `/p/${project.id}/changesets/${encodeURIComponent(cs.id)}`, keys: keys.join('\n') });
-    toast.show({ tone: 'success', title: `Saved changeset “${cs.name}”`, description: plural(cs.keys.length, 'item') });
+    const cs = await create.mutateAsync({
+      name: v.name, description: v.description, from, keys, ...(removing.length ? { remove: removing } : {}), ...(result?.sourceCommit ? { sourceCommit: result.sourceCommit } : {}),
+    });
+    setSaved({ id: cs.id, name: cs.name, href: `/p/${project.id}/changesets/${encodeURIComponent(cs.id)}`, keys: savedId });
+    const removed = cs.remove?.length ?? 0;
+    toast.show({ tone: 'success', title: `Saved changeset “${cs.name}”`, description: [cs.keys.length ? plural(cs.keys.length, 'item') : '', removed ? `${plural(removed, 'removal')}` : ''].filter(Boolean).join(', ') });
   };
-  const savedNow = saved && saved.keys === keys.join('\n') ? saved : null;
+  const savedNow = saved && saved.keys === savedId ? saved : null;
 
   const open = (key: string) => setParam({ item: key });
 
@@ -867,6 +921,8 @@ export function ComparePage() {
               from={from}
               to={to}
               items={trayItems}
+              removals={trayRemovals}
+              onUnremove={(key) => setSel((s) => unmarkRemovals(s, [key]))}
               resolutions={sel.resolutions}
               suggestions={suggestions}
               suggestionsLoading={keys.length > 0 && suggestionsQuery.isFetching && !suggestionsQuery.data}

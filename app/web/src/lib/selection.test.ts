@@ -3,7 +3,8 @@
 import { expect, test } from 'vitest';
 import type { CompareTreeNode } from '../../../shared/sync-api';
 import {
-  checkStateOf, emptySelection, pruneSelection, selectedKeys, setResolution, tickKind, toggleItem, toggleNode, underCounts, type Selection,
+  addItems, addRemovals, checkStateOf, emptySelection, pruneSelection, removalKeys, selectedKeys, setResolution, tickKind, toggleItem, toggleNode, toggleRemoval,
+  underCounts, unmarkRemovals, type Selection,
 } from './selection';
 
 const node = (id: string, over: Partial<CompareTreeNode> = {}): CompareTreeNode => ({
@@ -93,4 +94,28 @@ test('pruning drops keys that no longer differ, and drifted ones nobody chose to
   expect(selectedKeys(selection)).toEqual([APPROVAL.key]);
   // Keys not looked up yet are left alone.
   expect(pruneSelection(sel, new Map()).removed).toEqual([]);
+});
+
+test('removals: only items only in the target are marked, on purpose; parent ticks and adds keep them; refresh drops ones no longer only in the target', () => {
+  const ONLY = node('teams/old', { kind: 'team', status: 'only-target' });
+  let sel = emptySelection();
+  expect(tickKind(ONLY)).toBe('none');
+  sel = toggleRemoval(sel, 'teams/old', 'only-target');
+  sel = toggleRemoval(sel, LEAVE.key!, 'new');
+  expect(removalKeys(sel)).toEqual(['teams/old']);
+  expect(selectedKeys(sel)).toEqual([]);
+  // A parent tick and an added suggestion never add removals and keep them.
+  sel = toggleNode(sel, FORMS, KIDS, state(FORMS, sel));
+  sel = addItems(sel, [{ key: 'teams/old', status: 'only-target' }]);
+  expect(selectedKeys(sel)).toEqual([LEAVE.key, TRAVEL.key]);
+  expect(removalKeys(sel)).toEqual(['teams/old']);
+  sel = addRemovals(sel, ['teams/old', 'teams/other']);
+  expect(removalKeys(sel)).toEqual(['teams/old', 'teams/other']);
+  const { selection, removed } = pruneSelection(sel, new Map([['teams/old', 'only-target'], ['teams/other', 'same']]));
+  expect(removalKeys(selection)).toEqual(['teams/old']);
+  expect(removed).toEqual(['teams/other']);
+  expect(removalKeys(unmarkRemovals(selection, ['teams/old']))).toEqual([]);
+  expect(removalKeys(toggleRemoval(selection, 'teams/old', 'only-target'))).toEqual([]);
+  // Selections kept before removals existed have no `remove`.
+  expect(removalKeys({ items: {}, resolutions: {} })).toEqual([]);
 });

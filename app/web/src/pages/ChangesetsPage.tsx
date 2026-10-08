@@ -61,7 +61,10 @@ function ChangesetRow({ projectId, cs }: { projectId: string; cs: Changeset }) {
       </td>
       <td className="px-4 py-3 text-fg">{envLabel(cs.from)}</td>
       <td className="px-4 py-3 text-muted">{pinned && <time dateTime={pinned} title={formatDateTime(pinned)}>{formatDate(pinned)}</time>}</td>
-      <td className="px-4 py-3 text-right text-fg tabular-nums">{cs.keys.length.toLocaleString('en')}</td>
+      <td className="px-4 py-3 text-right text-fg tabular-nums">
+        {cs.keys.length.toLocaleString('en')}
+        {(cs.remove?.length ?? 0) > 0 && <span className="ml-1.5 text-xs text-danger" title="Items to remove from the target">−{cs.remove!.length}</span>}
+      </td>
       <td className="px-5 py-3"><AppliedTo cs={cs} /></td>
     </tr>
   );
@@ -149,6 +152,25 @@ function ItemsCard({ keys }: { keys: string[] }) {
           </div>
         ))}
       </section>
+    </Card>
+  );
+}
+
+// Items only in a target that applying the changeset removes from it.
+function RemovalsCard({ keys }: { keys: string[] }) {
+  return (
+    <Card>
+      <CardHeader title="Remove from the target" description={`${plural(keys.length, 'item')} deleted from the target it is applied to, after everything else (each one only if it is there and unchanged since you review the plan).`} />
+      <ul aria-label="Removals" className="space-y-1 px-5 py-3">
+        {keys.map((k) => (
+          <li key={k} className="flex min-w-0 items-center gap-2.5">
+            <KindIcon kind={kindOfKey(k)} className="text-danger" />
+            <span className="text-sm text-fg">{nameOfKey(k)}</span>
+            <span className="min-w-0 truncate font-mono text-xs text-subtle" title={k}>{k}</span>
+            <Badge tone="danger" className="ml-auto"><span aria-hidden>−</span>Remove</Badge>
+          </li>
+        ))}
+      </ul>
     </Card>
   );
 }
@@ -319,7 +341,10 @@ export function ChangesetDetailPage() {
         <Button variant="ghost" size="sm" icon={<Trash2 size={14} aria-hidden />} onClick={() => setConfirming(true)}>Delete</Button>
       </div>
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <ItemsCard keys={c.keys} />
+        <div className="space-y-5">
+          {c.keys.length > 0 && <ItemsCard keys={c.keys} />}
+          {(c.remove?.length ?? 0) > 0 && <RemovalsCard keys={c.remove!} />}
+        </div>
         <div className="space-y-5">
           <Card>
             <CardHeader title="Promote" description="Ships the items exactly as they were in the pinned snapshot." />

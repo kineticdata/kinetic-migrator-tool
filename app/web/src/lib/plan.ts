@@ -3,7 +3,7 @@
 // errors, environment values to send (and which required ones are missing),
 // the apply phases and the live checklist built from streamed job events.
 import type { JobEventData } from '../../../shared/api';
-import type { AttentionKind, EnvironmentValue, PlanItemOut, PlanResult } from '../../../shared/sync-api';
+import type { AttentionKind, EnvironmentValue, PlanItemOut, PlanRemovalOut, PlanRequest, PlanResult, Resolution } from '../../../shared/sync-api';
 import { envLabel } from './format';
 import { nameOfKey } from './tree-layout';
 
@@ -20,10 +20,15 @@ export interface AttentionEntry {
   valueId?: string;
 }
 
-// Warnings the server already turns into needs-attention entries.
+// Warnings the server already turns into needs-attention entries, and those
+// shown with the removals they are about (in use is a warning to read, not
+// something to tick).
 const COVERED = [
   /: creating\/updating rows will run these workflows in the target: /,
   /: will be created without credentials/,
+  /: still used by .+; removing it may break them$/,
+  /: already gone from the target$/,
+  /: changed in the target since it was reviewed; it is not removed$/,
 ];
 
 // Engine warnings in plain words, where they are recognised.
@@ -78,6 +83,8 @@ export function errorFix(message: string, from: string, to: string): { message: 
     [/: not in the source snapshot$/, `Take a new snapshot of ${From}, or take this item out of the changeset.`],
     [/(same name but id|probably renamed)/, `Reconcile it by hand in ${To} (rename or remove one of the two), take a new snapshot, then plan again.`],
     [/^Unrecognized file in export/, `Take a new snapshot of ${From}.`],
+    [/can never be removed|cannot be removed|are never removed as an item/, 'Take it out of the removals, then plan again.'],
+    [/: is in the source too; only items that are only in the target can be removed$/, `It is in ${From} too, so it would be promoted, not removed: take it out of the removals, then plan again.`],
   ];
   const hit = rules.find(([re]) => re.test(message));
   return { message, fix: hit ? hit[1] : `Fix the cause in ${From} or ${To}, then plan again.` };
@@ -162,12 +169,12 @@ export const PHASES: Phase[] = [
   { id: 'file-resources', label: 'File resources', types: ['file-resources'] },
   { id: 'connections', label: 'Connections', types: ['connections', 'operations'] },
   { id: 'handlers', label: 'Handlers', types: ['handlers'] },
+  { id: 'routines', label: 'Routines', types: ['routines'] },
   { id: 'kapps', label: 'Kapps', types: ['kapps'] },
   { id: 'forms', label: 'Forms', types: ['forms'] },
   { id: 'webapis', label: 'WebAPIs', types: ['webapis'] },
   { id: 'workflows', label: 'Workflows', types: ['workflows'] },
   { id: 'data', label: 'Reference data', types: ['data'] },
-  { id: 'routines', label: 'Routines', types: ['routines'] },
 ];
 const OTHER: Phase = { id: 'other', label: 'Other', types: [] };
 
@@ -183,6 +190,37 @@ export function groupByPhase(items: PlanItemOut[]): Array<Phase & { items: PlanI
       return { ...ph, items: own };
     })
     .filter((g) => g.items.length > 0);
+}
+
+// ---- Removals --------------------------------------------------------------
+
+// Removals the apply deletes.
+export const deletes = (plan: PlanResult): PlanRemovalOut[] => (plan.removals ?? []).filter((r) => r.action === 'delete');
+
+// The apply checklist's rows for removals: each removal, then what it takes
+// with it (deleted with it, reported done with it).
+export function removalRows(plan: PlanResult): Array<{ key: string; label: string; sub?: string }> {
+  return deletes(plan).flatMap((r) => [
+    { key: r.key, label: r.label },
+    ...r.children.map((c) => ({ key: c.key, label: c.label, sub: `with ${r.label}` })),
+  ]);
+}
+
+// Removals whose item is still used by something that stays.
+export const inUse = (plan: PlanResult): PlanRemovalOut[] => deletes(plan).filter((r) => r.usedBy.length > 0);
+
+// A new plan with the same inputs and `extra` removed too (Also remove).
+// Drift decisions made for this plan (overwrites) are carried over.
+export function planWithRemovals(plan: PlanResult, extra: string[]): PlanRequest {
+  const remove = [...new Set([...(plan.remove ?? []), ...extra])].sort();
+  const resolutions: Record<string, Resolution> = {};
+  for (const i of plan.items) if (i.drift && i.action !== 'skip-drift') resolutions[i.key] = 'overwrite';
+  const decided = Object.keys(resolutions).length ? { resolutions } : {};
+  if (plan.changesetId) return { to: plan.to, changesetId: plan.changesetId, remove, ...decided };
+  return {
+    to: plan.to, from: plan.from, selected: plan.selected ?? [], remove,
+    ...(plan.sourceCommit ? { sourceCommit: plan.sourceCommit } : {}), ...decided,
+  };
 }
 
 // ---- Live checklist --------------------------------------------------------
@@ -248,7 +286,7 @@ export function applyOutcome(
 // reached is settled as skipped only when the plan marked it unchanged (it
 // was already as wanted); any other unreached row stays as it is, because
 // the server reports every item it skipped, with the reason.
-export function settleChecklist(state: ChecklistState, outcome: Outcome | null, items: Array<Pick<PlanItemOut, 'key' | 'action'>>): ChecklistState {
+export function settleChecklist(state: ChecklistState, outcome: Outcome | null, items: Array<{ key: string; action?: PlanItemOut['action'] }>): ChecklistState {
   if (!outcome) return state;
   const stopped: ItemProgress = outcome === 'cancelled' ? { status: 'skipped', message: 'Cancelled before it finished.' } : { status: 'failed', message: 'Stopped before it finished.' };
   const unchanged = new Set(items.filter((i) => i.action === 'unchanged').map((i) => i.key));

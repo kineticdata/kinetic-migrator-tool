@@ -86,6 +86,10 @@ const ITEMS: Record<string, CompareItem> = {
   },
 };
 
+ITEMS['teams/ops'] = {
+  key: 'teams/ops', type: 'team', label: 'Operations', status: 'only-target', diff: [], current: { name: 'Operations' }, incoming: null,
+};
+
 const SUGGESTION: SuggestionOut = {
   key: CREATE_OP, label: 'Create ticket', forKey: TRAVEL, kind: 'calls', status: 'new',
   reason: 'Travel request calls operation "Create ticket" on connection "Tickets", which is new in Dev',
@@ -374,4 +378,52 @@ test('restore: the backup as From, the live environment as To, touched items pre
   expect(m.callsTo('POST', '/api/projects/acme-demo/plans')[0].body).toEqual({
     to: 'test', from: 'test', selected: [TRAVEL], sourceCommit: 'abc1234def', restore: true,
   });
+});
+
+test('an item only in the target has no tick: its own Remove action puts it in the tray\'s removals, which go to the plan and the changeset', async () => {
+  const m = setup();
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare' });
+  const t = await screen.findByRole('tree', { name: /Differences/ });
+  await user.click(await within(t).findByText('Teams'));
+  await within(t).findByText('Operations');
+  expect(row('Operations')).not.toHaveAttribute('aria-checked');
+  expect(row('^Teams').querySelector('[data-check]')).toBeNull();
+  await user.click(row('Operations'));
+  const remove = await screen.findByRole('button', { name: 'Remove from Test' });
+  await user.click(remove);
+  const tray = screen.getByRole('complementary', { name: /Changeset/ });
+  const section = within(tray).getByRole('region', { name: 'Remove from Test' });
+  expect(within(section).getByText('Operations')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Keep in Test' })).toHaveAttribute('aria-pressed', 'true');
+  expect(within(row('Operations')).getByText('Removing')).toBeInTheDocument();
+
+  await user.click(within(tray).getByRole('button', { name: /Save as changeset/ }));
+  const dialog = await screen.findByRole('dialog', { name: 'Save as changeset' });
+  await user.type(within(dialog).getByLabelText('Name'), 'Tidy');
+  await user.click(within(dialog).getByRole('button', { name: 'Save changeset' }));
+  await waitFor(() => expect(m.callsTo('POST', '/api/projects/acme-demo/changesets')).toHaveLength(1));
+  expect(m.callsTo('POST', '/api/projects/acme-demo/changesets')[0].body).toEqual({
+    name: 'Tidy', description: '', from: 'dev', keys: [], remove: ['teams/ops'], sourceCommit: 'c-dev',
+  });
+
+  await user.click(within(tray).getByRole('button', { name: /Review plan/ }));
+  await waitFor(() => expect(currentLocation()).toBe('/p/acme-demo/plan/pl1'));
+  expect(m.callsTo('POST', '/api/projects/acme-demo/plans')[0].body).toEqual({
+    to: 'test', from: 'dev', selected: [], remove: ['teams/ops'], sourceCommit: 'c-dev',
+  });
+});
+
+test('the tree\'s Remove shortcut marks and unmarks; Keep in the tray takes it out', async () => {
+  setup();
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/compare' });
+  const t = await screen.findByRole('tree', { name: /Differences/ });
+  await user.click(await within(t).findByText('Teams'));
+  await within(t).findByText('Operations');
+  await user.click(row('Operations').querySelector('[data-remove]')!);
+  const tray = screen.getByRole('complementary', { name: /Changeset/ });
+  expect(within(tray).getByRole('region', { name: 'Remove from Test' })).toBeInTheDocument();
+  await user.click(within(tray).getByRole('button', { name: 'Keep Operations' }));
+  expect(within(tray).queryByRole('region', { name: 'Remove from Test' })).toBeNull();
 });

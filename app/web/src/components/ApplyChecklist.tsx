@@ -3,7 +3,6 @@
 // and item events; each row says its status in words as well as with an icon.
 import type { ReactNode } from 'react';
 import { CheckCircle2, Circle, MinusCircle, XCircle } from 'lucide-react';
-import type { PlanItemOut } from '../../../shared/sync-api';
 import { envLabel } from '../lib/format';
 import type { ChecklistState, Phase, StepStatus } from '../lib/plan';
 import { Spinner } from './ui/Spinner';
@@ -35,11 +34,11 @@ function Row({ label, sub, status, message }: { label: string; sub?: string; sta
   );
 }
 
-function Group({ title, done, total, children }: { title: string; done: number; total: number; children: ReactNode }) {
+function Group({ title, done, total, danger, children }: { title: string; done: number; total: number; danger?: boolean; children: ReactNode }) {
   return (
     <div>
-      <div className="flex items-center justify-between border-y border-border bg-surface-2/60 px-4 py-1.5 first:border-t-0">
-        <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">{title}</h3>
+      <div className={cn('flex items-center justify-between border-y border-border px-4 py-1.5 first:border-t-0', danger ? 'bg-danger-soft' : 'bg-surface-2/60')}>
+        <h3 className={cn('text-xs font-semibold tracking-wide uppercase', danger ? 'text-danger' : 'text-muted')}>{title}</h3>
         <span className="text-xs text-subtle tabular-nums">{done} of {total}</span>
       </div>
       <ul className="divide-y divide-border">{children}</ul>
@@ -47,9 +46,17 @@ function Group({ title, done, total, children }: { title: string; done: number; 
   );
 }
 
+// A checklist row: `sub` defaults to the key.
+export interface ChecklistRow {
+  key: string;
+  label: string;
+  sub?: string;
+}
+
 export interface ApplyChecklistProps {
   to: string;
-  groups: Array<Phase & { items: PlanItemOut[] }>;
+  // Phases in apply order; removals (if any) come last, in red.
+  groups: Array<Phase & { items: ChecklistRow[]; danger?: boolean }>;
   // Settled by the page once the job ends (no row is left running).
   state: ChecklistState;
 }
@@ -69,9 +76,9 @@ export function ApplyChecklist({ to, groups, state }: ApplyChecklistProps) {
         <Row label={`Backup of ${envLabel(to)}`} status={state.backup} />
       </Group>
       {groups.map((g) => (
-        <Group key={g.id} title={g.label} done={g.items.filter((i) => settled(statusOf(i.key))).length} total={g.items.length}>
+        <Group key={g.id} title={g.label} danger={g.danger} done={g.items.filter((i) => settled(statusOf(i.key))).length} total={g.items.length}>
           {g.items.map((i) => (
-            <Row key={i.key} label={i.label} sub={i.key} status={statusOf(i.key)} message={state.items[i.key]?.message} />
+            <Row key={i.key} label={i.label} sub={i.sub ?? i.key} status={statusOf(i.key)} message={state.items[i.key]?.message} />
           ))}
         </Group>
       ))}
