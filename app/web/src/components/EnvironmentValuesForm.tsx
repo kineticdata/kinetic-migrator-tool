@@ -2,7 +2,9 @@
 // source's value beside the target's, with the target value editable. Edits
 // are saved to the target's environment values when the apply starts.
 // Required values (missing in the target, with nothing set for it) are
-// marked, and say so in words.
+// marked, and say so in words. A kept space setting the target has no value
+// for carries the source's as a suggestion: never applied unless the user
+// takes it ("Use <source>'s value", which fills a linked pair whole).
 import { useId } from 'react';
 import { ArrowRight } from 'lucide-react';
 import type { EnvironmentValue } from '../../../shared/sync-api';
@@ -10,6 +12,7 @@ import { displayValue } from '../lib/diff';
 import { envLabel } from '../lib/format';
 import { valueText } from '../lib/plan';
 import { Badge } from './ui/Badge';
+import { Button } from './ui/Button';
 import { inputClasses } from './ui/Field';
 import { cn } from './ui/cn';
 
@@ -32,8 +35,17 @@ export interface EnvironmentValuesFormProps {
   errors: Record<string, string>;
 }
 
+const isEmpty = (v: unknown) => v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0);
+
 export function EnvironmentValuesForm({ values, from, to, edits, onEdit, missing, blank, errors }: EnvironmentValuesFormProps) {
   const uid = useId();
+  // Takes the offered value, and the other half of a linked pair with it.
+  const takeSuggestion = (v: EnvironmentValue) => {
+    for (const r of values) {
+      if (r.key !== v.key || r.suggested === undefined) continue;
+      if (r.id === v.id || (v.pair && r.pair === v.pair)) onEdit(r.id, valueText(r.suggested));
+    }
+  };
   if (!values.length) {
     return (
       <section aria-label="Environment values" className="rounded-xl border border-dashed border-border-strong px-5 py-6 text-center text-sm text-muted">
@@ -56,9 +68,14 @@ export function EnvironmentValuesForm({ values, from, to, edits, onEdit, missing
           const multiline = shape !== null && typeof shape === 'object';
           const isMissing = missing.has(v.id);
           const error = errors[v.id];
+          const toEmpty = isEmpty(v.to);
+          const offered = v.suggested !== undefined;
+          const edited = edits[v.id] !== undefined && edits[v.id] !== valueText(v.to);
           const note = error
             ?? (isMissing ? `${envLabel(to)} has no value for this yet.` : undefined)
-            ?? (blank.has(v.id) ? `Left blank, so ${envLabel(to)} keeps its own value${v.to === null || v.to === undefined || v.to === '' ? '' : ` (${displayValue(v.to)})`}.` : undefined);
+            ?? (blank.has(v.id) ? `Left blank, so ${envLabel(to)} ${toEmpty ? 'stays empty' : `keeps its own value (${displayValue(v.to)})`}.` : undefined)
+            ?? (offered && edited ? `Saved as ${envLabel(to)}'s value when the apply starts.` : undefined)
+            ?? (offered ? `Promoting does not copy ${envLabel(from)}'s value: ${envLabel(to)} ${toEmpty ? 'stays empty' : 'keeps its own value'} unless you use it.` : undefined);
           const noteId = `${uid}-${index}-note`;
           const inputProps = {
             'aria-label': `${v.label} in ${envLabel(to)}`,
@@ -69,7 +86,6 @@ export function EnvironmentValuesForm({ values, from, to, edits, onEdit, missing
             spellCheck: false,
             placeholder: v.required ? 'Required' : 'Leave as it is',
           };
-          const edited = edits[v.id] !== undefined && edits[v.id] !== valueText(v.to);
           return (
             <li key={v.id} className="grid grid-cols-1 gap-2 px-4 py-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_16px_minmax(0,1.2fr)] md:items-start md:gap-3">
               <div className="min-w-0">
@@ -92,6 +108,11 @@ export function EnvironmentValuesForm({ values, from, to, edits, onEdit, missing
                   <textarea {...inputProps} rows={Math.min(8, text.split('\n').length + 1)} onChange={(e) => onEdit(v.id, e.target.value)} className={cn(inputClasses, 'h-auto py-2 font-mono text-xs')} />
                 ) : (
                   <input {...inputProps} type="text" onChange={(e) => onEdit(v.id, e.target.value)} className={inputClasses} />
+                )}
+                {offered && !edited && (
+                  <Button size="sm" className="mt-1.5" onClick={() => takeSuggestion(v)}>
+                    {v.pair ? `Use ${envLabel(from)}'s values (${v.pair.split('+').join(' and ')})` : `Use ${envLabel(from)}'s value`}
+                  </Button>
                 )}
                 {note && <p id={noteId} className={cn('mt-1 text-xs', error ? 'text-danger' : isMissing ? 'text-drift' : 'text-muted')}>{note}</p>}
               </div>

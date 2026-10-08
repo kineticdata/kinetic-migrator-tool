@@ -62,6 +62,17 @@ test('warnings read plainly; a missing attribute is taken care of by filling its
   expect(satisfied(other, new Set(['warning:2']), new Set())).toBe(true);
 });
 
+test('kept space settings: the "not copied" note is covered by Environment values; a skipped space drift check reads plainly', () => {
+  const list = attentionList(plan({
+    warnings: [
+      'space: "displayValue" is kept per environment and empty in the target; the source has a value, which is not copied (set an override to use it)',
+      'Drift check for the space skipped: kept settings changed since the last promotion',
+    ],
+  }));
+  expect(list).toHaveLength(1);
+  expect(list[0]).toMatchObject({ id: 'warning:1', key: 'space', message: expect.stringMatching(/^The space's kept settings changed since it was last promoted to Test, so changes made to it in Test since then cannot be detected this time/) });
+});
+
 test('plan errors come with a plain fix', () => {
   expect(errorFix('Routine Notify Manager is used by exported workflows but does not exist in the target', 'dev', 'test').fix)
     .toMatch(/Add the routine to the changeset, or create it in Test first/);

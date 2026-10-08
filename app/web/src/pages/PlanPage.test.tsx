@@ -546,3 +546,48 @@ test('removals: the confirm step lists them separately in red with their count a
   expect(await within(progress).findByRole('heading', { name: 'Removals from Test' })).toBeInTheDocument();
   expect(await within(progress).findByRole('listitem', { name: /Old Form: Done/ })).toBeInTheDocument();
 });
+
+test('values: a kept space setting is not copied unless the offered value is taken, and a pair is taken whole', async () => {
+  const pairRow = (label: string, from: unknown, to: unknown) => ({
+    id: `space#${label}`, key: 'space', path: label, label, from, to, origin: 'environment' as const, required: false, suggested: from, pair: 'displayType+displayValue',
+  });
+  const m = setup(simple({
+    items: [{ key: 'space', type: 'space', label: 'Space', action: 'update', drift: false, diff: [{ path: 'defaultLocale', from: 'en', to: 'fr' }] }],
+    counts: { create: 0, update: 1, unchanged: 0, manual: 0, 'skip-drift': 0, delete: 0 },
+    environmentValues: [
+      pairRow('displayType', 'Custom', 'Display Page'),
+      pairRow('displayValue', 'https://dev.example.com/app', null),
+      { id: 'space#loginPage', key: 'space', path: 'loginPage', label: 'loginPage', from: '/dev-login', to: null, origin: 'environment', required: false, suggested: '/dev-login' },
+    ],
+    warnings: ['space: "displayValue" is kept per environment and empty in the target; the source has a value, which is not copied (set an override to use it)'],
+  }));
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  await screen.findByRole('heading', { name: '3 items from Dev' });
+  // Shown under Environment values, so nothing to tick here.
+  expect(screen.queryByRole('region', { name: 'Needs attention' })?.querySelectorAll('input[type=checkbox]').length ?? 0).toBe(0);
+  await user.click(next());
+  const values = screen.getByRole('region', { name: 'Environment values' });
+  expect(within(values).getByLabelText('displayValue in Test')).toHaveValue('');
+  expect(within(values).getByText("Promoting does not copy Dev's value: Test stays empty unless you use it.", { selector: `[id$="-1-note"]` })).toBeInTheDocument();
+  expect(within(values).getAllByText("Promoting does not copy Dev's value: Test keeps its own value unless you use it.")).toHaveLength(1);
+
+  // Taking the display pair fills both halves; loginPage is left alone.
+  await user.click(within(values).getAllByRole('button', { name: "Use Dev's values (displayType and displayValue)" })[0]);
+  expect(within(values).getByLabelText('displayType in Test')).toHaveValue('Custom');
+  expect(within(values).getByLabelText('displayValue in Test')).toHaveValue('https://dev.example.com/app');
+  expect(within(values).getByLabelText('loginPage in Test')).toHaveValue('');
+  expect(within(values).getAllByText("Saved as Test's value when the apply starts.")).toHaveLength(2);
+  // Taken, then cleared: stays empty, and says so.
+  await user.click(within(values).getByRole('button', { name: "Use Dev's value" }));
+  await user.clear(within(values).getByLabelText('loginPage in Test'));
+  expect(within(values).getByText('Left blank, so Test stays empty.')).toBeInTheDocument();
+
+  await user.click(next());
+  await user.type(screen.getByLabelText(/Type test to confirm/), 'test');
+  await user.click(screen.getByRole('button', { name: 'Apply to Test' }));
+  await waitFor(() => expect(m.callsTo('POST', '/api/projects/acme-demo/plans/pl1/apply')).toHaveLength(1));
+  expect((m.callsTo('POST', '/api/projects/acme-demo/plans/pl1/apply')[0].body as { values: unknown }).values).toEqual({
+    space: { displayType: 'Custom', displayValue: 'https://dev.example.com/app' },
+  });
+});

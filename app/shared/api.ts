@@ -154,6 +154,10 @@ export interface ProjectConfig {
   data: DataEntry[];
   exclude: { kapps: string[]; forms: string[] };
   envBoundAttributes: Partial<Record<EnvBoundLevel, EnvBoundRule[]>>;
+  // Space settings each environment keeps, besides the fixed ones (see
+  // lib/sync/env-bound.mjs). The server sends the effective list (the
+  // defaults when the file has none); absent only from an older server.
+  envBoundSpaceFields?: string[];
   // Parts of the file that could not be used and are ignored (read-only).
   warnings?: string[];
 }
