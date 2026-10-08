@@ -311,6 +311,8 @@ test('opening refuses folders that are not projects and repositories on another 
   assert.equal(opened.status, 200, opened.body);
   const head = (await log(cli, { limit: 1 }))[0];
   const files = (await git.listFiles({ fs, dir: cli, ref: head.oid })).sort();
-  assert.deepEqual(files, ['.gitignore', 'environments/test.json', 'kinetic-migrate.json', 'snapshots/test/space.json']);
+  assert.deepEqual(files, ['.gitattributes', '.gitignore', 'environments/test.json', 'kinetic-migrate.json', 'snapshots/test/space.json']);
+  assert.match(readFileSync(path.join(cli, '.gitattributes'), 'utf8'), /^\* text=auto eol=lf$/m);
+  assert.match(readFileSync(path.join(cli, '.gitattributes'), 'utf8'), /^\*\.zip binary$/m);
   assert.equal(existsSync(path.join(cli, 'credentials.yaml')), true, 'left alone on disk');
 });

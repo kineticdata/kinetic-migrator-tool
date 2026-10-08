@@ -26,7 +26,7 @@ const NEVER_STAGE = (filepath: string) => /(^|\/)\.env[^/]*$/.test(filepath);
 // repository must not sweep up that repository's files). plans/, compares/
 // and backups/ are local-only and ignored.
 export const LAYOUT_DIRS = ['environments', 'overrides', 'snapshots', 'export', 'state', 'changesets', 'runs'];
-export const LAYOUT_FILES = ['kinetic-sync.config.json', 'kinetic-migrate.json', '.gitignore'];
+export const LAYOUT_FILES = ['kinetic-sync.config.json', 'kinetic-migrate.json', '.gitignore', '.gitattributes'];
 export const inLayout = (filepath: string): boolean => (
   LAYOUT_FILES.includes(filepath) || (filepath.includes('/') && LAYOUT_DIRS.includes(filepath.split('/')[0]))
 );

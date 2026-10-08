@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ApiError } from './errors.ts';
-import { stableStringify } from './engine.ts';
+import { GITATTRIBUTES, stableStringify } from './engine.ts';
 import { commitAll, ensureRepo, type Author } from './repo.ts';
 
 export interface ProjectRef {
@@ -30,7 +30,8 @@ export const GITIGNORE_LINES = ['.env*', 'backups/', 'plans/', 'compares/'];
 
 export function readJsonFile(file: string): unknown {
   try {
-    return JSON.parse(readFileSync(file, 'utf8'));
+    // A byte-order mark (Windows PowerShell 5 writes one) is not JSON.
+    return JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
   } catch {
     throw new ApiError(422, 'invalid_project_file', `${path.basename(file)} is not valid JSON.`);
   }
@@ -45,6 +46,12 @@ export function readMeta(dir: string): ProjectMeta {
 
 export function writeMeta(dir: string, meta: ProjectMeta): void {
   writeFileSync(path.join(dir, META_FILE), stableStringify(meta));
+}
+
+// Written once when missing; an existing file is the user's and left alone.
+export function ensureGitattributes(dir: string): void {
+  const file = path.join(dir, '.gitattributes');
+  if (!existsSync(file)) writeFileSync(file, GITATTRIBUTES);
 }
 
 export function ensureGitignore(dir: string): void {
@@ -93,6 +100,7 @@ export const newSecretsId = (): string => randomUUID();
 // a commit of whatever is there. Call inside withProjectLock.
 export async function manageProject(ref: ProjectRef, message: string): Promise<void> {
   ensureGitignore(ref.dir);
+  ensureGitattributes(ref.dir);
   const meta = readMeta(ref.dir);
   if (!validSecretsId(meta.secretsId)) writeMeta(ref.dir, { ...meta, secretsId: newSecretsId() });
   await ensureRepo(ref.dir);

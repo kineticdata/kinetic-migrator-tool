@@ -47,3 +47,4 @@ export const runInit: (opts: { projectDir: string; log: (line: string) => void }
 export const snapshotDir: (projectDir: string, env: string) => string = commandsModule.snapshotDir;
 export const createClient: ClientFactory = httpModule.createClient;
 export const stableStringify: (value: unknown) => string = normalizeModule.stableStringify;
+export const GITATTRIBUTES: string = commandsModule.GITATTRIBUTES;
