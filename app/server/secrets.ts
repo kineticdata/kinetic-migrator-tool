@@ -45,6 +45,9 @@ export const execFileRunner: CommandRunner = (file, args, input) => new Promise(
   child.stdin?.end(input ?? '');
 });
 
+// `security` exits 44 for a missing item; the Windows scripts use the same code.
+const NOT_FOUND = 44;
+
 class KeychainError extends Error {
   constructor(action: string, code: number) {
     super(`The system keychain could not ${action} the secret (exit ${code}).`);
@@ -63,11 +66,15 @@ const PS_PRELUDE = [
   `$resource = '${SERVICE}'`,
 ].join('; ');
 
+// Retrieve into $c; exit 44 only for "Element not found" (0x80070490),
+// exit 1 for any other failure.
+const PS_RETRIEVE = 'try { $c = $vault.Retrieve($resource, $in.account) } catch { $e = $_.Exception; while ($e) { if ($e.HResult -eq -2147023728) { exit 44 }; $e = $e.InnerException }; exit 1 }';
+
 const PS = {
   probe: PS_PRELUDE,
   set: `${PS_PRELUDE}; try { $vault.Remove($vault.Retrieve($resource, $in.account)) } catch {}; $vault.Add((New-Object Windows.Security.Credentials.PasswordCredential($resource, $in.account, $in.value)))`,
-  get: `${PS_PRELUDE}; try { $c = $vault.Retrieve($resource, $in.account) } catch { exit 44 }; $c.RetrievePassword(); [Console]::Out.Write($c.Password)`,
-  delete: `${PS_PRELUDE}; try { $vault.Remove($vault.Retrieve($resource, $in.account)) } catch { exit 44 }`,
+  get: `${PS_PRELUDE}; ${PS_RETRIEVE}; $c.RetrievePassword(); [Console]::Out.Write($c.Password)`,
+  delete: `${PS_PRELUDE}; ${PS_RETRIEVE}; $vault.Remove($c)`,
 };
 
 const psArgs = (script: string) => ['-NoProfile', '-NonInteractive', '-Command', script];
@@ -94,7 +101,8 @@ export class KeychainStore implements SecretStore {
     try {
       switch (this.platform) {
         case 'darwin': return (await this.run('security', ['list-keychains'])).code === 0;
-        case 'linux': await this.run('secret-tool', ['--help']); return true;
+        // A search that succeeds proves the tool and a running secret service.
+        case 'linux': return (await this.run('secret-tool', ['search', 'service', `${this.service}-probe`])).code === 0;
         case 'win32': return (await this.run('powershell.exe', psArgs(PS.probe), '{}')).code === 0;
         default: return false;
       }
@@ -127,42 +135,59 @@ export class KeychainStore implements SecretStore {
     if (r.code !== 0) throw new KeychainError('store', r.code);
   }
 
+  // Only a definite "not found" means absent; any other failure throws.
   async get(account: string): Promise<string | undefined> {
     let r: CommandResult;
     switch (this.platform) {
       case 'darwin':
         r = await this.run('security', ['find-generic-password', '-s', this.service, '-a', account, '-w']);
-        if (r.code !== 0) return undefined;
+        if (r.code === NOT_FOUND) return undefined;
+        if (r.code !== 0) throw new KeychainError('read', r.code);
         return r.stdout.replace(/\n$/, '');
       case 'linux':
         r = await this.run('secret-tool', ['lookup', 'service', this.service, 'account', account]);
-        if (r.code !== 0 || r.stdout === '') return undefined;
-        return r.stdout;
+        if (r.code === 0 && r.stdout !== '') return r.stdout;
+        // An empty lookup (exit 0 or 1, no output at all) is "not found".
+        if ((r.code === 0 || r.code === 1) && r.stdout === '' && r.stderr.trim() === '') return undefined;
+        throw new KeychainError('read', r.code);
       case 'win32':
         r = await this.run('powershell.exe', psArgs(PS.get), JSON.stringify({ account }));
-        return r.code === 0 ? r.stdout : undefined;
+        if (r.code === NOT_FOUND) return undefined;
+        if (r.code !== 0) throw new KeychainError('read', r.code);
+        return r.stdout;
       default:
-        return undefined;
+        throw new Error('No system keychain on this platform.');
     }
   }
 
   async has(account: string): Promise<boolean> {
     if (this.platform === 'darwin') {
-      return (await this.run('security', ['find-generic-password', '-s', this.service, '-a', account])).code === 0;
+      const r = await this.run('security', ['find-generic-password', '-s', this.service, '-a', account]);
+      if (r.code === NOT_FOUND) return false;
+      if (r.code !== 0) throw new KeychainError('read', r.code);
+      return true;
     }
     return (await this.get(account)) !== undefined;
   }
 
+  // Deleting an absent secret is fine; any other failure throws.
   async delete(account: string): Promise<void> {
+    let r: CommandResult;
     switch (this.platform) {
       case 'darwin':
-        await this.run('security', ['delete-generic-password', '-s', this.service, '-a', account]);
+        r = await this.run('security', ['delete-generic-password', '-s', this.service, '-a', account]);
+        if (r.code !== 0 && r.code !== NOT_FOUND) throw new KeychainError('delete', r.code);
         return;
       case 'linux':
-        await this.run('secret-tool', ['clear', 'service', this.service, 'account', account]);
+        r = await this.run('secret-tool', ['clear', 'service', this.service, 'account', account]);
+        if (r.code !== 0 && !(r.code === 1 && r.stderr.trim() === '')) throw new KeychainError('delete', r.code);
         return;
       case 'win32':
-        await this.run('powershell.exe', psArgs(PS.delete), JSON.stringify({ account }));
+        r = await this.run('powershell.exe', psArgs(PS.delete), JSON.stringify({ account }));
+        if (r.code !== 0 && r.code !== NOT_FOUND) throw new KeychainError('delete', r.code);
+        return;
+      default:
+        throw new Error('No system keychain on this platform.');
     }
   }
 }

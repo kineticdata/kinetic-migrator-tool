@@ -10,7 +10,8 @@ import type {
 import { ApiError, badRequest, notFound } from './errors.ts';
 import { envKey, loadOverrides, stableStringify, validateEnvName, type ClientFactory, type EngineEnv } from './engine.ts';
 import {
-  commitChange, displayName, isPlainObject, readJsonFile, readMeta, withProjectLock, writeMeta, type ProjectRef,
+  commitChange, displayName, isPlainObject, readJsonFile, readMeta, secretsId, withProjectLock, withSecretsLock, writeMeta,
+  type ProjectRef,
 } from './project-meta.ts';
 import { accountFor, type SecretStore } from './secrets.ts';
 
@@ -36,7 +37,9 @@ export function checkEnvName(env: string): void {
 }
 
 export function environmentExists(dir: string, env: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(env) && existsSync(envFile(dir, env));
+  // Exact-case match from the listing: case-insensitive file systems would
+  // otherwise report "DEV" as existing when only dev.json does.
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(env) && environmentNames(dir).includes(env);
 }
 
 function requireEnv(ref: ProjectRef, env: string): void {
@@ -92,7 +95,7 @@ export function writeEnvironment(dir: string, env: string, def: EnvironmentFile)
 export function validateNewEnvironment(body: unknown): EnvironmentFile & { position?: number } {
   if (!isPlainObject(body)) throw badRequest('Expected a JSON object.');
   for (const k of Object.keys(body)) {
-    if (!['url', 'readOnly', 'position', 'name'].includes(k)) throw badRequest(`Unknown field "${k}".`);
+    if (!['url', 'readOnly', 'position', 'name'].includes(k)) throw badRequest('Unknown field.');
   }
   if ('readOnly' in body && typeof body.readOnly !== 'boolean') throw badRequest('"readOnly" must be true or false.');
   if ('position' in body && (!Number.isInteger(body.position) || (body.position as number) < 0)) {
@@ -103,10 +106,13 @@ export function validateNewEnvironment(body: unknown): EnvironmentFile & { posit
 
 export async function putEnvironment(ref: ProjectRef, env: string, body: unknown): Promise<void> {
   checkEnvName(env);
-  if (isPlainObject(body) && 'name' in body) throw badRequest('Unknown field "name".');
+  if (isPlainObject(body) && 'name' in body) throw badRequest('Unknown field.');
   const input = validateNewEnvironment(body);
   await withProjectLock(ref, async () => {
     const existed = environmentExists(ref.dir, env);
+    if (!existed && environmentNames(ref.dir).some((n) => n.toLowerCase() === env.toLowerCase())) {
+      throw new ApiError(409, 'exists', 'An environment with that name in different letter case already exists.');
+    }
     const readOnly = isPlainObject(body) && 'readOnly' in body ? input.readOnly : existed ? readEnvironmentFile(ref.dir, env).readOnly : false;
     writeEnvironment(ref.dir, env, { url: input.url, readOnly });
     const order = pipelineOrder(ref.dir).filter((n) => n !== env);
@@ -124,15 +130,17 @@ export async function deleteEnvironment(ref: ProjectRef, env: string, store: Sec
     saveOrder(ref.dir, pipelineOrder(ref.dir).filter((n) => n !== env));
     await commitChange(ref, `Removed environment ${displayName(env)}`);
   });
-  await forgetEnvSecrets(store, ref.id, env);
+  await forgetEnvSecrets(store, ref, env);
 }
 
 // ---- Secrets in the store ------------------------------------------------
-// Keychains cannot be listed, so each environment keeps an index of its
-// secret names (names only) in the store itself.
+// Accounts are `<secretsId>/<env>/<scope>/<name>`, where secretsId is the
+// project's random id (not its folder name). Keychains cannot be listed, so
+// each environment keeps an index of its secret names (names only) in the
+// store itself, updated under the project's secrets lock.
 
-async function readIndex(store: SecretStore, projectId: string, env: string): Promise<string[]> {
-  const raw = await store.get(accountFor(projectId, env, INDEX.scope, INDEX.name));
+async function readIndex(store: SecretStore, sid: string, env: string): Promise<string[]> {
+  const raw = await store.get(accountFor(sid, env, INDEX.scope, INDEX.name));
   if (!raw) return [];
   try {
     const list = JSON.parse(raw);
@@ -142,42 +150,51 @@ async function readIndex(store: SecretStore, projectId: string, env: string): Pr
   }
 }
 
-async function writeIndex(store: SecretStore, projectId: string, env: string, names: string[]): Promise<void> {
-  const account = accountFor(projectId, env, INDEX.scope, INDEX.name);
+async function writeIndex(store: SecretStore, sid: string, env: string, names: string[]): Promise<void> {
+  const account = accountFor(sid, env, INDEX.scope, INDEX.name);
   if (names.length) await store.set(account, JSON.stringify([...new Set(names)].sort()));
   else await store.delete(account);
 }
 
-export async function setEnvSecret(store: SecretStore, projectId: string, env: string, scope: SecretScope, name: string, value: string): Promise<void> {
-  await store.set(accountFor(projectId, env, scope, name), value);
-  const entry = `${scope}/${name}`;
-  const index = await readIndex(store, projectId, env);
-  if (!index.includes(entry)) await writeIndex(store, projectId, env, [...index, entry]);
+export async function setEnvSecret(store: SecretStore, ref: ProjectRef, env: string, scope: SecretScope, name: string, value: string): Promise<void> {
+  const sid = await secretsId(ref);
+  await withSecretsLock(ref, async () => {
+    await store.set(accountFor(sid, env, scope, name), value);
+    const entry = `${scope}/${name}`;
+    const index = await readIndex(store, sid, env);
+    if (!index.includes(entry)) await writeIndex(store, sid, env, [...index, entry]);
+  });
 }
 
-export async function deleteEnvSecret(store: SecretStore, projectId: string, env: string, scope: SecretScope, name: string): Promise<void> {
-  await store.delete(accountFor(projectId, env, scope, name));
-  const entry = `${scope}/${name}`;
-  const index = await readIndex(store, projectId, env);
-  if (index.includes(entry)) await writeIndex(store, projectId, env, index.filter((e) => e !== entry));
+export async function deleteEnvSecret(store: SecretStore, ref: ProjectRef, env: string, scope: SecretScope, name: string): Promise<void> {
+  const sid = await secretsId(ref);
+  await withSecretsLock(ref, async () => {
+    await store.delete(accountFor(sid, env, scope, name));
+    const entry = `${scope}/${name}`;
+    const index = await readIndex(store, sid, env);
+    if (index.includes(entry)) await writeIndex(store, sid, env, index.filter((e) => e !== entry));
+  });
 }
 
-export async function hasEnvSecret(store: SecretStore, projectId: string, env: string, scope: SecretScope, name: string): Promise<boolean> {
-  return store.has(accountFor(projectId, env, scope, name));
+export async function hasEnvSecret(store: SecretStore, ref: ProjectRef, env: string, scope: SecretScope, name: string): Promise<boolean> {
+  return store.has(accountFor(await secretsId(ref), env, scope, name));
 }
 
-async function forgetEnvSecrets(store: SecretStore, projectId: string, env: string): Promise<void> {
-  for (const entry of await readIndex(store, projectId, env)) {
-    const [scope, name] = entry.split('/');
-    if (scope && name) await store.delete(accountFor(projectId, env, scope, name));
-  }
-  await writeIndex(store, projectId, env, []);
+async function forgetEnvSecrets(store: SecretStore, ref: ProjectRef, env: string): Promise<void> {
+  const sid = await secretsId(ref);
+  await withSecretsLock(ref, async () => {
+    for (const entry of await readIndex(store, sid, env)) {
+      const [scope, name] = entry.split('/');
+      if (scope && name) await store.delete(accountFor(sid, env, scope, name));
+    }
+    await writeIndex(store, sid, env, []);
+  });
 }
 
-export async function credentialsStatus(store: SecretStore, projectId: string, env: string): Promise<CredentialsStatus> {
+export async function credentialsStatus(store: SecretStore, ref: ProjectRef, env: string): Promise<CredentialsStatus> {
   return {
-    username: await hasEnvSecret(store, projectId, env, 'credentials', 'username'),
-    password: await hasEnvSecret(store, projectId, env, 'credentials', 'password'),
+    username: await hasEnvSecret(store, ref, env, 'credentials', 'username'),
+    password: await hasEnvSecret(store, ref, env, 'credentials', 'password'),
   };
 }
 
@@ -187,16 +204,16 @@ export async function setCredentials(ref: ProjectRef, env: string, body: unknown
   if (!isPlainObject(body)) throw badRequest('Expected a JSON object.');
   const req = body as PutCredentialsRequest & Record<string, unknown>;
   const fields = ['username', 'password'] as const;
-  for (const k of Object.keys(req)) if (!(fields as readonly string[]).includes(k)) throw badRequest(`Unknown field "${k}".`);
+  for (const k of Object.keys(req)) if (!(fields as readonly string[]).includes(k)) throw badRequest('Unknown field.');
   if (!fields.some((f) => f in req)) throw badRequest('Send a username, a password or both.');
   for (const f of fields) {
     if (!(f in req)) continue;
     const v = req[f];
-    if (v === null) await deleteEnvSecret(store, ref.id, env, 'credentials', f);
-    else if (typeof v === 'string' && v !== '') await setEnvSecret(store, ref.id, env, 'credentials', f, v);
+    if (v === null) await deleteEnvSecret(store, ref, env, 'credentials', f);
+    else if (typeof v === 'string' && v !== '') await setEnvSecret(store, ref, env, 'credentials', f, v);
     else throw badRequest(`"${f}" must be a non-empty string, or null to clear it.`);
   }
-  return credentialsStatus(store, ref.id, env);
+  return credentialsStatus(store, ref, env);
 }
 
 // The engine's resolved environment: the file plus credentials and secrets
@@ -204,17 +221,18 @@ export async function setCredentials(ref: ProjectRef, env: string, body: unknown
 export async function resolveEnv(ref: ProjectRef, env: string, store: SecretStore, extraVars: Record<string, string> = {}): Promise<EngineEnv> {
   requireEnv(ref, env);
   const def = readEnvironmentFile(ref.dir, env);
-  const username = await store.get(accountFor(ref.id, env, 'credentials', 'username'));
-  const password = await store.get(accountFor(ref.id, env, 'credentials', 'password'));
+  const sid = await secretsId(ref);
+  const username = await store.get(accountFor(sid, env, 'credentials', 'username'));
+  const password = await store.get(accountFor(sid, env, 'credentials', 'password'));
   if (!username || !password) {
     throw new ApiError(400, 'missing_credentials', `No credentials for ${displayName(env)}: set the username and password in Settings → Environments.`);
   }
   const vars: Record<string, string> = {};
   const k = envKey(env);
-  for (const entry of await readIndex(store, ref.id, env)) {
+  for (const entry of await readIndex(store, sid, env)) {
     const [scope, name] = entry.split('/');
     if (scope !== 'secret' && scope !== 'handler') continue;
-    const value = await store.get(accountFor(ref.id, env, scope, name));
+    const value = await store.get(accountFor(sid, env, scope, name));
     if (value) vars[`KINETIC_${k}_${VAR_SCOPES[scope]}_${name}`] = value;
   }
   return { name: env, url: def.url, readOnly: def.readOnly, username, password, vars: { ...vars, ...extraVars } };
@@ -270,7 +288,7 @@ export function readOverrides(ref: ProjectRef, env: string): EnvironmentOverride
 
 function validateOverrides(body: unknown): EnvironmentOverrides {
   if (!isPlainObject(body)) throw badRequest('Expected a JSON object.');
-  for (const k of Object.keys(body)) if (!['artifacts', 'replace'].includes(k)) throw badRequest(`Unknown field "${k}".`);
+  for (const k of Object.keys(body)) if (!['artifacts', 'replace'].includes(k)) throw badRequest('Unknown field.');
   const artifacts = body.artifacts ?? {};
   if (!isPlainObject(artifacts) || !Object.values(artifacts).every(isPlainObject)) {
     throw badRequest('"artifacts" must map item keys to objects of values.');

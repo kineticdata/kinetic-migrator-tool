@@ -10,6 +10,7 @@ import type { ConnectionTestResult, CredentialsStatus, ProjectDetail, ProjectSum
 import { createClient, type ClientFactory } from './engine.ts';
 import { log, readTreeAt } from './repo.ts';
 import { MemoryStore } from './secrets.ts';
+import { readMeta } from './project-meta.ts';
 import { resolveEnv, setEnvSecret } from './environments.ts';
 import { startTestServer, type RawResponse, type TestServer } from './test-helpers.ts';
 
@@ -92,6 +93,7 @@ test('create, list and open projects', async (t) => {
   const opened = await call('POST', '/api/projects/open', { path: outside });
   assert.equal(opened.status, 200);
   const op = opened.json as ProjectDetail;
+  assert.match(readMeta(outside).secretsId ?? '', /^[0-9a-f-]{36}$/);
   assert.deepEqual(op.environments.map((e) => e.name), ['test']);
   const head = (await log(outside, { limit: 1 }))[0];
   const tree = await readTreeAt(outside, head.oid, '');
@@ -130,20 +132,29 @@ test('environments: add, order, credentials, delete — one commit per mutation,
 
   assert.equal((await call('PUT', '/api/projects/pipeline/environments/bad%20name', { url: 'https://x.example.com' })).status, 400);
   assert.equal((await call('PUT', '/api/projects/pipeline/environments/x', { url: 'ftp://x' })).status, 400);
-  assert.equal((await call('PUT', '/api/projects/pipeline/environments/x', { url: 'https://x.example.com', extra: 1 })).status, 400);
+  const unknown = await call('PUT', '/api/projects/pipeline/environments/x', { url: 'https://x.example.com', '<script>sneaky': 1 });
+  assert.equal(unknown.status, 400);
+  assert.ok(!unknown.body.includes('sneaky'), 'unknown field names are not echoed');
+  const caseClash = await call('PUT', '/api/projects/pipeline/environments/DEV', { url: 'https://dev2.example.com' });
+  assert.equal(caseClash.status, 409);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(dir, 'environments', 'dev.json'), 'utf8')).url, 'https://dev.example.com');
 
   const cred = await call('PUT', '/api/projects/pipeline/environments/dev/credentials', { username: 'admin', password: PLANTED });
   assert.equal(cred.status, 200);
   assert.deepEqual(cred.json as CredentialsStatus, { username: true, password: true });
-  assert.equal(await store.get('pipeline/dev/credentials/password'), PLANTED);
+  const sid = readMeta(dir).secretsId as string;
+  assert.match(sid, /^[0-9a-f-]{36}$/);
+  assert.equal(await store.get(`${sid}/dev/credentials/password`), PLANTED);
+  assert.equal(await store.has('pipeline/dev/credentials/password'), false, 'accounts never use the folder name');
   const detail = (await call('GET', '/api/projects/pipeline')).json as ProjectDetail;
   assert.deepEqual(detail.environments[0].credentials, { username: true, password: true });
   assert.deepEqual(detail.environments[1].credentials, { username: false, password: false });
   assert.equal((await call('PUT', '/api/projects/pipeline/environments/nope/credentials', { username: 'a', password: 'b' })).status, 404);
 
   // Engine env resolution: file + store, secrets as KINETIC_* vars.
-  await setEnvSecret(store, 'pipeline', 'dev', 'secret', 'MY_CONN__CLIENT_SECRET', 'conn-secret');
-  await setEnvSecret(store, 'pipeline', 'dev', 'handler', 'SMTP_V1__SMTP_PASSWORD', 'handler-secret');
+  const ref = { id: 'pipeline', dir };
+  await setEnvSecret(store, ref, 'dev', 'secret', 'MY_CONN__CLIENT_SECRET', 'conn-secret');
+  await setEnvSecret(store, ref, 'dev', 'handler', 'SMTP_V1__SMTP_PASSWORD', 'handler-secret');
   const env = await resolveEnv({ id: 'pipeline', dir }, 'dev', store);
   assert.equal(env.url, 'https://dev.example.com');
   assert.equal(env.password, PLANTED);
@@ -172,8 +183,8 @@ test('environments: add, order, credentials, delete — one commit per mutation,
   assert.equal((await call('DELETE', '/api/projects/pipeline/environments/dev')).status, 200);
   await mutated();
   assert.equal(existsSync(path.join(dir, 'environments', 'dev.json')), false);
-  assert.equal(await store.has('pipeline/dev/credentials/password'), false);
-  assert.equal(await store.has('pipeline/dev/secret/MY_CONN__CLIENT_SECRET'), false);
+  assert.equal(await store.has(`${sid}/dev/credentials/password`), false);
+  assert.equal(await store.has(`${sid}/dev/secret/MY_CONN__CLIENT_SECRET`), false);
   assert.deepEqual(((await call('GET', '/api/projects/pipeline')).json as ProjectDetail).environments.map((e) => e.name), ['test', 'prod']);
   assert.equal((await call('DELETE', '/api/projects/pipeline/environments/dev')).status, 404);
 
@@ -216,4 +227,38 @@ test('session reports keychain availability from the store', async (t) => {
   const { call } = await setup(t);
   const s = (await call('GET', '/api/session')).json;
   assert.equal(s.keychain.available, false);
+});
+
+test('credentials never collide across workspaces or survive re-creating a same-named project', async (t) => {
+  const store = new MemoryStore();
+  const a = await startTestServer({ secrets: store });
+  const b = await startTestServer({ secrets: store });
+  t.after(async () => { await a.cleanup(); await b.cleanup(); });
+  const json = (body: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const put = (body: unknown) => ({ ...json(body), method: 'PUT' });
+  const project = { name: 'Same Name', environment: { name: 'dev', url: 'https://your-space.kinops.io' } };
+  assert.equal((await a.api('/api/projects', json(project))).status, 201);
+  assert.equal((await b.api('/api/projects', json(project))).status, 201);
+  await a.api('/api/projects/same-name/environments/dev/credentials', put({ username: 'admin', password: PLANTED }));
+  const inB = JSON.parse((await b.api('/api/projects/same-name')).body) as ProjectDetail;
+  assert.deepEqual(inB.environments[0].credentials, { username: false, password: false });
+
+  // Delete the folder in A and create the same name again: nothing inherited.
+  const wsA = JSON.parse((await a.api('/api/session')).body).workspace as string;
+  rmSync(path.join(wsA, 'same-name'), { recursive: true, force: true });
+  assert.equal((await a.api('/api/projects', json(project))).status, 201);
+  const again = JSON.parse((await a.api('/api/projects/same-name')).body) as ProjectDetail;
+  assert.deepEqual(again.environments[0].credentials, { username: false, password: false });
+});
+
+test('a CLI-created project in the workspace gets a secrets id when first used', async (t) => {
+  const { call } = await setup(t);
+  const ws = JSON.parse((await call('GET', '/api/session')).body).workspace as string;
+  const dir = path.join(ws, 'cli-made');
+  mkdirSync(path.join(dir, 'environments'), { recursive: true });
+  writeFileSync(path.join(dir, 'environments', 'dev.json'), JSON.stringify({ url: 'https://your-space.kinops.io' }));
+  assert.equal((await call('PUT', '/api/projects/cli-made/environments/dev/credentials', { username: 'u', password: 'p' })).status, 200);
+  assert.match(readMeta(dir).secretsId ?? '', /^[0-9a-f-]{36}$/);
+  assert.ok(existsSync(path.join(dir, '.git')));
+  assert.match(readFileSync(path.join(dir, '.gitignore'), 'utf8'), /^\.env\*$/m);
 });

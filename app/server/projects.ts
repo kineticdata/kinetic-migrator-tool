@@ -11,7 +11,8 @@ import {
   readEnvironmentFile, readOverrides, setCredentials, testConnection, validateNewEnvironment, writeEnvironment,
 } from './environments.ts';
 import {
-  commitChange, ensureGitignore, isPlainObject, readJsonFile, readMeta, withProjectLock, writeMeta, type ProjectRef,
+  commitChange, ensureGitignore, isPlainObject, manageProject, newSecretsId, readJsonFile, readMeta, withProjectLock, writeMeta,
+  type ProjectRef,
 } from './project-meta.ts';
 import { ensureRepo, log } from './repo.ts';
 import type { Router } from './router.ts';
@@ -82,7 +83,7 @@ export function findProject(workspace: string, id: string): ProjectRef {
 
 export async function createProject(workspace: string, body: unknown): Promise<ProjectRef> {
   if (!isPlainObject(body)) throw badRequest('Expected a JSON object.');
-  for (const k of Object.keys(body)) if (!['name', 'environment'].includes(k)) throw badRequest(`Unknown field "${k}".`);
+  for (const k of Object.keys(body)) if (!['name', 'environment'].includes(k)) throw badRequest('Unknown field.');
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (!name || name.length > 100) throw badRequest('A project needs a name of up to 100 characters.');
   const id = slugify(name);
@@ -103,7 +104,7 @@ export async function createProject(workspace: string, body: unknown): Promise<P
       // runInit writes a placeholder environments/dev.json; the UI adds real ones.
       rmSync(path.join(dir, 'environments', 'dev.json'), { force: true });
       if (first) writeEnvironment(dir, first.name, { url: first.url, readOnly: first.readOnly });
-      writeMeta(dir, { name, order: first ? [first.name] : [] });
+      writeMeta(dir, { name, order: first ? [first.name] : [], secretsId: newSecretsId() });
       ensureGitignore(dir);
       await ensureRepo(dir);
       await commitChange(ref, `Created project ${name}`);
@@ -139,11 +140,7 @@ export async function openProject(workspace: string, body: unknown): Promise<Pro
   }
   const ref = { id, dir };
   // CLI-created projects become managed: ignore local-only files, then commit.
-  await withProjectLock(ref, async () => {
-    ensureGitignore(dir);
-    await ensureRepo(dir);
-    await commitChange(ref, 'Started managing this project');
-  });
+  await withProjectLock(ref, () => manageProject(ref, 'Started managing this project'));
   return ref;
 }
 
@@ -156,7 +153,7 @@ export async function readProject(ref: ProjectRef, store: SecretStore): Promise<
       name,
       url: def.url,
       readOnly: def.readOnly,
-      credentials: await credentialsStatus(store, ref.id, name),
+      credentials: await credentialsStatus(store, ref, name),
       lastSnapshot: last ? { commit: last.oid, at: last.at, message: last.message } : null,
     });
   }
@@ -177,7 +174,7 @@ const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every(
 
 function validateConfig(body: unknown): Partial<ProjectConfig> {
   if (!isPlainObject(body)) throw badRequest('Expected a JSON object.');
-  for (const k of Object.keys(body)) if (!['data', 'exclude', 'envBoundAttributes'].includes(k)) throw badRequest(`Unknown field "${k}".`);
+  for (const k of Object.keys(body)) if (!['data', 'exclude', 'envBoundAttributes'].includes(k)) throw badRequest('Unknown field.');
   const out: Partial<ProjectConfig> = {};
   if ('data' in body) {
     const ok = Array.isArray(body.data) && body.data.every((d) => isPlainObject(d)
