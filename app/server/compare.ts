@@ -18,7 +18,7 @@ import type { Emit } from './jobs.ts';
 import { displayName, isPlainObject, secretsId, type ProjectRef } from './project-meta.ts';
 import type { Router } from './router.ts';
 import { lastPromoted } from './run-records.ts';
-import { makeScrubber, type Scrubber } from './scrub.ts';
+import { makeScrubber, scrubError, type Scrubber } from './scrub.ts';
 import { envSecrets, forwardEvents, loadSnapshot, requireEnvironment, type SyncContext } from './snapshots.ts';
 import { buildTreeIndex, childrenOf, toTreeNode, type TreeIndex } from './tree-index.ts';
 
@@ -166,7 +166,8 @@ export async function startCompare(ctx: SyncContext, ref: ProjectRef, opts: Star
   if (!live) await loadSnapshot(ref, opts.to);
   await secretsId(ref);
   const env = live ? await resolveEnv(ref, opts.to, ctx.secrets) : null;
-  return ctx.jobs.createJob('compare', (emit, signal) => runCompareJob(ref, opts, { env, clientFactory: ctx.clientFactory, emit, signal }));
+  return ctx.jobs.createJob('compare', (emit, signal) => runCompareJob(ref, opts, { env, clientFactory: ctx.clientFactory, emit, signal })
+    .catch((err) => { throw scrubError(err, env ? envSecrets(env) : []); }));
 }
 
 function findCompare(ref: ProjectRef, id: string): CompareRecord {

@@ -4,12 +4,18 @@
 // every response body (JSON and SSE) for the planted-secret check.
 // @ts-expect-error -- untyped engine module
 import { fakeClient } from '../../lib/sync/fake-client.mjs';
-import type { ClientFactory } from './engine.ts';
+import type { ClientFactory, EngineEnv } from './engine.ts';
+import type { Logger } from './log.ts';
+import { formatError } from './log.ts';
 import { MemoryStore } from './secrets.ts';
 import { startTestServer, type RawResponse, type TestServer } from './test-helpers.ts';
 
 export const PLANTED = 'Planted-Secret-x7Qv93';
 export const PLANTED_RUN = 'Run-Only-Secret-k2Lp55';
+// Secrets inside the fake spaces' own data (connection auth, headers,
+// signing keys): distinct from the credential password, so the checks prove
+// the export strips them rather than the server scrubbing a known value.
+export const PLANTED_CONN = 'Conn-Auth-Secret-m4Rt08';
 export const ZIP = Buffer.from('PK\x03\x04 mail handler');
 
 const form = (slug: string, name: string, fields: string[], extra: Record<string, unknown> = {}) => ({
@@ -30,15 +36,15 @@ export function devRoutes(): Record<string, unknown> {
     indexDefinitions: [{ name: 'values[Priority]', parts: ['values[Priority]'], unique: false }],
   });
   return {
-    'GET core/space': { space: { name: 'Dev Space', slug: 'dev', displayType: 'Display Page', webApis: [], models: [], oauthSigningKey: PLANTED } },
+    'GET core/space': { space: { name: 'Dev Space', slug: 'dev', displayType: 'Display Page', webApis: [], models: [], oauthSigningKey: PLANTED_CONN } },
     'GET core/teams': { teams: [{ name: 'Ops', slug: 'ops', description: 'Operations (dev)' }] },
     'GET core/fileResources': { fileResources: [] },
     'GET integrator/connections': [{ id: 'c-1', name: 'Ticketing' }],
     'GET integrator/export/connections/c-1': {
       connection: {
         id: 'c-1', name: 'Ticketing', type: 'http',
-        config: { baseUrl: 'https://api.example.com', auth: { authType: 'basic', username: 'svc', password: PLANTED } },
-        operations: [{ id: 'o-1', name: 'Create Ticket', connectionId: 'c-1', config: { method: 'POST', path: '/tickets', headers: { Authorization: `Bearer ${PLANTED}` } } }],
+        config: { baseUrl: 'https://api.example.com', auth: { authType: 'basic', username: 'svc', password: PLANTED_CONN } },
+        operations: [{ id: 'o-1', name: 'Create Ticket', connectionId: 'c-1', config: { method: 'POST', path: '/tickets', headers: { Authorization: `Bearer ${PLANTED_CONN}` } } }],
       },
     },
     'GET core/kapps': { kapps: [{ slug: 'services' }] },
@@ -81,8 +87,9 @@ export function testRoutes(): Record<string, unknown> {
 
 export interface Call { env: string; method: string; path: string; body?: unknown; api: string }
 
-export function fakeFactory(spaces: Record<string, () => Record<string, unknown>>, calls: Call[]): ClientFactory {
+export function fakeFactory(spaces: Record<string, () => Record<string, unknown>>, calls: Call[], envs: EngineEnv[] = []): ClientFactory {
   return ({ env, mode }) => {
+    envs.push(env);
     if (mode === 'write' && env.readOnly) {
       const e = new Error('readOnly');
       e.name = 'ReadOnlyError';
@@ -107,6 +114,10 @@ export interface Harness {
   calls: Call[];
   // The fake spaces by environment; tests may swap one to simulate changes.
   spaces: Record<string, () => Record<string, unknown>>;
+  // Every environment a client was opened with (the engine env, vars included).
+  envs: EngineEnv[];
+  // Text the server logged.
+  logged: string[];
   bodies: string[];
   dir: string;
   call: (method: string, pathname: string, body?: unknown) => Promise<RawResponse & { json: any }>;
@@ -116,11 +127,14 @@ export interface Harness {
   writes: (env?: string) => string[];
 }
 
-export async function harness(t: { after: (fn: () => Promise<void> | void) => void }, envs = { dev: true, test: false, prod: true }): Promise<Harness> {
+export async function harness(t: { after: (fn: () => Promise<void> | void) => void }, envs = { dev: true, test: false, prod: true }, opts: { workspace?: string } = {}): Promise<Harness> {
   const store = new MemoryStore();
   const calls: Call[] = [];
   const spaces: Record<string, () => Record<string, unknown>> = { dev: devRoutes, test: testRoutes, prod: testRoutes };
-  const server = await startTestServer({ secrets: store, clientFactory: fakeFactory(spaces, calls) });
+  const seen: EngineEnv[] = [];
+  const logged: string[] = [];
+  const logger: Logger = { error: (context, err) => logged.push(formatError(context, err)) };
+  const server = await startTestServer({ secrets: store, clientFactory: fakeFactory(spaces, calls, seen), logger, ...opts });
   t.after(() => server.cleanup());
   const bodies: string[] = [];
   const call = async (method: string, pathname: string, body?: unknown) => {
@@ -150,12 +164,12 @@ export async function harness(t: { after: (fn: () => Promise<void> | void) => vo
     await call('PUT', `/api/projects/sync-test/environments/${name}/credentials`, { username: 'admin', password: PLANTED });
   }
   const writes = (env?: string) => calls.filter((c) => c.method !== 'GET' && (!env || c.env === env)).map((c) => `${c.method} ${c.path}`);
-  return { server, store, calls, spaces, bodies, dir, call, job, writes };
+  return { server, store, calls, spaces, envs: seen, logged, bodies, dir, call, job, writes };
 }
 
 export function assertNoSecret(h: Harness, extra: string[] = []): void {
   for (const b of [...h.bodies, ...extra]) {
-    for (const s of [PLANTED, PLANTED_RUN]) {
+    for (const s of [PLANTED, PLANTED_RUN, PLANTED_CONN]) {
       if (b.includes(s)) throw new Error(`a response leaked a secret: ${b.slice(Math.max(0, b.indexOf(s) - 200), b.indexOf(s) + 50)}`);
     }
   }

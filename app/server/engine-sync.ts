@@ -69,7 +69,7 @@ export interface Summary { title: string; subtitle: string; sections: SummarySec
 
 interface RunCommon { projectDir: string; env: EngineEnv; onEvent?: OnEvent; signal?: AbortSignal; clientFactory?: ClientFactory; log?: (line: string) => void }
 
-export const runExport: (opts: RunCommon) => Promise<{ code: number; artifacts: number; counts: Record<string, number> }> = commandsModule.runExport;
+export const runExport: (opts: RunCommon & { dest?: string }) => Promise<{ code: number; artifacts: number; counts: Record<string, number> }> = commandsModule.runExport;
 export const computePlan: (opts: RunCommon & {
   envName: string; from?: string; sourceDir?: string; sourceArtifacts?: Artifact[]; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
 }) => Promise<{ env: EngineEnv; config: EngineConfig; plan: EnginePlan; targetList: TargetArtifact[] }> = commandsModule.computePlan;

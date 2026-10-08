@@ -2,6 +2,7 @@
 // as "Snapshot of <Env>" (with the items that drifted since their last
 // promotion), and the in-memory snapshot cache that Explore and Compare read:
 // artifacts, tree index and relationships, keyed by the snapshot commit.
+import { randomUUID } from 'node:crypto';
 import fs, { statSync } from 'node:fs';
 import git from 'isomorphic-git';
 import path from 'node:path';
@@ -17,7 +18,7 @@ import {
   DEFAULT_AUTHOR, commitChange, displayName, isPlainObject, readMeta, secretsId, withProjectLock, type ProjectRef,
 } from './project-meta.ts';
 import { log } from './repo.ts';
-import { makeScrubber } from './scrub.ts';
+import { makeScrubber, scrubError } from './scrub.ts';
 import { buildTreeIndex, type TreeIndex } from './tree-index.ts';
 import { commitMessage } from './trailers.ts';
 
@@ -42,7 +43,8 @@ export function driftedKeys(projectDir: string, env: string, artifacts: Map<stri
   }).sort();
 }
 
-// Exports `env` into snapshots/<env>/ and commits. Call inside withProjectLock.
+// Exports `env` into a temporary folder, swaps it into snapshots/<env>/ only
+// when the export succeeded, and commits. Call inside withProjectLock.
 export async function takeSnapshot(opts: {
   ref: ProjectRef; env: EngineEnv; title: string; trailers?: Record<string, string>;
   onEvent?: OnEvent; signal?: AbortSignal; clientFactory?: ClientFactory;
@@ -51,7 +53,18 @@ export async function takeSnapshot(opts: {
   always?: boolean;
 }): Promise<SnapshotResult> {
   const { ref, env } = opts;
-  const r = await runExport({ projectDir: ref.dir, env, onEvent: opts.onEvent, signal: opts.signal, clientFactory: opts.clientFactory, log: () => {} });
+  const temp = path.join(ref.dir, 'plans', `snap-${randomUUID()}`);
+  let r: Awaited<ReturnType<typeof runExport>>;
+  try {
+    r = await runExport({ projectDir: ref.dir, env, dest: temp, onEvent: opts.onEvent, signal: opts.signal, clientFactory: opts.clientFactory, log: () => {} });
+  } catch (err) {
+    fs.rmSync(temp, { recursive: true, force: true });
+    throw scrubError(err, envSecrets(env));
+  }
+  const final = snapshotDir(ref.dir, env.name);
+  fs.rmSync(final, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(final), { recursive: true });
+  fs.renameSync(temp, final);
   const drifted = driftedKeys(ref.dir, env.name, readTree(snapshotDir(ref.dir, env.name)));
   const body = drifted.length ? `Drifted: ${drifted.length} item(s) changed since the last promotion.\n${drifted.join('\n')}` : undefined;
   const message = commitMessage(opts.title, { Environment: env.name, ...opts.trailers }, body);

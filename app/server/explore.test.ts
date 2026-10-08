@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ExploreItem, SearchResponse, SnapshotResult, TreeNode } from '../shared/sync-api.ts';
 import { log, readTreeAt } from './repo.ts';
-import { PLANTED, assertNoSecret, harness } from './sync-fixtures.ts';
+import { PLANTED, PLANTED_CONN, assertNoSecret, harness } from './sync-fixtures.ts';
 import { setEnvSecret } from './environments.ts';
 import { SEARCH_LIMIT, search } from './explore.ts';
 import { snapshotFrom } from './snapshots.ts';
@@ -84,6 +84,7 @@ test('snapshot → commit, explore tree (lazy), item, search; no secret anywhere
   assertNoSecret(h);
   const tree = await readTreeAt(h.dir, head.oid, '');
   assert.ok(!JSON.stringify([...tree]).includes(PLANTED));
+  assert.ok(!JSON.stringify([...tree]).includes(PLANTED_CONN));
 });
 
 test('snapshot of an unknown environment → 404; without credentials → 400', async (t) => {

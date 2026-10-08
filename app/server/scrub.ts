@@ -20,3 +20,17 @@ export function makeScrubber(secrets: Iterable<string | null | undefined>): Scru
   };
   return (<T>(value: T): T => (list.length ? (walk(value) as T) : value)) as Scrubber;
 }
+
+// Masks known secrets in a thrown error's message, stack and body (engine
+// HttpErrors carry the response body), so the job log never holds them.
+export function scrubError(err: unknown, secrets: Iterable<string | null | undefined>): unknown {
+  if (!err || typeof err !== 'object') return err;
+  const scrub = makeScrubber(secrets);
+  const e = err as { message?: unknown; stack?: unknown; body?: unknown };
+  for (const k of ['message', 'stack', 'body'] as const) {
+    if (typeof e[k] === 'string') {
+      try { e[k] = scrub(e[k] as string); } catch { /* read-only property */ }
+    }
+  }
+  return err;
+}

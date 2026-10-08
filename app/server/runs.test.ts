@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ApplyResult, Changeset, PlanResult, RunRecord } from '../shared/sync-api.ts';
 import { log, readTreeAt } from './repo.ts';
-import { PLANTED, PLANTED_RUN, assertNoSecret, harness, type Harness } from './sync-fixtures.ts';
+import { PLANTED, PLANTED_CONN, PLANTED_RUN, assertNoSecret, harness, type Harness } from './sync-fixtures.ts';
 
 const P = '/api/projects/sync-test';
 const FORM = 'kapps/services/forms/it-request/form';
@@ -110,7 +110,7 @@ test('guided apply writes only the selected keys, backs up first, records the ru
 
   assertNoSecret(h, [events]);
   const repo = await repoText(h);
-  assert.ok(!repo.includes(PLANTED) && !repo.includes(PLANTED_RUN), 'no secret in the repository');
+  assert.ok(![PLANTED, PLANTED_RUN, PLANTED_CONN].some((x) => repo.includes(x)), 'no secret in the repository');
 });
 
 test('remembered secrets go to the store; a readOnly target is refused; a changeset records where it was applied', async (t) => {

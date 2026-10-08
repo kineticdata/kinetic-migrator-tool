@@ -3,6 +3,8 @@
 // enriched from run records. Restore starts a comparison with a backup (or
 // any snapshot commit) as the source and the live target as To, pre-ticking
 // the items the apply that took that backup touched.
+import fs from 'node:fs';
+import git from 'isomorphic-git';
 import type { HistoryDetail, HistoryEvent, HistoryType } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
 import { startCompare } from './compare.ts';
@@ -15,7 +17,8 @@ import { requireEnvironment, type SyncContext } from './snapshots.ts';
 import { parseMessage } from './trailers.ts';
 
 const TYPES: HistoryType[] = ['snapshot', 'changeset', 'applied', 'backup', 'restore', 'drift', 'project'];
-const HISTORY_LIMIT = 1000;
+// The whole log: backups and runs of any age must stay findable.
+const ALL = Number.MAX_SAFE_INTEGER;
 
 function typeOf(title: string): HistoryType {
   if (/^Snapshot of /.test(title)) return 'snapshot';
@@ -45,16 +48,21 @@ export function eventsFor(ref: ProjectRef, entry: LogEntry): HistoryEvent[] {
 
 export async function history(ref: ProjectRef, filter: { env?: string | null; type?: string | null }): Promise<HistoryEvent[]> {
   if (filter.type && !TYPES.includes(filter.type as HistoryType)) throw badRequest(`"type" is one of ${TYPES.join(', ')}.`);
-  const entries = await log(ref.dir, { limit: HISTORY_LIMIT });
+  const entries = await log(ref.dir, { limit: ALL });
   return entries.flatMap((e) => eventsFor(ref, e))
     .filter((e) => (!filter.env || e.env === filter.env) && (!filter.type || e.type === filter.type));
 }
 
 async function findEntry(ref: ProjectRef, commit: string): Promise<LogEntry> {
   const oid = await resolveCommit(ref.dir, commit);
-  const entry = oid ? (await log(ref.dir, { limit: HISTORY_LIMIT })).find((e) => e.oid === oid) : undefined;
-  if (!entry) throw notFound('No such commit in this project.');
-  return entry;
+  if (!oid) throw notFound('No such commit in this project.');
+  const { commit: c } = await git.readCommit({ fs, dir: ref.dir, oid });
+  return {
+    oid,
+    message: c.message.replace(/\n$/, ''),
+    at: new Date(c.author.timestamp * 1000).toISOString(),
+    author: { name: c.author.name, email: c.author.email },
+  };
 }
 
 export function registerHistoryRoutes(router: Router, ctx: SyncContext): void {

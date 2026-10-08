@@ -13,7 +13,7 @@
 //   Resume is another apply of the same plan: the engine re-plans and skips
 //   what is already in place.
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type {
   ApplyResult, AttentionKind, EnvironmentValue, NeedsAttention, PlanAction, PlanItemOut, PlanResult, Resolution,
@@ -31,7 +31,7 @@ import { materializeTree, resolveCommit } from './pinned.ts';
 import { commitChange, displayName, isPlainObject, secretsId, withProjectLock, type ProjectRef } from './project-meta.ts';
 import type { Router } from './router.ts';
 import { RUNS_DIR } from './run-records.ts';
-import { makeScrubber } from './scrub.ts';
+import { makeScrubber, scrubError } from './scrub.ts';
 import {
   connectionSecretFields, connectionSecretName, handlerSecretName, handlerSecretProperties,
 } from './secret-names.ts';
@@ -53,12 +53,29 @@ interface StoredPlan {
 const MAX_PLANS = 50;
 const plans = new Map<string, StoredPlan>();
 
+// Plans whose apply is running are never evicted (their source folder is in use).
+const applying = new Set<string>();
+
 function remember(id: string, plan: StoredPlan): void {
   plans.set(id, plan);
-  while (plans.size > MAX_PLANS) {
-    const [oldest, old] = plans.entries().next().value!;
-    plans.delete(oldest);
+  for (const [oldId, old] of plans) {
+    if (plans.size <= MAX_PLANS) break;
+    if (applying.has(oldId) || oldId === id) continue;
+    plans.delete(oldId);
     rmSync(old.sourceDir, { recursive: true, force: true });
+  }
+}
+
+// At server start: source folders (plans/src-*) of plans that no longer
+// exist and unfinished snapshot exports (plans/snap-*), for example from
+// before a restart or a crash.
+export function removeStaleWorkFolders(projectDir: string): void {
+  const dir = path.join(projectDir, 'plans');
+  if (!existsSync(dir)) return;
+  const live = new Set([...plans.values()].map((p) => p.sourceDir));
+  for (const name of readdirSync(dir)) {
+    const full = path.join(dir, name);
+    if (/^(src|snap)-/.test(name) && !live.has(full)) rmSync(full, { recursive: true, force: true });
   }
 }
 
@@ -235,7 +252,12 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
   const sourcePath = `snapshots/${from}`;
   const sourceDir = path.join(ref.dir, 'plans', `src-${planId}`);
   const pinned = commit;
-  return ctx.jobs.createJob('plan', async (emit, signal) => {
+  const known = [env.password, ...Object.values(env.vars)];
+  return ctx.jobs.createJob('plan', (emit, signal) => runPlanJob(emit, signal).catch((err) => {
+    rmSync(sourceDir, { recursive: true, force: true });
+    throw scrubError(err, known);
+  }));
+  async function runPlanJob(emit: Emit, signal: AbortSignal): Promise<PlanResult> {
     if (!(await materializeTree(ref.dir, pinned, sourcePath, sourceDir))) {
       throw new ApiError(404, 'no_snapshot', `The pinned snapshot of ${displayName(from)} is missing from the project history.`);
     }
@@ -254,7 +276,7 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     const scrubbed = makeScrubber([env.password, ...Object.values(env.vars)])(result);
     remember(planId, { projectDir: ref.dir, result: scrubbed, kind, select, sourceDir, sourcePath, resolutions });
     return scrubbed;
-  });
+  }
 }
 
 // ---- Apply -----------------------------------------------------------------
@@ -280,10 +302,14 @@ function validateApply(plan: StoredPlan, body: unknown, readOnly: boolean): Appl
   if (!Array.isArray(acks) || !acks.every((a) => typeof a === 'string')) throw badRequest('"acknowledgements" is a list of ids.');
   const values = body.values ?? {};
   if (!isPlainObject(values) || !Object.values(values).every(isPlainObject)) throw badRequest('"values" maps item keys to { path: value }.');
+  // Only the environment values the plan listed (which never include secrets).
+  const planned = new Set(r.environmentValues.map((v) => v.id));
   for (const [key, paths] of Object.entries(values)) {
-    if (!plan.select.has(key)) throw badRequest(`"values" names an item that is not in the plan: ${key}`);
     for (const p of Object.keys(paths as Obj)) {
-      try { parsePath(p); } catch { throw badRequest(`Invalid value path "${p}".`); }
+      let segs: string[];
+      try { segs = parsePath(p); } catch { throw badRequest(`Invalid value path "${p}".`); }
+      if (segs.some(isSecretName)) throw new ApiError(400, 'secret_value', 'Secrets cannot be saved as environment values; enter them as secrets.');
+      if (!planned.has(`${key}#${p}`)) throw badRequest(`"values" names a value that is not in the plan: ${key} ${p}`);
     }
   }
   const secrets = body.secrets ?? {};
@@ -410,10 +436,10 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   if (r.changesetId && (status === 'applied' || status === 'partial') && existsSync(path.join(ref.dir, 'changesets', `${r.changesetId}.json`))) {
     recordApplied(ref, r.changesetId, { env: r.to, runId, at: safe.finishedAt });
   }
-  const whole = status === 'applied';
-  const title = plan.kind === 'restore'
-    ? `${whole ? 'Restored' : 'Partly restored'} ${To} from a backup`
-    : `${whole ? 'Applied' : 'Partly applied'} '${r.name}' to ${To}`;
+  const verb = plan.kind === 'restore'
+    ? { applied: 'Restored', partial: 'Partly restored', failed: 'Failed to restore', cancelled: 'Partly restored' }[status]
+    : { applied: 'Applied', partial: 'Partly applied', failed: 'Failed to apply', cancelled: 'Partly applied' }[status];
+  const title = plan.kind === 'restore' ? `${verb} ${To} from a backup` : `${verb} '${r.name}' to ${To}`;
   const commit = await commitChange(ref, commitMessage(title, { Environment: r.to, Run: runId, Changeset: r.changesetId, Plan: r.planId }));
   if (cancelled) throw cancelled;
   return scrub({ runId, status, commit, backupCommit, done, error });
@@ -433,7 +459,17 @@ export function registerRunRoutes(router: Router, ctx: SyncContext): void {
     const plan = findPlan(ref, params.id);
     const input = validateApply(plan, body, readEnvironmentFile(ref.dir, plan.result.to).readOnly);
     await secretsId(ref);
-    const jobId = ctx.jobs.createJob('apply', (emit, signal) => withProjectLock(ref, () => runApplyJob(ctx, ref, plan, input, emit, signal)), {
+    const id = plan.result.planId;
+    const jobId = ctx.jobs.createJob('apply', async (emit, signal) => {
+      applying.add(id);
+      try {
+        return await withProjectLock(ref, () => runApplyJob(ctx, ref, plan, input, emit, signal));
+      } catch (err) {
+        throw scrubError(err, [...Object.values(input.secrets)]);
+      } finally {
+        applying.delete(id);
+      }
+    }, {
       lockKey: `${ref.id}/${plan.result.to}`,
     });
     return { status: 202, json: { jobId } };
