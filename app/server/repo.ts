@@ -144,11 +144,28 @@ export async function setRemote(dir: string, url: string | null): Promise<void> 
   if (url) await git.addRemote({ fs, dir, remote: 'origin', url });
 }
 
+// The token travels as HTTP basic auth: https, or plain http only to this
+// computer.
+export function isSafeRemoteUrl(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+  return u.protocol === 'https:' || (u.protocol === 'http:' && loopback);
+}
+
 // Pushes `main` to origin. The token comes from the store and is sent only to
-// the remote as HTTP basic auth.
+// the remote as HTTP basic auth. The remote is checked again here, since it
+// may have been set outside the app. Errors never repeat the URL.
 export async function push(dir: string, opts: { store: SecretStore; account: string }): Promise<void> {
   const url = await getRemote(dir);
   if (!url) throw new Error('No remote repository is set.');
+  if (!isSafeRemoteUrl(url)) {
+    throw Object.assign(new Error('The remote repository’s address must start with https:// before anything is pushed to it.'), { code: 'UnsafeRemoteError' });
+  }
   const token = await opts.store.get(opts.account);
   const result = await git.push({
     fs, http, dir, remote: 'origin', ref: BRANCH,

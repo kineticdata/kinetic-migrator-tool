@@ -210,3 +210,16 @@ test('push succeeds: last push records the commit pushed', async (t) => {
   assert.deepEqual(settings.lastPush, ok.result);
   h.noToken();
 });
+
+test('push refuses a plain-http remote set outside the app, and never sends the token', async (t) => {
+  const h = await setup(t);
+  await h.call('PUT', `${P}/repository`, { token: TOKEN });
+  const { setRemote } = await import('./repo.ts');
+  await setRemote(h.dir, 'http://git.example.com/team/project.git');
+  const refused = await h.job(`${P}/repository/push`);
+  assert.equal(refused.status, 'failed');
+  assert.equal(refused.error.code, 'push_failed');
+  assert.match(refused.error.message, /must start with https:\/\//);
+  assert.doesNotMatch(refused.error.message, /git\.example\.com/);
+  h.noToken();
+});

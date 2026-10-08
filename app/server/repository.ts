@@ -13,7 +13,7 @@ import {
   DEFAULT_AUTHOR, commitChange, isPlainObject, readMeta, secretsId, withProjectLock, withSecretsLock, writeMeta, type ProjectRef,
 } from './project-meta.ts';
 import { findProject } from './projects.ts';
-import { getRemote, push as repoPush, setRemote } from './repo.ts';
+import { getRemote, isSafeRemoteUrl, push as repoPush, setRemote } from './repo.ts';
 import type { Router } from './router.ts';
 import { accountFor, type SecretStore } from './secrets.ts';
 
@@ -113,8 +113,7 @@ function parseRemoteUrl(v: unknown): string | null {
     throw badRequest('Enter the remote repository’s address, starting with https://.');
   }
   // The token travels as basic auth: plain http only to this computer.
-  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
-  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && loopback)) throw badRequest('The remote repository’s address must start with https://.');
+  if (!isSafeRemoteUrl(u.toString())) throw badRequest('The remote repository’s address must start with https://.');
   if (u.username || u.password) throw badRequest('Leave sign-in details out of the address: put the token in the Token field.');
   return u.toString();
 }
@@ -162,7 +161,8 @@ function pushError(err: unknown): ApiError {
   const code = e?.code ?? e?.name;
   const status = e?.data?.statusCode;
   let message = 'The push did not complete.';
-  if (code === 'UserCanceledError') message = 'The remote repository needs a token: add one in Settings → Repository.';
+  if (code === 'UnsafeRemoteError') message = 'The remote repository’s address must start with https:// before anything is pushed to it. Change it in Settings → Repository.';
+  else if (code === 'UserCanceledError') message = 'The remote repository needs a token: add one in Settings → Repository.';
   else if (code === 'HttpError' && (status === 401 || status === 403)) message = `The remote repository refused the token (${status}). Check it has write access.`;
   else if (code === 'HttpError' && status === 404) message = 'There is no repository at that address (404).';
   else if (code === 'HttpError') message = `The remote repository returned an error (${status ?? 'unknown'}).`;

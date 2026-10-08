@@ -6,7 +6,7 @@ import fs, { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import git from 'isomorphic-git';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { commitAll, ensureRepo, getRemote, log, push, readTreeAt, setRemote } from './repo.ts';
+import { commitAll, ensureRepo, getRemote, isSafeRemoteUrl, log, push, readTreeAt, setRemote } from './repo.ts';
 import { MemoryStore } from './secrets.ts';
 
 const author = { name: 'Test User', email: 'test@example.com' };
@@ -100,4 +100,26 @@ test('commitAll stages only the project layout, never stray files beside it', as
   // A stray file alone is no change to commit.
   write(dir, 'other.txt', 'x');
   assert.equal(await commitAll(dir, 'Nothing', author), null);
+});
+
+test('push refuses a plain-http remote to another computer before reading the token', async (t) => {
+  const dir = tempDir();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  await ensureRepo(dir);
+  write(dir, 'state/a.json', '{}');
+  await commitAll(dir, 'First', author);
+  // Set outside the app (for example by the CLI or by hand).
+  await setRemote(dir, 'http://git.example.com/team/project.git');
+  const store = new MemoryStore();
+  await store.set('p/_project/git/token', 'tok-Planted-55');
+  let reads = 0;
+  const counting = { ...store, get: async (a: string) => { reads++; return store.get(a); }, has: (a: string) => store.has(a), set: (a: string, v: string) => store.set(a, v), delete: (a: string) => store.delete(a) };
+  await assert.rejects(push(dir, { store: counting, account: 'p/_project/git/token' }), (e: Error) => /https:\/\//.test(e.message) && !e.message.includes('git.example.com') && !e.message.includes('tok-'));
+  assert.equal(reads, 0, 'the token is never read for an unsafe remote');
+  assert.equal(isSafeRemoteUrl('https://git.example.com/x.git'), true);
+  assert.equal(isSafeRemoteUrl('http://localhost:8080/x.git'), true);
+  assert.equal(isSafeRemoteUrl('http://127.0.0.1/x.git'), true);
+  assert.equal(isSafeRemoteUrl('http://git.example.com/x.git'), false);
+  assert.equal(isSafeRemoteUrl('git@github.com:team/x.git'), false);
+  assert.equal(isSafeRemoteUrl('not a url'), false);
 });
