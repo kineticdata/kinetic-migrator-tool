@@ -1,0 +1,133 @@
+// Plan and apply rules: what must be ticked, which environment values are
+// sent (and which are missing), plain fixes for plan errors, the apply phases
+// and the live checklist built from streamed job events.
+import { expect, test } from 'vitest';
+import type { EnvironmentValue, PlanItemOut, PlanResult } from '../../../shared/sync-api';
+import {
+  attentionList, checklistFrom, errorFix, groupByPhase, parseValueText, restoreHref, backupHref, valueText, valuesPayload, writes,
+} from './plan';
+
+const item = (key: string, type: string, action: PlanItemOut['action'] = 'create', drift = false): PlanItemOut => ({
+  key, type, label: key.split('/').at(-2) ?? key, action, drift, diff: [],
+});
+
+function plan(over: Partial<PlanResult> = {}): PlanResult {
+  return {
+    planId: 'pl1', name: '2 items from Dev', to: 'test', from: 'dev', changesetId: null, sourceCommit: 'c1',
+    items: [], counts: { create: 0, update: 0, unchanged: 0, manual: 0, 'skip-drift': 0, delete: 0 },
+    needsAttention: [], environmentValues: [], secretsNeeded: [], errors: [], warnings: [], ...over,
+  };
+}
+
+const ev = (id: string, over: Partial<EnvironmentValue> = {}): EnvironmentValue => ({
+  id, key: id.split('#')[0], path: id.split('#')[1], label: id, from: 'a', to: 'b', origin: 'attribute', required: false, ...over,
+});
+
+test('the attention list keeps server entries, skips kept drift and adds the other preflight warnings', () => {
+  const p = plan({
+    items: [item('kapps/hr/forms/a/form', 'forms', 'update', true), item('kapps/hr/forms/b/form', 'forms', 'skip-drift', true)],
+    needsAttention: [
+      { id: 'drift:kapps/hr/forms/a/form', kind: 'drift', key: 'kapps/hr/forms/a/form', message: 'A was changed.' },
+      { id: 'drift:kapps/hr/forms/b/form', kind: 'drift', key: 'kapps/hr/forms/b/form', message: 'B was changed.' },
+      { id: 'handler:handlers/x/handler', kind: 'handler', key: 'handlers/x/handler', message: 'Installs handler X.' },
+    ],
+    warnings: [
+      'kapps/hr/forms/c/data: creating/updating rows will run these workflows in the target: Notify',
+      'connections/tickets/connection: will be created without credentials (set …)',
+      'kapps/hr/kapp: environment-bound attribute "Web Server Url" is empty in the target and no override sets it',
+    ],
+  });
+  const list = attentionList(p);
+  expect(list.map((a) => a.id)).toEqual(['drift:kapps/hr/forms/a/form', 'handler:handlers/x/handler', 'warning:2']);
+  expect(list.map((a) => a.send)).toEqual([true, true, false]);
+  expect(list[2]).toMatchObject({ kind: 'warning', message: 'kapps/hr/kapp: environment-bound attribute "Web Server Url" is empty in the target and no override sets it' });
+});
+
+test('plan errors come with a plain fix', () => {
+  expect(errorFix('Routine Notify Manager is used by exported workflows but does not exist in the target', 'dev', 'test').fix)
+    .toMatch(/Add the routine to the changeset, or create it in Test first/);
+  expect(errorFix('Handler smtp_send_v1 is used by exported workflows but is not installed in the target', 'dev', 'test').fix)
+    .toMatch(/install it in Test/);
+  expect(errorFix('kapps/hr/forms/a/form: not in the source snapshot', 'dev', 'test').fix).toMatch(/new snapshot of Dev/);
+  expect(errorFix('kapps/hr/forms/a/form: id 12 already exists in the target as kapps/hr/forms/b/form; it was probably renamed — reconcile by hand before promoting', 'dev', 'test').fix)
+    .toMatch(/Reconcile it by hand in Test/);
+  expect(errorFix('Something odd', 'dev', 'test')).toEqual({ message: 'Something odd', fix: 'Fix the cause in Dev or Test, then plan again.' });
+});
+
+test('value text round-trips by the original type', () => {
+  expect(valueText(null)).toBe('');
+  expect(valueText(undefined)).toBe('');
+  expect(valueText('https://api.example.com')).toBe('https://api.example.com');
+  expect(valueText(30)).toBe('30');
+  expect(valueText({ a: 1 })).toBe('{\n  "a": 1\n}');
+  expect(parseValueText('42', 30)).toEqual({ value: 42 });
+  expect(parseValueText('forty', 30)).toEqual({ value: 'forty' });
+  expect(parseValueText('false', true)).toEqual({ value: false });
+  expect(parseValueText('{"a":2}', { a: 1 })).toEqual({ value: { a: 2 } });
+  expect(parseValueText('{oops', { a: 1 })).toEqual({ error: 'Enter valid JSON.' });
+  expect(parseValueText('x', null)).toEqual({ value: 'x' });
+});
+
+test('only edited values are sent, required ones must be filled', () => {
+  const values = [
+    ev('kapps/hr/kapp#attributes[Web Server Url]', { from: 'https://dev.example.com', to: 'https://test.example.com' }),
+    ev('connections/tickets/connection#baseUrl', { from: 'https://api.example.com', to: null, required: true }),
+    ev('handlers/x/handler#properties[timeout]', { from: 30, to: 60 }),
+  ];
+  const none = valuesPayload(values, {});
+  expect(none.values).toEqual({});
+  expect(none.missing).toEqual(['connections/tickets/connection#baseUrl']);
+
+  const filled = valuesPayload(values, {
+    'connections/tickets/connection#baseUrl': ' https://api.test.example.com ',
+    'kapps/hr/kapp#attributes[Web Server Url]': 'https://test.example.com',
+    'handlers/x/handler#properties[timeout]': '90',
+  });
+  expect(filled.missing).toEqual([]);
+  expect(filled.errors).toEqual({});
+  expect(filled.values).toEqual({
+    'connections/tickets/connection': { baseUrl: 'https://api.test.example.com' },
+    'handlers/x/handler': { 'properties[timeout]': 90 },
+  });
+
+  const cleared = valuesPayload(values, { 'connections/tickets/connection#baseUrl': '   ' });
+  expect(cleared.missing).toEqual(['connections/tickets/connection#baseUrl']);
+});
+
+test('items are grouped by apply phase in the order the apply runs', () => {
+  const items = [
+    item('kapps/hr/forms/a/form', 'forms'),
+    item('handlers/x/handler', 'handlers'),
+    item('connections/t/operations/create', 'operations'),
+    item('connections/t/connection', 'connections'),
+    item('kapps/hr/kapp', 'kapps', 'unchanged'),
+    item('kapps/hr/forms/a/data', 'data', 'update'),
+  ];
+  expect(items.filter(writes).map((i) => i.key)).not.toContain('kapps/hr/kapp');
+  const groups = groupByPhase(items.filter(writes));
+  expect(groups.map((g) => g.label)).toEqual(['Connections', 'Handlers', 'Forms', 'Reference data']);
+  expect(groups[0].items.map((i) => i.key)).toEqual(['connections/t/connection', 'connections/t/operations/create']);
+});
+
+test('the checklist follows step and item events', () => {
+  expect(checklistFrom([])).toEqual({ backup: 'pending', items: {} });
+  const s = checklistFrom([
+    { type: 'step', step: 'backup', status: 'running' },
+    { type: 'progress', phase: 'backup', done: 1, total: 4 },
+    { type: 'step', step: 'backup', status: 'done' },
+    { type: 'item', key: 'a', status: 'running' },
+    { type: 'item', key: 'a', status: 'done' },
+    { type: 'item', key: 'b', status: 'running' },
+    { type: 'item', key: 'b', status: 'failed', message: 'The Kinetic Platform returned an error (500).' },
+  ]);
+  expect(s.backup).toBe('done');
+  expect(s.items).toEqual({ a: { status: 'done' }, b: { status: 'failed', message: 'The Kinetic Platform returned an error (500).' } });
+  // A resumed run starts from what the previous runs finished.
+  const resumed = checklistFrom([{ type: 'item', key: 'b', status: 'running' }], { a: { status: 'done' }, b: { status: 'failed' } });
+  expect(resumed.items).toEqual({ a: { status: 'done' }, b: { status: 'running' } });
+});
+
+test('links to the backup and to a restore from it', () => {
+  expect(backupHref('demo', 'abc123')).toBe('/p/demo/history?commit=abc123');
+  expect(restoreHref('demo', 'abc123', 'test')).toBe('/p/demo/compare?restore=abc123&to=test');
+});
