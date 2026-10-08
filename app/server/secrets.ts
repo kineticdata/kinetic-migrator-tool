@@ -3,6 +3,7 @@
 // Values are passed to keychain tools on stdin (never argv), are never logged,
 // and keychain errors never include tool output (it can echo the input).
 import { execFile } from 'node:child_process';
+import { PowerShellHelper, WinCredentials } from './secrets-windows.ts';
 
 export interface SecretStore {
   get(account: string): Promise<string | undefined>;
@@ -11,6 +12,8 @@ export interface SecretStore {
   has(account: string): Promise<boolean>;
   // True when backed by the OS keychain rather than session memory.
   readonly persistent?: boolean;
+  // Stops any helper process the store runs.
+  close?(): void;
 }
 
 export const SERVICE = 'kinetic-migrate';
@@ -68,31 +71,18 @@ class KeychainError extends Error {
 // `security -i` reads commands from stdin; arguments are double-quoted.
 const quoteForSecurity = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
-const PS_PRELUDE = [
-  "$ErrorActionPreference = 'Stop'",
-  '[void][Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime]',
-  '$vault = New-Object Windows.Security.Credentials.PasswordVault',
-  '$in = [Console]::In.ReadToEnd() | ConvertFrom-Json',
-  `$resource = '${SERVICE}'`,
-].join('; ');
-
-// Retrieve into $c; exit 44 only for "Element not found" (0x80070490),
-// exit 1 for any other failure.
-const PS_RETRIEVE = 'try { $c = $vault.Retrieve($resource, $in.account) } catch { $e = $_.Exception; while ($e) { if ($e.HResult -eq -2147023728) { exit 44 }; $e = $e.InnerException }; exit 1 }';
-
-const PS = {
-  probe: PS_PRELUDE,
-  set: `${PS_PRELUDE}; try { $vault.Remove($vault.Retrieve($resource, $in.account)) } catch {}; $vault.Add((New-Object Windows.Security.Credentials.PasswordCredential($resource, $in.account, $in.value)))`,
-  get: `${PS_PRELUDE}; ${PS_RETRIEVE}; $c.RetrievePassword(); [Console]::Out.Write($c.Password)`,
-  delete: `${PS_PRELUDE}; ${PS_RETRIEVE}; $vault.Remove($c)`,
-};
-
-const psArgs = (script: string) => ['-NoProfile', '-NonInteractive', '-Command', script];
+// Windows: see secrets-windows.ts (Credential Manager through one long-lived
+// PowerShell helper, values split into parts past the 2560-byte limit).
+export { WIN_HELPER_SCRIPT, WIN_PART_CHARS, asciiJson, winArgs, winPowerShell } from './secrets-windows.ts';
 
 export interface KeychainOptions {
   platform?: NodeJS.Platform | string;
   run?: CommandRunner;
   service?: string;
+  // Windows: the powershell.exe to run (defaults to the system copy), or a
+  // helper to use instead of starting one (tests).
+  powershell?: string;
+  winHelper?: Pick<PowerShellHelper, 'request'> & { close?: () => void };
 }
 
 export class KeychainStore implements SecretStore {
@@ -100,11 +90,35 @@ export class KeychainStore implements SecretStore {
   private platform: string;
   private run: CommandRunner;
   private service: string;
+  private helper: (Pick<PowerShellHelper, 'request'> & { close?: () => void }) | null = null;
+  private winOpts: KeychainOptions;
+  private winStore: WinCredentials | null = null;
 
   constructor(opts: KeychainOptions = {}) {
     this.platform = opts.platform ?? process.platform;
     this.run = opts.run ?? execFileRunner;
     this.service = opts.service ?? SERVICE;
+    this.winOpts = opts;
+  }
+
+  // Windows: the helper is started on first use and kept for the server's life.
+  private get win(): WinCredentials {
+    if (!this.winStore) {
+      this.helper = this.winOpts.winHelper ?? new PowerShellHelper({ powershell: this.winOpts.powershell });
+      this.winStore = new WinCredentials(this.helper, this.service);
+    }
+    return this.winStore;
+  }
+
+  close(): void {
+    this.helper?.close?.();
+  }
+
+  // 'timeout' (Windows only): the helper is still starting (a slow first
+  // compile), which is not the same as no keychain.
+  async availability(): Promise<'available' | 'unavailable' | 'timeout'> {
+    if (this.platform === 'win32') return this.win.probe();
+    return (await this.available()) ? 'available' : 'unavailable';
   }
 
   async available(): Promise<boolean> {
@@ -117,7 +131,10 @@ export class KeychainStore implements SecretStore {
           const r = await this.run('secret-tool', ['search', 'service', `${this.service}-probe`]);
           return r.code === 0 || (r.code === 1 && r.stderr.trim() === '');
         }
-        case 'win32': return (await this.run('powershell.exe', psArgs(PS.probe), '{}')).code === 0;
+        // Compiles the helper and reads a credential that does not exist: fails
+        // where Credential Manager is unusable (no user profile loaded, as in
+        // some service or remote sessions, or PowerShell locked down).
+        case 'win32': return (await this.win.probe()) === 'available';
         default: return false;
       }
     } catch {
@@ -143,8 +160,8 @@ export class KeychainStore implements SecretStore {
         r = await this.run('secret-tool', ['store', `--label=${this.service} ${account}`, 'service', this.service, 'account', account], value);
         break;
       case 'win32':
-        r = await this.run('powershell.exe', psArgs(PS.set), JSON.stringify({ account, value }));
-        break;
+        await this.win.set(account, value);
+        return;
       default:
         throw new Error('No system keychain on this platform.');
     }
@@ -166,17 +183,21 @@ export class KeychainStore implements SecretStore {
         // An empty lookup (exit 0 or 1, no output at all) is "not found".
         if ((r.code === 0 || r.code === 1) && r.stdout === '' && r.stderr.trim() === '') return undefined;
         throw new KeychainError('read', r.code);
-      case 'win32':
-        r = await this.run('powershell.exe', psArgs(PS.get), JSON.stringify({ account }));
-        if (r.code === NOT_FOUND) return undefined;
-        if (r.code !== 0) throw new KeychainError('read', r.code);
-        return decodeStored(r.stdout);
+      case 'win32': {
+        const stored = await this.win.get(account);
+        if (stored === undefined) return undefined;
+        // Windows never stored values before the b64: marker: anything else
+        // is not a value of ours.
+        if (!/^b64:[A-Za-z0-9+/=]*$/.test(stored)) throw new KeychainError('read', 1);
+        return decodeStored(stored);
+      }
       default:
         throw new Error('No system keychain on this platform.');
     }
   }
 
   async has(account: string): Promise<boolean> {
+    if (this.platform === 'win32') return this.win.has(account);
     if (this.platform === 'darwin') {
       const r = await this.run('security', ['find-generic-password', '-s', this.service, '-a', account]);
       if (r.code === NOT_FOUND) return false;
@@ -199,8 +220,7 @@ export class KeychainStore implements SecretStore {
         if (r.code !== 0 && !(r.code === 1 && r.stderr.trim() === '')) throw new KeychainError('delete', r.code);
         return;
       case 'win32':
-        r = await this.run('powershell.exe', psArgs(PS.delete), JSON.stringify({ account }));
-        if (r.code !== 0 && r.code !== NOT_FOUND) throw new KeychainError('delete', r.code);
+        await this.win.delete(account);
         return;
       default:
         throw new Error('No system keychain on this platform.');
@@ -208,8 +228,46 @@ export class KeychainStore implements SecretStore {
   }
 }
 
-// The OS keychain when its tool works, otherwise session memory.
-export async function createDefaultStore(): Promise<SecretStore> {
-  const keychain = new KeychainStore();
-  return (await keychain.available()) ? keychain : new MemoryStore();
+// A store that is chosen in the background (createDefaultStore can take a
+// while: Windows compiles its helper on first start), so the server listens
+// at once. Every operation waits for the choice; `persistent` reads false
+// until it is made; `ready()` settles when it is.
+export class DeferredStore implements SecretStore {
+  private store: SecretStore | null = null;
+  private pending: Promise<SecretStore>;
+
+  constructor(make: () => Promise<SecretStore>, log: (message: string) => void = () => {}) {
+    this.pending = make().catch((err: unknown) => {
+      // The probe's own failure, never a secret: only the error's name.
+      log(`The system keychain check failed (${err instanceof Error ? err.name : 'error'}); secrets are kept in memory until the server stops.`);
+      return new MemoryStore();
+    }).then((s) => (this.store = s));
+  }
+
+  get persistent(): boolean { return Boolean(this.store?.persistent); }
+  // True until the store is chosen.
+  get checking(): boolean { return this.store === null; }
+  ready(): Promise<void> { return this.pending.then(() => undefined); }
+  async get(account: string) { return (await this.pending).get(account); }
+  async set(account: string, value: string) { return (await this.pending).set(account, value); }
+  async delete(account: string) { return (await this.pending).delete(account); }
+  async has(account: string) { return (await this.pending).has(account); }
+  close(): void { void this.pending.then((s) => s.close?.()); }
+}
+
+// The OS keychain when its tool works, otherwise session memory. A Windows
+// helper that is only slow to start (a cold compile) keeps the keychain: each
+// operation starts it again with the same generous limit. `log` hears which
+// way it went (never a secret).
+export async function createDefaultStore(log: (message: string) => void = () => {}, opts: KeychainOptions = {}): Promise<SecretStore> {
+  const keychain = new KeychainStore(opts);
+  const state = await keychain.availability();
+  if (state === 'available') return keychain;
+  if (state === 'timeout') {
+    log('The Windows Credential Manager helper is slow to start; secrets still go to Credential Manager once it is ready.');
+    return keychain;
+  }
+  keychain.close();
+  log('The system keychain is not available; secrets are kept in memory until the server stops.');
+  return new MemoryStore();
 }

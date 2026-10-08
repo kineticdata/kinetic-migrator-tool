@@ -13,7 +13,7 @@ import { resolveCommit } from './pinned.ts';
 import { readTreeAt } from './repo.ts';
 import { loadConfig, loadOverrides, type ClientFactory, type EngineEnv } from './engine.ts';
 import {
-  MODULES, buildPlan, buildRelationships, compareArtifacts, computePlan, diffValues, loadState, suggest, type EnginePlan, type Relationships,
+  MODULES, buildPlan, buildRelationships, compareArtifacts, computePlan, diffValues, loadState, suggest, unresolvedErrors, type EnginePlan, type LoadedTree, type Relationships,
 } from './engine-sync.ts';
 import { readEnvironmentFile, resolveEnv } from './environments.ts';
 import type { Emit } from './jobs.ts';
@@ -48,7 +48,8 @@ const MAX_COMPARES = 20;
 const compares = new Map<string, CompareRecord>();
 
 export interface CompareSource {
-  artifacts: Map<string, unknown>;
+  // From an older commit, possibly re-keyed (see lib/sync/layout.mjs).
+  artifacts: LoadedTree;
   commit: string | null;
 }
 
@@ -119,11 +120,12 @@ async function runCompareJob(ref: ProjectRef, opts: StartCompareOptions, deps: {
         state: loadState(ref.dir, opts.to), overrides: loadOverrides(ref.dir, opts.to),
         vars: { targetUrl: readEnvironmentFile(ref.dir, opts.to).url }, sourceName: opts.from, targetName: opts.to,
       });
+      plan.errors.push(...unresolvedErrors(opts.source.artifacts, opts.from));
       items = previewItems(plan);
       progress(emit, 2, 2, 'compare');
     } else {
       const { plan } = await computePlan({
-        projectDir: ref.dir, envName: opts.to, env: env!, sourceArtifacts: sourceList, sourceName: opts.from, onEvent, signal, clientFactory: deps.clientFactory,
+        projectDir: ref.dir, envName: opts.to, env: env!, sourceArtifacts: sourceList, sourceUnresolved: opts.source.artifacts.unresolved, sourceName: opts.from, onEvent, signal, clientFactory: deps.clientFactory,
       });
       items = previewItems(plan);
     }

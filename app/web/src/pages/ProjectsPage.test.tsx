@@ -47,3 +47,17 @@ test('open folder posts the path and navigates to the project', async () => {
   await waitFor(() => expect(currentLocation()).toBe('/p/opened/overview'));
   expect(m.callsTo('POST', '/api/projects/open')[0].body).toEqual({ path: '/elsewhere/project' });
 });
+
+test('while the server is still checking the keychain, the page says so instead of "no keychain", then updates', async () => {
+  let checking = true;
+  mockApi({
+    'GET /api/session': () => ({ version: '0.1.0', workspace: '/workspace', keychain: { available: !checking, ...(checking ? { checking: true } : {}) } }),
+    'GET /api/projects': [],
+  });
+  renderWithApp(<AppRoutes />, { route: '/' });
+  expect(await screen.findByText('Checking the system keychain…')).toBeInTheDocument();
+  expect(screen.queryByText(/No system keychain was found/)).not.toBeInTheDocument();
+  checking = false;
+  await waitFor(() => expect(screen.queryByText('Checking the system keychain…')).not.toBeInTheDocument(), { timeout: 5000 });
+  expect(screen.queryByText(/No system keychain was found/)).not.toBeInTheDocument();
+});

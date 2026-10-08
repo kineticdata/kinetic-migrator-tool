@@ -1,0 +1,16 @@
+# LF line ends in every checkout (Git for Windows defaults to CRLF), so
+# fixtures, snapshots and hashes match on every OS.
+* text=auto eol=lf
+# Never converted or diffed as text.
+*.zip binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.pdf binary

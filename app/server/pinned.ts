@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import git from 'isomorphic-git';
+import { upgradeTree } from './engine-sync.ts';
 
 export async function readJsonAt(dir: string, commit: string, filepath: string): Promise<unknown> {
   try {
@@ -25,6 +26,14 @@ export async function resolveCommit(dir: string, ref: string): Promise<string | 
   }
 }
 
+// A tree entry name that is one plain file name on every OS: no separator of
+// any platform (a `\\` is a separator on Windows), no drive or stream colon,
+// not `.`/`..`. Entries the app never writes are skipped, so history from
+// elsewhere cannot write outside `dest`.
+export const isSafeEntryName = (name: string): boolean => (
+  name !== '' && name !== '.' && name !== '..' && !/[/\\:\x00]/.test(name)
+);
+
 // Writes every file under `subdir` at `commit` into `dest` (emptied first).
 // Returns false when the commit has no such folder.
 export async function materializeTree(dir: string, commit: string, subdir: string, dest: string): Promise<boolean> {
@@ -34,17 +43,30 @@ export async function materializeTree(dir: string, commit: string, subdir: strin
   } catch {
     return false;
   }
-  fs.rmSync(dest, { recursive: true, force: true });
+  fs.rmSync(dest, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   const walk = async (oid: string, base: string): Promise<void> => {
     fs.mkdirSync(base, { recursive: true });
     const { tree } = await git.readTree({ fs, dir, oid });
+    // Windows and macOS would write two names that differ only in letter
+    // case into one file, silently.
+    const seen = new Map<string, string>();
     for (const entry of tree) {
-      if (entry.path.includes('/') || entry.path === '..' || entry.path === '.') continue;
+      const folded = entry.path.normalize('NFC').toLowerCase();
+      const other = seen.get(folded);
+      if (other !== undefined) {
+        throw new Error(`This snapshot holds "${other}" and "${entry.path}", which differ only in letter case and cannot both be written on this computer.`);
+      }
+      seen.set(folded, entry.path);
+    }
+    for (const entry of tree) {
+      if (!isSafeEntryName(entry.path)) continue;
       const target = path.join(base, entry.path);
       if (entry.type === 'tree') await walk(entry.oid, target);
       else if (entry.type === 'blob') fs.writeFileSync(target, (await git.readBlob({ fs, dir, oid: entry.oid })).blob);
     }
   };
   await walk(root, dest);
+  // A snapshot from before the file-name layout change gets today's names.
+  upgradeTree(dest);
   return true;
 }

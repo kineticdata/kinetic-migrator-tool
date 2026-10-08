@@ -4,7 +4,7 @@
 import type { CatalogKapp, ProjectCatalog } from '../shared/api.ts';
 import type { ExploreItem, RelatedItem, SearchResponse, SearchResult } from '../shared/sync-api.ts';
 import { badRequest, notFound } from './errors.ts';
-import { compareText, moduleFor, summarize, type Edge } from './engine-sync.ts';
+import { compareText, moduleFor, segmentLabel, summarize, type Edge } from './engine-sync.ts';
 import { hasEnvSecret, pipelineOrder } from './environments.ts';
 import type { ProjectRef } from './project-meta.ts';
 import { log } from './repo.ts';
@@ -59,7 +59,7 @@ async function summaryExtra(ref: ProjectRef, snap: Snapshot, key: string, store:
     extra.secrets = secrets;
   } else if (/^handlers\/[^/]+\/handler$/.test(key)) {
     const secrets: Record<string, boolean> = {};
-    const id = String(d.definitionId ?? key.split('/')[1]);
+    const id = String(d.definitionId ?? segmentLabel(key.split('/')[1]));
     for (const p of handlerSecretProperties(d)) secrets[p] = await hasEnvSecret(store, ref, snap.env, 'handler', handlerSecretName(id, p));
     extra.secrets = secrets;
     extra.packageSize = fileSize(packagePath(snap, key));
@@ -67,13 +67,13 @@ async function summaryExtra(ref: ProjectRef, snap: Snapshot, key: string, store:
     const prefix = `${m[1]}/workflows/`;
     extra.workflows = keys.filter((k) => k.startsWith(prefix)).map((k) => {
       const w = obj(snap.artifacts.get(k));
-      return { event: String(w.event ?? k.split('/')[5]), name: String(w.name ?? k.split('/')[6]) };
+      return { event: String(w.event ?? segmentLabel(k.split('/')[5])), name: String(w.name ?? segmentLabel(k.split('/')[6])) };
     });
     const byId = new Map<string, string>();
     for (const k of keys) {
       if (/^connections\/[^/]+\/(connection|operations\/[^/]+)$/.test(k)) {
         const x = obj(snap.artifacts.get(k));
-        if (typeof x.id === 'string') byId.set(x.id, String(x.name ?? k.split('/').pop()));
+        if (typeof x.id === 'string') byId.set(x.id, String(x.name ?? segmentLabel(k.split('/').pop() ?? '')));
       }
     }
     if (Array.isArray(d.integrations)) {
@@ -155,8 +155,10 @@ export function buildCatalog(snap: Snapshot | null): ProjectCatalog {
   for (const [key, raw] of snap.artifacts) {
     const d = obj(raw);
     let m: RegExpExecArray | null;
+    // Key segments are encoded file names; slugs come from the data, else decoded.
+    const slug = (seg: string, v: unknown) => (typeof v === 'string' && v ? v : segmentLabel(seg));
     if ((m = /^kapps\/([^/]+)\/kapp$/.exec(key))) {
-      const k = kappOf(m[1]);
+      const k = kappOf(slug(m[1], d.slug));
       k.name = typeof d.name === 'string' && d.name ? d.name : k.slug;
       const cats = Array.isArray(d.categories) ? d.categories.map(obj) : [];
       k.categories = cats.filter((c) => typeof c.slug === 'string').map((c) => ({ slug: c.slug, name: typeof c.name === 'string' ? c.name : c.slug }))
@@ -165,8 +167,9 @@ export function buildCatalog(snap: Snapshot | null): ProjectCatalog {
       k.attributes.form.push(...names(d.formAttributeDefinitions));
       k.attributes.category.push(...names(d.categoryAttributeDefinitions), ...cats.flatMap((c) => names(c.attributes)));
     } else if ((m = /^kapps\/([^/]+)\/forms\/([^/]+)\/form$/.exec(key))) {
-      const k = kappOf(m[1]);
-      k.forms.push({ slug: m[2], name: typeof d.name === 'string' && d.name ? d.name : m[2], fields: sorted(fieldNames(d)) });
+      const k = kappOf(segmentLabel(m[1]));
+      const formSlug = slug(m[2], d.slug);
+      k.forms.push({ slug: formSlug, name: typeof d.name === 'string' && d.name ? d.name : formSlug, fields: sorted(fieldNames(d)) });
       k.attributes.form.push(...names(d.attributes));
     } else if (/^teams\//.test(key) && typeof d.name === 'string') {
       teams.push(d.name);

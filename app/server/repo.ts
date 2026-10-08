@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import git from 'isomorphic-git';
 import http from 'isomorphic-git/http/node';
 import type { SecretStore } from './secrets.ts';
+import { LAYOUT_VERSION, MARKER, markerLayout, rekeyTree, type LoadedTree } from './engine-sync.ts';
 
 export interface Author { name: string; email: string }
 
@@ -26,7 +27,7 @@ const NEVER_STAGE = (filepath: string) => /(^|\/)\.env[^/]*$/.test(filepath);
 // repository must not sweep up that repository's files). plans/, compares/
 // and backups/ are local-only and ignored.
 export const LAYOUT_DIRS = ['environments', 'overrides', 'snapshots', 'export', 'state', 'changesets', 'runs'];
-export const LAYOUT_FILES = ['kinetic-sync.config.json', 'kinetic-migrate.json', '.gitignore'];
+export const LAYOUT_FILES = ['kinetic-sync.config.json', 'kinetic-migrate.json', '.gitignore', '.gitattributes'];
 export const inLayout = (filepath: string): boolean => (
   LAYOUT_FILES.includes(filepath) || (filepath.includes('/') && LAYOUT_DIRS.includes(filepath.split('/')[0]))
 );
@@ -108,29 +109,33 @@ async function treeOidAt(dir: string, commit: string, filepath: string): Promise
 }
 
 // Every JSON blob under `subdir` at `commit`, keyed by its path relative to
-// `subdir` without `.json` (the engine's artifact keys).
-export async function readTreeAt(dir: string, commit: string, subdir: string): Promise<Map<string, unknown>> {
+// `subdir` without `.json` (the engine's artifact keys). A tree written in an
+// older file-name layout comes back re-keyed from its content (`rekeyed`,
+// `unresolved`: see lib/sync/layout.mjs); `raw` skips that.
+export async function readTreeAt(dir: string, commit: string, subdir: string, opts: { raw?: boolean } = {}): Promise<LoadedTree> {
   const out = new Map<string, unknown>();
+  let marker: string | undefined;
   const prefix = subdir.replace(/^\/+|\/+$/g, '');
   let root: string;
   try {
     root = prefix ? (await git.readTree({ fs, dir, oid: commit, filepath: prefix })).oid : (await git.readTree({ fs, dir, oid: commit })).oid;
   } catch {
-    return out;
+    return rekeyTree(out, LAYOUT_VERSION);
   }
   const walk = async (oid: string, base: string): Promise<void> => {
     const { tree } = await git.readTree({ fs, dir, oid });
     for (const entry of tree) {
       const rel = base ? `${base}/${entry.path}` : entry.path;
+      if (!base && entry.path === MARKER && entry.type === 'blob') marker = Buffer.from((await git.readBlob({ fs, dir, oid: entry.oid })).blob).toString('utf8');
       if (entry.type === 'tree') await walk(entry.oid, rel);
       else if (entry.type === 'blob' && entry.path.endsWith('.json')) {
         const { blob } = await git.readBlob({ fs, dir, oid: entry.oid });
-        out.set(rel.slice(0, -'.json'.length), JSON.parse(Buffer.from(blob).toString('utf8')));
+        out.set(rel.slice(0, -'.json'.length).normalize('NFC'), JSON.parse(Buffer.from(blob).toString('utf8').replace(/^\uFEFF/, '')));
       }
     }
   };
   await walk(root, '');
-  return out;
+  return rekeyTree(out, opts.raw ? LAYOUT_VERSION : markerLayout(marker));
 }
 
 export async function getRemote(dir: string): Promise<string | null> {

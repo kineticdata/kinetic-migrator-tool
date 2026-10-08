@@ -3,11 +3,12 @@
 // managed .gitignore, committing a change with a plain message, and the
 // project's random secrets id (the keychain account prefix).
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ApiError } from './errors.ts';
-import { stableStringify } from './engine.ts';
-import { commitAll, ensureRepo, type Author } from './repo.ts';
+import { GITATTRIBUTES, stableStringify } from './engine.ts';
+import { commitAll, ensureRepo, readTreeAt, type Author } from './repo.ts';
+import { LAYOUT_VERSION, upgradeProjectLayout } from './engine-sync.ts';
 
 export interface ProjectRef {
   id: string;
@@ -30,7 +31,8 @@ export const GITIGNORE_LINES = ['.env*', 'backups/', 'plans/', 'compares/'];
 
 export function readJsonFile(file: string): unknown {
   try {
-    return JSON.parse(readFileSync(file, 'utf8'));
+    // A byte-order mark (Windows PowerShell 5 writes one) is not JSON.
+    return JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
   } catch {
     throw new ApiError(422, 'invalid_project_file', `${path.basename(file)} is not valid JSON.`);
   }
@@ -45,6 +47,12 @@ export function readMeta(dir: string): ProjectMeta {
 
 export function writeMeta(dir: string, meta: ProjectMeta): void {
   writeFileSync(path.join(dir, META_FILE), stableStringify(meta));
+}
+
+// Written once when missing; an existing file is the user's and left alone.
+export function ensureGitattributes(dir: string): void {
+  const file = path.join(dir, '.gitattributes');
+  if (!existsSync(file)) writeFileSync(file, GITATTRIBUTES);
 }
 
 export function ensureGitignore(dir: string): void {
@@ -93,10 +101,42 @@ export const newSecretsId = (): string => randomUUID();
 // a commit of whatever is there. Call inside withProjectLock.
 export async function manageProject(ref: ProjectRef, message: string): Promise<void> {
   ensureGitignore(ref.dir);
+  ensureGitattributes(ref.dir);
   const meta = readMeta(ref.dir);
   if (!validSecretsId(meta.secretsId)) writeMeta(ref.dir, { ...meta, secretsId: newSecretsId() });
   await ensureRepo(ref.dir);
   await commitChange(ref, message);
+  await upgradeLayoutLocked(ref);
+}
+
+// Projects from before the file-name layout change (lib/sync/layout.mjs) are
+// upgraded once: snapshots renamed from their content, state and overrides
+// re-keyed, saved changesets' keys mapped through the snapshot they are pinned
+// to, all in one commit. Returns that commit, or null when nothing changed.
+// Call inside withProjectLock.
+export async function upgradeLayoutLocked(ref: ProjectRef): Promise<string | null> {
+  const r = upgradeProjectLayout(ref.dir);
+  const notes = [...r.notes];
+  let changed = r.changed;
+  if (r.fromLayout < LAYOUT_VERSION) {
+    const dir = path.join(ref.dir, 'changesets');
+    for (const f of existsSync(dir) ? readdirSync(dir).filter((n) => n.endsWith('.json')).sort() : []) {
+      const file = path.join(dir, f);
+      let cs: { from?: unknown; sourceCommit?: unknown; keys?: unknown; layoutVersion?: unknown };
+      try { cs = JSON.parse(readFileSync(file, 'utf8')); } catch { continue; }
+      if (typeof cs.from !== 'string' || typeof cs.sourceCommit !== 'string' || !Array.isArray(cs.keys) || cs.layoutVersion === LAYOUT_VERSION) continue;
+      const tree = await readTreeAt(ref.dir, cs.sourceCommit, `snapshots/${cs.from}`);
+      const keys = cs.keys.map((k) => (typeof k === 'string' ? tree.rekeyed?.get(k) ?? k : k));
+      if ((tree.layout ?? LAYOUT_VERSION) < LAYOUT_VERSION && keys.some((k, i) => k !== (cs.keys as unknown[])[i])) {
+        writeFileSync(file, stableStringify({ ...cs, keys, layoutVersion: LAYOUT_VERSION }));
+        notes.push(`changesets/${f}: re-keyed`);
+        changed = true;
+      }
+    }
+  }
+  if (!changed) return null;
+  const body = notes.length ? `File names now use the same encoding on every operating system.\n\n${notes.join('\n')}` : undefined;
+  return commitAll(ref.dir, body ? `Upgraded project layout\n\n${body}` : 'Upgraded project layout', readMeta(ref.dir).author ?? DEFAULT_AUTHOR);
 }
 
 // The project's secrets id; projects without one (for example CLI-created

@@ -7,7 +7,9 @@ export interface ApiErrorBody {
 export interface SessionInfo {
   version: string;
   workspace: string;
-  keychain: { available: boolean };
+  // checking: the keychain is still being probed (Windows compiles its
+  // helper on first start); `available` is not known yet.
+  keychain: { available: boolean; checking?: boolean };
 }
 
 export type JobStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';

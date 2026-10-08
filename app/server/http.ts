@@ -8,6 +8,7 @@ import { ApiError, mapError, notFound } from './errors.ts';
 import { checkApi, checkHost, safeEqual, sessionCookie } from './security.ts';
 import type { Router } from './router.ts';
 import { defaultLogger, type Logger } from './log.ts';
+import { isReservedDeviceName } from './engine-sync.ts';
 
 export const BODY_LIMIT = 1024 * 1024;
 
@@ -111,16 +112,32 @@ function fileSize(file: string): number | null {
   }
 }
 
+// Where a decoded URL path points inside `root`: 'outside' when it escapes
+// (also through `\`, a drive letter or a UNC prefix on Windows), null when it
+// cannot name a file there (the root itself, a `:` as in a drive or an NTFS
+// stream such as `index.html::$DATA`, a device name such as CON), else the
+// file path. `p` is injectable so the Windows rules are tested everywhere.
+export function staticTarget(root: string, decoded: string, p: typeof path.win32 = path): string | null | 'outside' {
+  const base = p.resolve(root);
+  const target = p.resolve(base, `.${decoded}`);
+  const inside = target === base || target.startsWith(base.endsWith(p.sep) ? base : base + p.sep);
+  if (!inside || decoded.includes('\0')) return 'outside';
+  if (target === base) return null;
+  const segments = decoded.split(/[\\/]/).filter(Boolean);
+  if (decoded.includes(':') || segments.some((seg) => isReservedDeviceName(seg) || /[. ]$/.test(seg))) return null;
+  return target;
+}
+
 function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string, webDir: string | undefined): void {
   if (req.method !== 'GET' && req.method !== 'HEAD') throw new ApiError(405, 'method_not_allowed', 'Method not allowed.');
   if (!webDir) throw notFound();
   const root = path.resolve(webDir);
   const decoded = decodePath(pathname);
-  const target = path.resolve(root, `.${decoded}`);
-  if (target !== root && !target.startsWith(root + path.sep)) throw notFound();
+  const target = staticTarget(root, decoded);
+  if (target === 'outside') throw notFound();
   const head = req.method === 'HEAD';
-  const size = target === root ? null : fileSize(target);
-  if (size !== null) return serveFile(res, target, size, head);
+  const size = target === null ? null : fileSize(target);
+  if (target !== null && size !== null) return serveFile(res, target, size, head);
   // SPA fallback for client routes (paths without a file extension).
   if (path.extname(decoded)) throw notFound();
   const index = path.join(root, 'index.html');

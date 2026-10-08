@@ -96,7 +96,8 @@ export function registerHistoryRoutes(router: Router, ctx: SyncContext): void {
     const jobId = await startCompare(ctx, ref, {
       from: env, fromName: `the ${type} of ${day}`, to: env, mode, liveTarget: true,
       source: { artifacts, commit: entry.oid },
-      preselected: touched ? touched.items.filter((i) => i.status === 'done').map((i) => i.key) : [],
+      // Run records keep the keys of their day; an older backup is re-keyed.
+      preselected: touched ? touched.items.filter((i) => i.status === 'done').map((i) => artifacts.rekeyed?.get(i.key) ?? i.key) : [],
     });
     return { status: 202, json: { jobId } };
   });

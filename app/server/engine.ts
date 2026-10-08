@@ -64,6 +64,7 @@ export const runInit: (opts: { projectDir: string; log: (line: string) => void }
 export const snapshotDir: (projectDir: string, env: string) => string = commandsModule.snapshotDir;
 export const createClient: ClientFactory = httpModule.createClient;
 export const stableStringify: (value: unknown) => string = normalizeModule.stableStringify;
+export const GITATTRIBUTES: string = commandsModule.GITATTRIBUTES;
 export const envBoundAttributesError: (value: unknown) => string | null = envBoundModule.envBoundAttributesError;
 export const envBoundNamesFor: (eba: EnvBoundAttributes, scope: string | null, key: string, data?: unknown) => Set<string> = envBoundModule.envBoundNamesFor;
 export const dataConfigError: (entries: unknown) => string | null = dataModule.dataConfigError;

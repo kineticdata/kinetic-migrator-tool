@@ -25,6 +25,8 @@ import * as envModule from '../../lib/sync/env.mjs';
 import * as overridesModule from '../../lib/sync/overrides.mjs';
 // @ts-expect-error -- untyped engine module
 import * as stateModule from '../../lib/sync/state.mjs';
+// @ts-expect-error -- untyped engine module
+import * as layoutModule from '../../lib/sync/layout.mjs';
 import type { ClientFactory, EngineConfig, EngineEnv, EngineOverrides, EnvBoundAttributes } from './engine.ts';
 
 export interface Artifact { key: string; data: unknown; files?: Record<string, Uint8Array> }
@@ -71,7 +73,7 @@ interface RunCommon { projectDir: string; env: EngineEnv; onEvent?: OnEvent; sig
 
 export const runExport: (opts: RunCommon & { dest?: string }) => Promise<{ code: number; artifacts: number; counts: Record<string, number> }> = commandsModule.runExport;
 export const computePlan: (opts: RunCommon & {
-  envName: string; from?: string; sourceName?: string; sourceDir?: string; sourceArtifacts?: Artifact[]; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
+  envName: string; from?: string; sourceName?: string; sourceDir?: string; sourceArtifacts?: Artifact[]; sourceUnresolved?: Map<string, string>; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
 }) => Promise<{ env: EngineEnv; config: EngineConfig; plan: EnginePlan; targetList: TargetArtifact[] }> = commandsModule.computePlan;
 export const runApply: (opts: RunCommon & {
   envName: string; from?: string; sourceName?: string; sourceDir?: string; yes: boolean; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
@@ -87,8 +89,20 @@ export const buildPlan: (opts: {
   overrides?: EngineOverrides; vars?: Record<string, string>; config: EngineConfig; sourceName?: string; targetName?: string;
 }) => EnginePlan = planModule.buildPlan;
 export const diffValues: (from: unknown, to: unknown) => DiffEntry[] = planModule.diffValues;
-export const readTree: (dir: string) => Map<string, unknown> = storeModule.readTree;
+// A tree read in any layout (older ones re-keyed from content, see layout.mjs).
+export type LoadedTree = Map<string, unknown> & { layout?: number; rekeyed?: Map<string, string>; unresolved?: Map<string, string> };
+export const readTree: (dir: string) => LoadedTree = layoutModule.loadTree;
+export const rekeyTree: (raw: Map<string, unknown>, layout: number) => LoadedTree = layoutModule.rekeyTree;
+export const markerLayout: (text: string | undefined) => number = storeModule.markerLayout;
+export const MARKER: string = storeModule.MARKER;
+export const LAYOUT_VERSION: number = storeModule.LAYOUT_VERSION;
+export const upgradeTree: (dir: string) => { upgraded: boolean; rekeyed: Map<string, string>; unresolved: Map<string, string> } = layoutModule.upgradeTree;
+export const upgradeProjectLayout: (dir: string) => { changed: boolean; fromLayout: number; rekeyed: Map<string, string>; notes: string[] } = layoutModule.upgradeProjectLayout;
+export const unresolvedErrors: (tree: { unresolved?: Map<string, string> }, sourceName?: string) => string[] = layoutModule.unresolvedErrors;
 export const writeTree: (dir: string, artifacts: Artifact[]) => void = storeModule.writeTree;
+export const segmentLabel: (segment: string) => string = storeModule.segmentLabel;
+export const isReservedDeviceName: (name: string) => boolean = storeModule.isReservedDeviceName;
+export const removeTree: (dir: string) => void = storeModule.removeTree;
 export const MODULES: EngineModule[] = indexModule.MODULES;
 export const moduleFor: (key: string) => EngineModule | undefined = indexModule.moduleFor;
 export const buildRelationships: (artifacts: Array<{ key: string; data: unknown }>) => Relationships = relationshipsModule.buildRelationships;

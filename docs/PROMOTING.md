@@ -75,6 +75,43 @@ and `data.json`, and `connections/<name>/connection.json` sits beside its
 `operations/`. Exploring one item means opening one folder. Exports made
 before this layout change must be re-exported.
 
+File and folder names are the item names and slugs, encoded the same way on
+every operating system so a project committed on a Mac opens on Windows and
+the other way round. Names that are already valid file names everywhere stay
+as they are. Otherwise: the characters Windows forbids (`< > : " / \ | ? *`
+and control characters) become `%` and two hex digits (`Departments::IT` is
+`Departments%3A%3AIT.json`); a leading dot or space and a trailing dot or
+space are escaped the same way; Windows device names (`con`, `nul`, `aux`,
+`com1`… with any extension) get their first letter escaped (`%63on`); a `%`
+is escaped only where it would read as an escape. A name longer than 80
+bytes is cut and ends in `%~` plus 8 hex digits of a hash of the full name
+(the full name is inside the file), which keeps paths under Windows'
+260-character limit in most projects. Two items whose names differ only in
+letter case (`Ops` and `ops`) would be one file on Windows and macOS, so
+export stops and names both; rename one in the source space.
+
+Projects from before this encoding (which used `_`, layout 1) are upgraded
+once, the first time the app opens them or a CLI command runs in them: every
+snapshot is renamed from its files' content (the names, slugs, events and ids
+the exporter builds file names from), the keys in `state/` and `overrides/`
+and in saved changesets follow, `kinetic-sync.config.json` records
+`"layoutVersion": 2`, and the app commits "Upgraded project layout" (with the
+CLI, commit the changes yourself). Older commits (pinned changesets, backups,
+history) are re-keyed the same way when they are read. An item whose new name
+cannot be derived from its content with certainty (for example a file edited
+by hand so its content no longer matches its name) is left as it is, and a
+plan that includes it stops with an error naming it: take a new snapshot.
+Nothing is ever created or pruned on a guess.
+
+The upgrade is safe to interrupt: files are moved one at a time inside each
+snapshot folder (it is never missing), the renames and the original contents
+of `state/` and `overrides/` files are kept in `plans/layout-upgrade.json`
+(git-ignored) until it finishes, and running it again carries on where it
+stopped. A project with nothing to rename gets no changes at all, only a
+local note in `plans/`. Changesets saved before the upgrade keep working
+whichever way the project was upgraded: their keys are mapped through the
+snapshot they are pinned to.
+
 Each installed handler is exported as `handlers/<definitionId>/handler.json`
 (its settings without secret values, with a `packageSha256` of its package) beside
 `handlers/<definitionId>/package.zip`. The zip holds the handler's code and

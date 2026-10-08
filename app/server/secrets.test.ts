@@ -61,15 +61,6 @@ test('Linux adapter stores via stdin with secret-tool', async () => {
   assert.equal(await s.has('p/dev/credentials/password'), true);
 });
 
-test('Windows adapter passes account and value as JSON on stdin', async () => {
-  const { run, calls } = fakeRunner([{ code: 0 }]);
-  const s = new KeychainStore({ platform: 'win32', run });
-  await s.set('p/dev/credentials/password', PLANTED);
-  assert.equal(calls[0].file, 'powershell.exe');
-  assert.ok(!calls[0].args.join(' ').includes('pl4nted'));
-  assert.deepEqual(JSON.parse(calls[0].input ?? ''), { account: 'p/dev/credentials/password', value: encodeStored(PLANTED) });
-});
-
 test('a failing keychain write never echoes the value in the error', async () => {
   const run: CommandRunner = async () => ({ code: 1, stdout: PLANTED, stderr: PLANTED });
   const s = new KeychainStore({ platform: 'darwin', run });
@@ -123,10 +114,11 @@ test('keychain values are stored base64-encoded with a marker; values stored bef
   assert.equal(decodeStored(encodeStored(unicode)), unicode);
   assert.equal(decodeStored('legacy-plain-value'), 'legacy-plain-value');
   assert.equal(decodeStored(''), '');
-  for (const platform of ['darwin', 'linux', 'win32']) {
+  // (Windows: secrets-windows.test.ts.)
+  for (const platform of ['darwin', 'linux']) {
     const stored = new Map<string, string>();
     const run: CommandRunner = async (file, args, input) => {
-      if (args.includes('find-generic-password') || args[0] === 'lookup' || (file === 'powershell.exe' && input && !JSON.parse(input).value && !args.join(' ').includes('Remove'))) {
+      if (args.includes('find-generic-password') || args[0] === 'lookup') {
         return result(0, platform === 'darwin' ? `${stored.get('v') ?? ''}\n` : stored.get('v') ?? '');
       }
       const value = platform === 'darwin' ? /-w "([^"]*)"/.exec(input ?? '')?.[1] : platform === 'linux' ? input : JSON.parse(input ?? '{}').value;
@@ -140,13 +132,4 @@ test('keychain values are stored base64-encoded with a marker; values stored bef
     stored.set('v', 'legacy-plain-value');
     assert.equal(await s.get('a/b/c/d'), 'legacy-plain-value', platform);
   }
-});
-
-test('Windows: exit 44 is not found; other failures throw; delete checks exit codes', async () => {
-  const s = new KeychainStore({ platform: 'win32', run: scripted([result(44), result(1, '', PLANTED), result(44), result(0), result(1)]) });
-  assert.equal(await s.get('a/b/c/d'), undefined);
-  await assert.rejects(s.get('a/b/c/d'), (e: Error) => !e.message.includes('pl4nted'));
-  await s.delete('a/b/c/d');
-  await s.delete('a/b/c/d');
-  await assert.rejects(s.delete('a/b/c/d'), /keychain/i);
 });
