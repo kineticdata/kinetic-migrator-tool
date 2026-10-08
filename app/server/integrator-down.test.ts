@@ -186,7 +186,7 @@ test('items left out at plan time are never written unreviewed, even when the In
   assert.equal(h.calls.some((c) => c.env === 'test' && c.api === 'integrator' && c.method !== 'GET'), false);
 });
 
-test('a removal of a connection is refused when the newest source snapshot left connections out', async (t) => {
+test('a removal of a connection is dropped with a warning (not a blocking error) when the newest source snapshot left connections out', async (t) => {
   const h = await harness(t);
   h.spaces.test = devRoutes; // Test has the connection; it is to be removed
   await snapshot(h, 'dev');
@@ -199,7 +199,9 @@ test('a removal of a connection is refused when the newest source snapshot left 
   assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
   const plan = job.result as PlanResult;
   assert.deepEqual(plan.removals, []);
-  assert.ok(plan.errors.includes(`${CONN}: not removed — couldn't check Dev's connections: dev.example.com runs Kinetic Platform 7.0.0-rc3, which doesn't offer the sign-in this tool uses for the Integrator yet.`), JSON.stringify(plan.errors));
+  assert.ok(plan.warnings.includes(`${CONN}: not removed — couldn't check Dev's connections: dev.example.com runs Kinetic Platform 7.0.0-rc3, which doesn't offer the sign-in this tool uses for the Integrator yet.`), JSON.stringify(plan.warnings));
+  assert.equal(plan.errors.some((e) => e.includes(CONN)), false, JSON.stringify(plan.errors));
+  assert.deepEqual(plan.remove, []);
 });
 
 test('a refused Integrator sign-in fails the snapshot loudly, and Test connection says to check the credentials', async (t) => {

@@ -395,7 +395,7 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     // pinned one) is not removed.
     const newest = remove.length ? await latestSnapshotCommit(ref, from) : null;
     // Removals the newest snapshot could not check (it left their type out)
-    // are refused, with why.
+    // are dropped with a warning saying why: never sent, never blocking.
     const refused: string[] = [];
     if (newest && newest !== pinned) {
       const latest = (await loadSnapshot(ref, from)).artifacts;
@@ -416,7 +416,7 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
       signal, clientFactory: ctx.clientFactory, hints,
     });
     plan.warnings.push(...unplanned);
-    plan.errors.push(...refused);
+    plan.warnings.push(...refused);
     // Only what the plan shows as a delete is ever sent to apply.
     const deletes = (plan.removals ?? []).filter((x) => x.action === 'delete' && x.hash);
     const removeExpected = Object.fromEntries(deletes.map((x) => [x.key, x.hash!]));
