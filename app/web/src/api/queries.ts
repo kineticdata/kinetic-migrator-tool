@@ -1,12 +1,12 @@
 // Query keys and TanStack Query hooks for projects, environments, settings,
 // history and overview data. Everything under ['project', id] is invalidated
 // together when a job against that project ends.
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   ConnectionTestResult, CreateProjectRequest, CredentialsStatus, JobStarted, OpenProjectRequest, ProjectConfig,
   ProjectDetail, ProjectSummary, PutCredentialsRequest, PutEnvironmentRequest, SessionInfo,
 } from '../../../shared/api';
-import type { CompareResult, HistoryEvent, TreeNode } from '../../../shared/sync-api';
+import type { CompareResult, ExploreItem, HistoryEvent, SearchResponse, TreeNode } from '../../../shared/sync-api';
 import { api, projectPath } from './client';
 import { waitForJob } from './useJob';
 
@@ -17,6 +17,9 @@ export const qk = {
   config: (p: string) => ['project', p, 'config'] as const,
   history: (p: string) => ['project', p, 'history'] as const,
   tree: (p: string, env: string, commit: string) => ['project', p, 'explore', env, 'tree', commit] as const,
+  treeChildren: (p: string, env: string, commit: string, parent: string) => ['project', p, 'explore', env, 'tree', commit, parent] as const,
+  exploreItem: (p: string, env: string, commit: string, key: string) => ['project', p, 'explore', env, 'item', commit, key] as const,
+  search: (p: string, env: string, commit: string, q: string) => ['project', p, 'explore', env, 'search', commit, q] as const,
   // Outside the project prefix: keyed by snapshot commits, so it never goes
   // stale, and invalidating the project must not start new compare jobs.
   rawDiff: (p: string, from: string, to: string, a: string, b: string) => ['raw-diff', p, from, to, a, b] as const,
@@ -50,6 +53,35 @@ export const useTreeRoot = (p: string, env: string, commit: string | undefined) 
   enabled: Boolean(commit),
   staleTime: Infinity,
   queryFn: async () => asList<TreeNode>(await api.get<unknown>(`${projectPath(p, 'explore', env, 'tree')}`), 'nodes'),
+});
+
+// The children of each open tree node, loaded lazily (one request per node).
+export function useTreeChildren(p: string, env: string, commit: string | undefined, parents: string[]) {
+  return useQueries({
+    queries: parents.map((parent) => ({
+      queryKey: qk.treeChildren(p, env, commit ?? '', parent),
+      enabled: Boolean(commit),
+      staleTime: Infinity,
+      queryFn: async () => asList<TreeNode>(await api.get<unknown>(`${projectPath(p, 'explore', env, 'tree')}?parent=${encodeURIComponent(parent)}`), 'nodes'),
+    })),
+  });
+}
+
+// One item of a snapshot: summary, relationships, JSON and history.
+export const useExploreItem = (p: string, env: string, commit: string | undefined, key: string | null) => useQuery({
+  queryKey: qk.exploreItem(p, env, commit ?? '', key ?? ''),
+  enabled: Boolean(commit && key),
+  staleTime: Infinity,
+  queryFn: () => api.get<ExploreItem>(`${projectPath(p, 'explore', env, 'item')}?key=${encodeURIComponent(key ?? '')}`),
+});
+
+// Server-side search of a snapshot (names, slugs and form fields).
+export const useSearch = (p: string, env: string, commit: string | undefined, q: string) => useQuery({
+  queryKey: qk.search(p, env, commit ?? '', q),
+  enabled: Boolean(commit && q),
+  staleTime: Infinity,
+  placeholderData: keepPreviousData,
+  queryFn: ({ signal }) => api.get<SearchResponse>(`${projectPath(p, 'search', env)}?q=${encodeURIComponent(q)}`, signal),
 });
 
 // "N differences" between two environments: a raw compare of their newest

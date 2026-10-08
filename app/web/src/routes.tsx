@@ -6,6 +6,7 @@ import { NewProjectWizard } from './pages/NewProjectWizard';
 import { ProjectLayout } from './pages/ProjectLayout';
 import { OverviewPage } from './pages/OverviewPage';
 import { ExploreIndex, Placeholder } from './pages/Placeholder';
+import { ExplorePage } from './pages/ExplorePage';
 import { SettingsLayout } from './pages/settings/SettingsLayout';
 import { EnvironmentsSettings } from './pages/settings/EnvironmentsSettings';
 import { DataSettings } from './pages/settings/DataSettings';
@@ -20,7 +21,7 @@ export function AppRoutes() {
         <Route index element={<Navigate to="overview" replace />} />
         <Route path="overview" element={<OverviewPage />} />
         <Route path="explore" element={<ExploreIndex />} />
-        <Route path="explore/:env/*" element={<Placeholder screen="explore" />} />
+        <Route path="explore/:env/*" element={<ExplorePage />} />
         <Route path="compare" element={<Placeholder screen="compare" />} />
         <Route path="changesets" element={<Placeholder screen="changesets" />} />
         <Route path="changesets/:changesetId" element={<Placeholder screen="changesets" />} />
