@@ -133,35 +133,50 @@ platform component locations (UI location, task server URL), bundle paths,
 and each kapp's bundle path. The target keeps its own values.
 
 **Space settings kept per environment** are listed in
-`kinetic-sync.config.json` as `envBoundSpaceFields`. Each environment keeps
-its own value of a listed setting; promoting never overwrites it. When the
-target has no value yet (empty, `null` or an empty list; `false` and `0` are
-values), the source value is used, so a space that was never set up starts
-from the exported one. Left out, the list is:
+`kinetic-sync.config.json` as `envBoundSpaceFields`. Promoting never changes
+a listed setting: the target keeps its own value, including an empty one
+(`null`, `""` or an empty list), on every promotion, the first one included.
+The source value is never copied by itself. If the list is left out, it is:
 
 ```json
 "envBoundSpaceFields": ["displayType", "displayValue", "trustedFrameDomains", "trustedResourceDomains", "allowedIps", "allowedIpsEnabled"]
 ```
 
 You can also add `loginPage`, `resetPasswordPage`, `afterLogoutPath`,
-`defaultLocale`, `defaultTimezone` and `sessionInactiveLimitInSeconds`, or
-remove names to promote those settings like any other; `[]` keeps none.
-Other names are not allowed: the app refuses to save them, and a
-hand-edited file with one still loads, with the name ignored and reported
-(as a plan warning and on the settings page). In the app, Settings → Data &
-values → "Space settings kept per environment" edits the list. The fields
-above (name, slug, platform components, bundle paths) are always kept,
-whatever the list says. Kapp settings are not affected.
+`defaultLocale`, `defaultTimezone` and `sessionInactiveLimitInSeconds`. You
+can remove names so those settings are promoted like any other, and `[]`
+keeps none. Two pairs go together because one half means nothing without
+the other: `displayType` with `displayValue`, and `allowedIps` with
+`allowedIpsEnabled`. List both halves of a pair or neither.
+
+- The app refuses to save an unknown name or half a pair.
+- A hand-edited file still loads. An unknown name is ignored, and half a pair
+  is treated as the whole pair. Both are reported, as a plan warning and on
+  the settings page.
+- In the app, edit the list under Settings → Data & values → "Space settings
+  kept per environment". There is one checkbox per setting or pair.
+- The fixed fields above (name, slug, platform components, bundle paths) are
+  always kept, whatever the list says. Kapp settings are not affected.
 
 An override in `overrides/<env>.json` for a listed setting still applies and
-wins over the target's value. When a listed setting is empty in the target
-and the source has a value, the plan warns that the source value will be
-used and the app's "Environment values" step offers it to change; set an
-override (or enter a value there) to use another.
+wins over the target's value. `replace` rules rewrite text in every value
+that is promoted, including the target values carried back for kept settings
+and attributes.
 
-Changing the list never makes the space show as drifted: each recorded state
-entry for the space names the settings it was recorded with, and drift is
-checked the same way (see [Drift](#drift)).
+When a listed setting is empty in the target and the source has a value:
+
+- The CLI plan notes that the source value is not copied. Set an override to
+  use it.
+- The app's "Environment values" step shows the setting with the source
+  value offered. "Use Dev's value" fills it in, and fills both halves of a
+  pair together. Applying then saves it as that environment's value (an
+  override). Left empty, the target stays empty.
+- A setting that is empty on both sides is not listed. To set one, add an
+  override.
+
+Unticking a setting promotes it from then on. Any value it was given by hand
+in the target is replaced at the next promotion. This is not reported as
+drift, because the setting was kept when the state was recorded.
 
 **Environment-bound attributes** are listed in `kinetic-sync.config.json` and
 treated the same way. Each level (`space`, `kapp`, `form`, `team`,
@@ -243,9 +258,10 @@ These came up in a real dev-to-prod round trip:
 
 - List the space attribute `Web Server Url` in `envBoundAttributes.space`, so
   each environment keeps its own.
-- Keep the space `displayValue` (the portal bundle URL) per environment (it
-  is in the default `envBoundSpaceFields`); for a space that has none yet,
-  override it so it does not start from the source's URL.
+- Keep the space `displayType`/`displayValue` (the portal bundle URL) per
+  environment (they are in the default `envBoundSpaceFields`); for a space
+  that has none yet, set them once with an override or under Environment
+  values.
 - Add a `replace` rule from the source space host to the target host, for
   example `{ "from": "dev-space.kinops.io", "to": "your-space.kinops.io" }`,
   so self-referencing connection base URLs follow the environment.
@@ -433,9 +449,16 @@ it. Commit `state/`.
 Environment-bound fields, attributes and handler settings are left out of the
 recorded state, so a change to them in the target is not drift. The space's
 entry also records which space settings were kept per environment at the
-time (`<hash>;space-fields=…`); drift is checked with that list, so changing
-`envBoundSpaceFields` (or upgrading from a version without it) does not
-report drift. The next apply records the current list.
+time (`<hash>;space-fields=…`).
+
+When that differs from the current `envBoundSpaceFields`, a precise check is
+not possible. This happens after you change the list, or after upgrading
+from a version without it. The plan then skips the space's drift check and
+warns: "Drift check for the space skipped: kept settings changed since the
+last promotion". The space is never reported as drifted on a guess, but a
+change made to it in the target in the meantime is not caught either. The
+next apply that includes the space records the current list, and later plans
+check drift normally.
 
 ## Comparing two environments
 
