@@ -2,8 +2,11 @@
 // kinetic-migrate: export a Kinetic Platform space into a project directory and
 // promote it into another environment. See docs/PROMOTING.md.
 import { parseArgs } from 'node:util';
-import { resolve } from 'node:path';
+import { resolve, dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runInit, runExport, runPlan, runApply, runCompare } from './lib/sync/commands.mjs';
+import { runUi } from './lib/sync/ui-command.mjs';
 import { PRUNABLE } from './lib/sync/artifacts/index.mjs';
 
 const USAGE = `Usage:
@@ -12,8 +15,10 @@ const USAGE = `Usage:
   node kinetic-migrate.mjs plan    [--project <dir>] [--from <name>] --to <name> [--overwrite-drift]
   node kinetic-migrate.mjs apply   [--project <dir>] [--from <name>] --to <name> [--yes] [--overwrite-drift] [--prune <type>]...
   node kinetic-migrate.mjs compare [--project <dir>] --from <name> --to <name> [--raw]
+  node kinetic-migrate.mjs ui      [--workspace <dir>] [--port <n>] [--no-open]
 
 --project defaults to the current directory.
+ui starts the local web app (needs npm run build); --workspace defaults to ~/KineticMigrate.
 export writes snapshots/<name>/; plan and apply read snapshots/<from>/.
 Without --from they read a legacy export/ folder, only when there is no snapshots/ folder.
 --prune types: ${PRUNABLE.join(', ')}`;
@@ -31,6 +36,14 @@ const OPTIONS = {
 };
 
 async function main(argv) {
+  if (argv[0] === 'ui' && !argv.includes('--help') && !argv.includes('-h')) {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const serverFile = join(here, 'dist', 'server.mjs');
+    return runUi({
+      argv: argv.slice(1), built: existsSync(serverFile), webDir: join(here, 'dist', 'web'),
+      loadServer: () => import(pathToFileURL(serverFile).href), log: (m) => console.log(m),
+    });
+  }
   const { values, positionals } = parseArgs({ args: argv, options: OPTIONS, strict: true, allowPositionals: true });
   const [command] = positionals;
   if (!command || command === 'help' || values.help) {

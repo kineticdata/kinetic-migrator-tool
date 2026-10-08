@@ -4,6 +4,8 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { SessionInfo } from '../shared/api.ts';
 import pkg from '../../package.json' with { type: 'json' };
 import { HOST, DEV_PORT } from './config.ts';
@@ -61,15 +63,22 @@ export function buildRouter(ctx: Omit<ServerContext, 'router'>): Router {
   return router;
 }
 
+function defaultWebDir(): string | undefined {
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
+  return existsSync(path.join(dir, 'index.html')) ? dir : undefined;
+}
+
 export async function startServer(opts: StartServerOptions): Promise<ServerHandle> {
   const key = generateKey();
   const logger = opts.logger ?? defaultLogger;
   const jobs = new JobRegistry({ logger });
   const workspace = path.resolve(opts.workspace);
   const secrets = opts.secrets ?? await createDefaultStore();
+  // Built bundle: dist/server.mjs serves dist/web next to itself.
+  const webDir = opts.webDir ?? defaultWebDir();
   const router = buildRouter({ workspace, secrets, clientFactory: opts.clientFactory, jobs });
   let port = 0;
-  const server = http.createServer(createRequestHandler({ key, port: () => port, router, webDir: opts.webDir, logger }));
+  const server = http.createServer(createRequestHandler({ key, port: () => port, router, webDir, logger }));
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(opts.port ?? 0, HOST, () => {
@@ -96,7 +105,7 @@ function argValue(args: string[], name: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   const dev = args.includes('--dev');
   const portArg = argValue(args, '--port');

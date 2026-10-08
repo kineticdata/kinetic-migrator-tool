@@ -15,7 +15,7 @@
     "test:app": "vitest run && node --import tsx --test \"app/server/**/*.test.ts\"",
     "dev": "vite --config app/web/vite.config.ts",
     "dev:server": "tsx watch app/server/main.ts --dev",
-    "build": "vite build --config app/web/vite.config.ts && esbuild app/server/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/server.mjs",
+    "build": "vite build --config app/web/vite.config.ts && esbuild app/server/main.ts --bundle --platform=node --format=esm --target=node20 --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\" --outfile=dist/server.mjs",
     "typecheck": "tsc -b"
   },
   "devDependencies": {
