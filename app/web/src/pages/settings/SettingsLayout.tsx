@@ -1,6 +1,7 @@
-// Settings: a side navigation (Environments, Data & values) and the section.
+// Settings: a side navigation (Environments, Data & values, Repository) and
+// the section.
 import { Link, Outlet, useLocation } from 'react-router';
-import { Database, Server } from 'lucide-react';
+import { Database, GitBranch, Server } from 'lucide-react';
 import { cn } from '../../components/ui/cn';
 import { useProjectContext } from '../../lib/project';
 
@@ -11,6 +12,7 @@ export function SettingsLayout() {
   const sections = [
     { to: `${base}/environments`, label: 'Environments', Icon: Server },
     { to: `${base}/data`, label: 'Data & values', Icon: Database },
+    { to: `${base}/repository`, label: 'Repository', Icon: GitBranch },
   ];
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-8 md:flex-row">

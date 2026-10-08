@@ -16,6 +16,7 @@ import { generateKey } from './security.ts';
 import type { ClientFactory } from './engine.ts';
 import { registerProjectRoutes } from './projects.ts';
 import { registerSyncRoutes } from './sync-routes.ts';
+import { registerRepositoryRoutes } from './repository.ts';
 import { createDefaultStore, type SecretStore } from './secrets.ts';
 import { defaultLogger, type Logger } from './log.ts';
 
@@ -60,6 +61,7 @@ export function buildRouter(ctx: Omit<ServerContext, 'router'>): Router {
   registerJobRoutes(router, ctx.jobs);
   registerProjectRoutes(router, ctx);
   registerSyncRoutes(router, ctx);
+  registerRepositoryRoutes(router, ctx);
   return router;
 }
 

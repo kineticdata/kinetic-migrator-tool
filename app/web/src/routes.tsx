@@ -5,14 +5,16 @@ import { ProjectsPage } from './pages/ProjectsPage';
 import { NewProjectWizard } from './pages/NewProjectWizard';
 import { ProjectLayout } from './pages/ProjectLayout';
 import { OverviewPage } from './pages/OverviewPage';
-import { ExploreIndex, Placeholder } from './pages/Placeholder';
+import { ExploreIndex } from './pages/Placeholder';
 import { ExplorePage } from './pages/ExplorePage';
 import { ComparePage } from './pages/ComparePage';
 import { ChangesetDetailPage, ChangesetsPage } from './pages/ChangesetsPage';
 import { PlanPage } from './pages/PlanPage';
+import { HistoryPage } from './pages/HistoryPage';
 import { SettingsLayout } from './pages/settings/SettingsLayout';
 import { EnvironmentsSettings } from './pages/settings/EnvironmentsSettings';
 import { DataSettings } from './pages/settings/DataSettings';
+import { RepositorySettings } from './pages/settings/RepositorySettings';
 import { NotFoundPage } from './pages/NotFoundPage';
 
 export function AppRoutes() {
@@ -29,11 +31,12 @@ export function AppRoutes() {
         <Route path="changesets" element={<ChangesetsPage />} />
         <Route path="changesets/:changesetId" element={<ChangesetDetailPage />} />
         <Route path="plan/:planId" element={<PlanPage />} />
-        <Route path="history" element={<Placeholder screen="history" />} />
+        <Route path="history" element={<HistoryPage />} />
         <Route path="settings" element={<SettingsLayout />}>
           <Route index element={<Navigate to="environments" replace />} />
           <Route path="environments" element={<EnvironmentsSettings />} />
           <Route path="data" element={<DataSettings />} />
+          <Route path="repository" element={<RepositorySettings />} />
         </Route>
         <Route path="*" element={<NotFoundPage inProject />} />
       </Route>
