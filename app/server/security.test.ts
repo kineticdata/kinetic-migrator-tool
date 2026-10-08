@@ -14,6 +14,9 @@ before(async () => {
   webDir = mkdtempSync(path.join(tmpdir(), 'km-web-'));
   writeFileSync(path.join(webDir, 'index.html'), '<!doctype html><title>app</title>');
   writeFileSync(path.join(webDir, 'app.js'), 'console.log(1);');
+  writeFileSync(path.join(webDir, 'favicon.ico'), Buffer.from([0, 0, 1, 0]));
+  writeFileSync(path.join(webDir, 'favicon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
+  writeFileSync(path.join(webDir, 'font.ttf'), Buffer.from([0, 1, 0, 0]));
   s = await startTestServer({ webDir });
 });
 after(async () => {
@@ -133,6 +136,17 @@ test('static files and SPA fallback, no path traversal', async () => {
   const dbl = await request(s.port, '//etc/passwd');
   assert.equal(dbl.status, 200);
   assert.match(dbl.body, /<title>app<\/title>/);
+});
+
+test('icons and fonts are served with their own content types, not the SPA page', async () => {
+  for (const [p, type] of [['/favicon.ico', 'image/x-icon'], ['/favicon.svg', 'image/svg+xml'], ['/font.ttf', 'font/ttf']]) {
+    const res = await request(s.port, p);
+    assert.equal(res.status, 200, p);
+    assert.equal(res.headers['content-type'], type, p);
+    assert.doesNotMatch(res.body, /<title>app<\/title>/, p);
+  }
+  const missing = await request(s.port, '/apple-touch-icon.png');
+  assert.equal(missing.status, 404);
 });
 
 test('static files also require a valid Host', async () => {

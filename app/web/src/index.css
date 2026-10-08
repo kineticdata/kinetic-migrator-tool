@@ -1,72 +1,138 @@
 @import 'tailwindcss';
 @config '../../../tailwind.config.ts';
 
-/* Design tokens. Light by default; dark when <html data-theme="dark"> (set
-   from the OS preference or the manual toggle, see lib/theme.ts). */
+/* Onest (SIL OFL 1.1, see assets/fonts/OFL.txt), self-hosted so the app
+   works offline. */
+@font-face {
+  font-family: 'Onest';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/Onest-Regular.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Onest';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./assets/fonts/Onest-Medium.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Onest';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('./assets/fonts/Onest-SemiBold.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Onest';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./assets/fonts/Onest-Bold.ttf') format('truetype');
+}
+
+/* Design tokens, from the Kinetic portal theme: near-white surfaces on a cool
+   grey page, deep navy for the header and interactive accents, warm yellow
+   primary buttons with dark text, Kinetic orange only for the brand mark.
+   Light by default; dark when <html data-theme="dark"> (set from the OS
+   preference or the manual toggle, see lib/theme.ts). */
 :root {
   color-scheme: light;
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --surface-2: #f1f3f6;
-  --surface-3: #e8ebf0;
-  --border: #e3e6eb;
-  --border-strong: #cfd4dc;
-  --fg: #14171c;
-  --muted: #5b6270;
-  --subtle: #8a909c;
-  --accent: #3b5bdb;
-  --accent-hover: #3250c7;
+  --bg: #f0f2f3;
+  --surface: #fefefe;
+  --surface-2: #f4f5f7;
+  --surface-3: #e4e8ec;
+  --border: #dde1e6;
+  --border-strong: #d0d4db;
+  --fg: #101828;
+  --muted: #4b5565;
+  --subtle: #636b7b;
+  --accent: #1f3d5a;
+  --accent-hover: #2a4e70;
   --accent-fg: #ffffff;
-  --accent-soft: #edf1ff;
-  --ring: #3b5bdb55;
+  --accent-soft: #e3ecf5;
+  --ring: #1f3d5a40;
+
+  --primary: #ffce74;
+  --primary-hover: #f7bf55;
+  --primary-fg: #272117;
+  --brand: #f36c24;
+
+  --header-bg: #1f3d5a;
+  --header-fg: #ffffff;
+  --header-muted: #d4dfeb;
+  --header-subtle: #9fb3c8;
+  --header-border: rgb(255 255 255 / 0.12);
+  --header-hover: rgb(255 255 255 / 0.08);
+  --header-active: rgb(255 255 255 / 0.14);
+  --header-ok: #7ad69f;
 
   --added: #19753c;
-  --added-soft: #e8f6ed;
-  --changed: #1f5fbf;
-  --changed-soft: #e9f1fd;
-  --removed: #5f6672;
-  --removed-soft: #eef0f3;
-  --drift: #a35a00;
-  --drift-soft: #fdf3e2;
+  --added-soft: #e2f2e2;
+  --changed: #1d56b0;
+  --changed-soft: #e4eefc;
+  --removed: #556070;
+  --removed-soft: #eceff2;
+  --drift: #8a4b00;
+  --drift-soft: #fbeed6;
   --danger: #b42323;
   --danger-hover: #9e1d1d;
-  --danger-soft: #fdecec;
+  --danger-fg: #ffffff;
+  --danger-soft: #fde7e7;
 
-  --shadow-sm: 0 1px 2px rgb(16 24 40 / 0.05);
+  /* Flat (Kinetic depth 0): no shadow on cards and controls; overlays keep a
+     soft one so they read above the page. */
+  --shadow-sm: none;
   --shadow-md: 0 1px 2px rgb(16 24 40 / 0.04), 0 4px 12px rgb(16 24 40 / 0.06);
   --shadow-lg: 0 12px 32px rgb(16 24 40 / 0.14), 0 2px 6px rgb(16 24 40 / 0.06);
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #0f1115;
-  --surface: #161920;
-  --surface-2: #1c2029;
-  --surface-3: #252a35;
-  --border: #272c37;
-  --border-strong: #353b48;
-  --fg: #e8eaee;
-  --muted: #a2a8b4;
-  --subtle: #757c89;
-  --accent: #7c95ff;
-  --accent-hover: #93a7ff;
-  --accent-fg: #0f1115;
-  --accent-soft: #1d2440;
-  --ring: #7c95ff66;
+  --bg: #0c1824;
+  --surface: #112131;
+  --surface-2: #172a3d;
+  --surface-3: #1f344a;
+  --border: #213549;
+  --border-strong: #2f4862;
+  --fg: #e7edf3;
+  --muted: #a8b6c5;
+  --subtle: #7f91a4;
+  --accent: #8bc2ff;
+  --accent-hover: #a5d0ff;
+  --accent-fg: #162455;
+  --accent-soft: #16304d;
+  --ring: #8bc2ff55;
 
-  --added: #5cc98a;
-  --added-soft: #15291e;
-  --changed: #75a7ff;
-  --changed-soft: #172338;
-  --removed: #a2a8b4;
-  --removed-soft: #20242d;
+  --primary: #ffce74;
+  --primary-hover: #ffd98f;
+  --primary-fg: #272117;
+  --brand: #f36c24;
+
+  --header-bg: #132a42;
+  --header-fg: #ffffff;
+  --header-muted: #d4dfeb;
+  --header-subtle: #9fb3c8;
+  --header-border: rgb(255 255 255 / 0.08);
+  --header-hover: rgb(255 255 255 / 0.07);
+  --header-active: rgb(255 255 255 / 0.12);
+  --header-ok: #6fd39a;
+
+  --added: #6fd39a;
+  --added-soft: #12291f;
+  --changed: #8bbcff;
+  --changed-soft: #142843;
+  --removed: #a8b6c5;
+  --removed-soft: #1a2a3b;
   --drift: #f0b35c;
-  --drift-soft: #2e2414;
-  --danger: #ff7b7b;
-  --danger-hover: #ff9494;
-  --danger-soft: #331a1c;
+  --drift-soft: #2c2414;
+  --danger: #ff8a8a;
+  --danger-hover: #ffa1a1;
+  --danger-fg: #0c1824;
+  --danger-soft: #361a1f;
 
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-sm: none;
   --shadow-md: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 14px rgb(0 0 0 / 0.25);
   --shadow-lg: 0 16px 40px rgb(0 0 0 / 0.5);
 }
@@ -86,6 +152,18 @@
   --color-accent-fg: var(--accent-fg);
   --color-accent-soft: var(--accent-soft);
   --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-fg: var(--primary-fg);
+  --color-brand: var(--brand);
+  --color-header: var(--header-bg);
+  --color-header-fg: var(--header-fg);
+  --color-header-muted: var(--header-muted);
+  --color-header-subtle: var(--header-subtle);
+  --color-header-border: var(--header-border);
+  --color-header-hover: var(--header-hover);
+  --color-header-active: var(--header-active);
+  --color-header-ok: var(--header-ok);
   --color-added: var(--added);
   --color-added-soft: var(--added-soft);
   --color-changed: var(--changed);
@@ -96,11 +174,18 @@
   --color-drift-soft: var(--drift-soft);
   --color-danger: var(--danger);
   --color-danger-hover: var(--danger-hover);
+  --color-danger-fg: var(--danger-fg);
   --color-danger-soft: var(--danger-soft);
   --shadow-card: var(--shadow-sm);
   --shadow-raised: var(--shadow-md);
   --shadow-overlay: var(--shadow-lg);
-  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* Kinetic shapes: rounded-xl = box (cards, panels) 1rem, rounded-lg = field
+     (inputs, buttons) 0.75rem, rounded-md = selector (chips, tab pills) 0.5rem. */
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  --font-sans: 'Onest', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 }
 

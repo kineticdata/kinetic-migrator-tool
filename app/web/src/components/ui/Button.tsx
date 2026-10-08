@@ -12,10 +12,10 @@ const base = 'inline-flex items-center justify-center gap-2 whitespace-nowrap ro
   + 'disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 select-none';
 
 const variants: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-accent-fg shadow-card hover:bg-accent-hover',
+  primary: 'bg-primary text-primary-fg shadow-card hover:bg-primary-hover',
   secondary: 'border border-border-strong bg-surface text-fg shadow-card hover:bg-surface-2',
   ghost: 'text-muted hover:bg-surface-2 hover:text-fg',
-  danger: 'bg-danger text-white shadow-card hover:bg-danger-hover',
+  danger: 'bg-danger text-danger-fg shadow-card hover:bg-danger-hover',
 };
 
 const sizes: Record<ButtonSize, string> = {

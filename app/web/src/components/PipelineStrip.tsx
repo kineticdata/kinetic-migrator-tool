@@ -33,7 +33,7 @@ export function PipelineStrip({ projectId, environments, drift, active, now }: P
         const drifted = drift[e.name] ?? 0;
         return (
           <div key={e.name} className="flex shrink-0 items-center gap-1">
-            {i > 0 && <ChevronRight size={14} aria-hidden className="text-subtle" />}
+            {i > 0 && <ChevronRight size={14} aria-hidden className="text-header-subtle" />}
             <Link
               to={hrefFor(projectId, e.name, pathname, search)}
               data-env={e.name}
@@ -41,14 +41,14 @@ export function PipelineStrip({ projectId, environments, drift, active, now }: P
               className={cn(
                 'group flex h-8 items-center gap-2 rounded-full border px-3 text-[13px] transition-colors',
                 isActive
-                  ? 'border-accent/40 bg-accent-soft text-fg shadow-card'
-                  : 'border-border bg-surface text-muted hover:border-border-strong hover:text-fg',
+                  ? 'border-primary bg-header-active text-header-fg'
+                  : 'border-header-border bg-header-hover text-header-muted hover:bg-header-active hover:text-header-fg',
               )}
             >
-              <span className={cn('size-1.5 rounded-full', e.lastSnapshot ? 'bg-added' : 'bg-subtle/60')} aria-hidden />
-              <span className="font-medium text-fg">{envLabel(e.name)}</span>
-              {e.readOnly && <Lock size={12} role="img" aria-label="Protected" className="text-muted" />}
-              <span className="text-xs text-subtle">{e.lastSnapshot ? timeAgo(e.lastSnapshot.at, now) : 'No snapshot'}</span>
+              <span className={cn('size-1.5 rounded-full', e.lastSnapshot ? 'bg-header-ok' : 'bg-header-subtle/60')} aria-hidden />
+              <span className="font-medium text-header-fg">{envLabel(e.name)}</span>
+              {e.readOnly && <Lock size={12} role="img" aria-label="Protected" className="text-header-muted" />}
+              <span className="text-xs text-header-subtle">{e.lastSnapshot ? timeAgo(e.lastSnapshot.at, now) : 'No snapshot'}</span>
               {drifted > 0 && (
                 <span className="rounded-full bg-drift-soft px-1.5 text-[11px] font-medium text-drift">{plural(drifted, 'drifted', 'drifted')}</span>
               )}
