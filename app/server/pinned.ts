@@ -18,8 +18,8 @@ export async function resolveCommit(dir: string, ref: string): Promise<string | 
   if (!/^[0-9a-f]{4,40}$/i.test(ref)) return null;
   try {
     const oid = ref.length === 40 ? ref : await git.expandOid({ fs, dir, oid: ref });
-    const { type } = await git.readObject({ fs, dir, oid, format: 'deflated' });
-    return type === 'commit' ? oid : null;
+    await git.readCommit({ fs, dir, oid });
+    return oid;
   } catch {
     return null;
   }

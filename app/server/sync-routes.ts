@@ -4,6 +4,7 @@ import { registerChangesetRoutes } from './changesets.ts';
 import { registerCompareRoutes } from './compare.ts';
 import type { ClientFactory } from './engine.ts';
 import { registerExploreRoutes } from './explore.ts';
+import { registerHistoryRoutes } from './history.ts';
 import type { JobRegistry } from './jobs.ts';
 import { findProject } from './projects.ts';
 import type { Router } from './router.ts';
@@ -18,4 +19,5 @@ export function registerSyncRoutes(router: Router, opts: { workspace: string; se
   registerCompareRoutes(router, ctx);
   registerChangesetRoutes(router, ctx);
   registerRunRoutes(router, ctx);
+  registerHistoryRoutes(router, ctx);
 }
