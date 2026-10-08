@@ -266,13 +266,17 @@ in place, and `--prune data` deletes target records whose key is not in the
 source. Two source records with the same key, or a record with an empty key
 field, stop the export with an error.
 
-**Without match fields**, a record is identified by all of its values. A
-record the target already has with identical values is left alone; any other
-is created. Nothing is updated or deleted, so a record edited in the source
-is created as a new record in the target (the plan warns about this), and
-`--prune data` deletes nothing for that form (apply warns that it is
-ignored). Identical records in the source count as one: promoting three
-identical records ensures the target has at least one.
+**Without match fields**, a target record stands for a source record when
+every field of the source record has the same value in the target record.
+Fields only the target record has (for example one the target form adds or
+defaults) are ignored, and an empty source value matches a missing or empty
+target value. Each target record stands for at most one source record, so
+two identical source records need two target records. Source records the
+target does not have are created; nothing is updated or deleted. A record
+edited in the source is therefore created as a new record in the target
+(the plan warns about this), and `--prune data` deletes nothing for that
+form (apply warns that it is ignored). Records the target already has show
+as unchanged in plans and comparisons, whatever extra fields they carry.
 
 Creating or updating records runs the target form's submission workflows;
 the plan names them.
