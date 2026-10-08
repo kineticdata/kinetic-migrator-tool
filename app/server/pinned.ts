@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import git from 'isomorphic-git';
+import { upgradeTree } from './engine-sync.ts';
 
 export async function readJsonAt(dir: string, commit: string, filepath: string): Promise<unknown> {
   try {
@@ -54,5 +55,7 @@ export async function materializeTree(dir: string, commit: string, subdir: strin
     }
   };
   await walk(root, dest);
+  // A snapshot from before the file-name layout change gets today's names.
+  upgradeTree(dest);
   return true;
 }

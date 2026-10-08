@@ -3,11 +3,12 @@
 // managed .gitignore, committing a change with a plain message, and the
 // project's random secrets id (the keychain account prefix).
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ApiError } from './errors.ts';
 import { GITATTRIBUTES, stableStringify } from './engine.ts';
-import { commitAll, ensureRepo, type Author } from './repo.ts';
+import { commitAll, ensureRepo, readTreeAt, type Author } from './repo.ts';
+import { LAYOUT_VERSION, upgradeProjectLayout } from './engine-sync.ts';
 
 export interface ProjectRef {
   id: string;
@@ -105,6 +106,37 @@ export async function manageProject(ref: ProjectRef, message: string): Promise<v
   if (!validSecretsId(meta.secretsId)) writeMeta(ref.dir, { ...meta, secretsId: newSecretsId() });
   await ensureRepo(ref.dir);
   await commitChange(ref, message);
+  await upgradeLayoutLocked(ref);
+}
+
+// Projects from before the file-name layout change (lib/sync/layout.mjs) are
+// upgraded once: snapshots renamed from their content, state and overrides
+// re-keyed, saved changesets' keys mapped through the snapshot they are pinned
+// to, all in one commit. Returns that commit, or null when nothing changed.
+// Call inside withProjectLock.
+export async function upgradeLayoutLocked(ref: ProjectRef): Promise<string | null> {
+  const r = upgradeProjectLayout(ref.dir);
+  const notes = [...r.notes];
+  let changed = r.changed;
+  if (r.fromLayout < LAYOUT_VERSION) {
+    const dir = path.join(ref.dir, 'changesets');
+    for (const f of existsSync(dir) ? readdirSync(dir).filter((n) => n.endsWith('.json')).sort() : []) {
+      const file = path.join(dir, f);
+      let cs: { from?: unknown; sourceCommit?: unknown; keys?: unknown };
+      try { cs = JSON.parse(readFileSync(file, 'utf8')); } catch { continue; }
+      if (typeof cs.from !== 'string' || typeof cs.sourceCommit !== 'string' || !Array.isArray(cs.keys)) continue;
+      const tree = await readTreeAt(ref.dir, cs.sourceCommit, `snapshots/${cs.from}`);
+      const keys = cs.keys.map((k) => (typeof k === 'string' ? tree.rekeyed?.get(k) ?? k : k));
+      if (keys.some((k, i) => k !== (cs.keys as unknown[])[i])) {
+        writeFileSync(file, stableStringify({ ...cs, keys }));
+        notes.push(`changesets/${f}: re-keyed`);
+        changed = true;
+      }
+    }
+  }
+  if (!changed) return null;
+  const body = notes.length ? `File names now use the same encoding on every operating system.\n\n${notes.join('\n')}` : undefined;
+  return commitAll(ref.dir, body ? `Upgraded project layout\n\n${body}` : 'Upgraded project layout', readMeta(ref.dir).author ?? DEFAULT_AUTHOR);
 }
 
 // The project's secrets id; projects without one (for example CLI-created

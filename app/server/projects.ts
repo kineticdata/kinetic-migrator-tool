@@ -12,7 +12,7 @@ import {
   readEnvironmentFile, readOverrides, setCredentials, testConnection, validateNewEnvironment, writeEnvironment,
 } from './environments.ts';
 import {
-  commitChange, ensureGitignore, isPlainObject, manageProject, newSecretsId, readJsonFile, readMeta, withProjectLock, writeMeta,
+  commitChange, ensureGitignore, isPlainObject, manageProject, newSecretsId, readJsonFile, readMeta, upgradeLayoutLocked, withProjectLock, writeMeta,
   type ProjectRef,
 } from './project-meta.ts';
 import { currentBranch, ensureRepo, log } from './repo.ts';
@@ -169,6 +169,21 @@ export async function openProject(workspace: string, body: unknown): Promise<Pro
   // CLI-created projects become managed: ignore local-only files, then commit.
   await withProjectLock(ref, () => manageProject(ref, 'Started managing this project'));
   return ref;
+}
+
+// Upgrades every managed project in the workspace to the current file-name
+// layout (see upgradeLayoutLocked); failures are logged and never stop the
+// server. Unmanaged projects are upgraded when they become managed.
+export async function upgradeWorkspace(workspace: string, onError: (id: string, err: unknown) => void = () => {}): Promise<void> {
+  for (const p of listProjects(workspace)) {
+    try {
+      const ref = findProject(workspace, p.id);
+      if (!existsSync(path.join(ref.dir, '.git'))) continue;
+      await withProjectLock(ref, () => upgradeLayoutLocked(ref));
+    } catch (err) {
+      onError(p.id, err);
+    }
+  }
 }
 
 export async function readProject(ref: ProjectRef, store: SecretStore): Promise<ProjectDetail> {

@@ -14,7 +14,7 @@ import { JobRegistry, registerJobRoutes } from './jobs.ts';
 import { Router } from './router.ts';
 import { generateKey } from './security.ts';
 import type { ClientFactory } from './engine.ts';
-import { registerProjectRoutes } from './projects.ts';
+import { registerProjectRoutes, upgradeWorkspace } from './projects.ts';
 import { registerSyncRoutes } from './sync-routes.ts';
 import { registerRepositoryRoutes } from './repository.ts';
 import { createDefaultStore, type SecretStore } from './secrets.ts';
@@ -53,6 +53,8 @@ export interface ServerHandle {
   port: number;
   // True when KINETIC_MIGRATE_FAKE=1 put the server on synthetic spaces.
   fake: boolean;
+  // Settles when the workspace's projects are on the current file layout.
+  upgraded: Promise<void>;
   jobs: JobRegistry;
   router: Router;
   close(): Promise<void>;
@@ -98,7 +100,9 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
     });
   });
   port = (server.address() as AddressInfo).port;
+  const upgraded = upgradeWorkspace(workspace, (id, err) => logger.error(`Could not upgrade the file layout of project ${id}`, err));
   return {
+    upgraded,
     url: `http://localhost:${port}/?key=${key}`,
     port,
     fake: Boolean(fake),

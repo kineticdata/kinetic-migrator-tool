@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runInit, runExport, runPlan, runApply, runCompare } from './lib/sync/commands.mjs';
 import { runUi } from './lib/sync/ui-command.mjs';
+import { upgradeProjectLayout } from './lib/sync/layout.mjs';
 import { PRUNABLE } from './lib/sync/artifacts/index.mjs';
 
 const USAGE = `Usage:
@@ -53,6 +54,14 @@ async function main(argv) {
   }
   const projectDir = resolve(values.project ?? process.cwd());
   const log = (m) => console.log(m);
+  // Projects from before the file-name layout change are upgraded once.
+  if (['export', 'plan', 'apply', 'compare'].includes(command) && existsSync(projectDir)) {
+    const up = upgradeProjectLayout(projectDir);
+    if (up.changed) {
+      log('Upgraded the project to the new file-name layout (commit these changes):');
+      for (const n of up.notes) log(`  ${n}`);
+    }
+  }
   const need = (flag) => {
     if (!values[flag]) throw new Error(`${command} needs --${flag} <environment>\n\n${USAGE}`);
     return values[flag];

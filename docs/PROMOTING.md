@@ -88,9 +88,20 @@ bytes is cut and ends in `%~` plus 8 hex digits of a hash of the full name
 (the full name is inside the file), which keeps paths under Windows'
 260-character limit in most projects. Two items whose names differ only in
 letter case (`Ops` and `ops`) would be one file on Windows and macOS, so
-export stops and names both; rename one in the source space. Projects
-exported before this encoding (which used `_`) get new file names for those
-items on the next snapshot.
+export stops and names both; rename one in the source space.
+
+Projects from before this encoding (which used `_`, layout 1) are upgraded
+once, the first time the app opens them or a CLI command runs in them: every
+snapshot is renamed from its files' content (the names, slugs, events and ids
+the exporter builds file names from), the keys in `state/` and `overrides/`
+and in saved changesets follow, `kinetic-sync.config.json` records
+`"layoutVersion": 2`, and the app commits "Upgraded project layout" (with the
+CLI, commit the changes yourself). Older commits (pinned changesets, backups,
+history) are re-keyed the same way when they are read. An item whose new name
+cannot be derived from its content with certainty (for example a file edited
+by hand so its content no longer matches its name) is left as it is, and a
+plan that includes it stops with an error naming it: take a new snapshot.
+Nothing is ever created or pruned on a guess.
 
 Each installed handler is exported as `handlers/<definitionId>/handler.json`
 (its settings without secret values, with a `packageSha256` of its package) beside
