@@ -30,6 +30,7 @@ import { currentKeys, readChangeset, recordApplied, removeList } from './changes
 import { hasEnvSecret, readEnvironmentFile, readOverrides, resolveEnv, setEnvSecret } from './environments.ts';
 import type { Emit } from './jobs.ts';
 import { materializeTree, resolveCommit } from './pinned.ts';
+import { capturingFactory, crossVersionFor, rememberPlatform } from './platforms.ts';
 import { commitChange, displayName, isPlainObject, secretsId, withProjectLock, type ProjectRef } from './project-meta.ts';
 import type { Router } from './router.ts';
 import { RUNS_DIR } from './run-records.ts';
@@ -411,10 +412,12 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     }
     const memory = readHandlerMemory(ref.dir, to);
     const hints = engineHints(memory, availableHandlerSecrets(to, env.vars));
+    const capture = capturingFactory(ctx.clientFactory);
     const { plan } = await computePlan({
       projectDir: ref.dir, envName: to, env, sourceDir, sourceName: from, select, resolutions, remove, onEvent: forwardEvents(emit, [env.password, ...Object.values(env.vars)]),
-      signal, clientFactory: ctx.clientFactory, hints,
+      signal, clientFactory: capture.factory, hints,
     });
+    rememberPlatform(ref.dir, to, await capture.platform());
     plan.warnings.push(...unplanned);
     plan.warnings.push(...refused);
     // Only what the plan shows as a delete is ever sent to apply.
@@ -436,6 +439,9 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     const result = buildResult({ planId, name, to, from, changesetId, sourceCommit: pinned, selected: keys, remove }, plan, {
       environmentValues: environmentValues(ref.dir, to, active, readTree(sourceDir)), secretsNeeded: secrets, hints,
     });
+    // Cross-major promotions are allowed, with a warning in the header.
+    const crossVersion = from === to ? null : crossVersionFor(ref.dir, from, to);
+    if (crossVersion) result.crossVersion = crossVersion;
     const scrubbed = makeScrubber([env.password, ...Object.values(env.vars)])(result);
     remember(planId, { projectDir: ref.dir, result: scrubbed, kind, select, sourceDir, sourcePath, resolutions, remove: deletes.map((x) => x.key), removeExpected, leftOut });
     return scrubbed;

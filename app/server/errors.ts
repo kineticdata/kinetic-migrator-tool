@@ -42,8 +42,8 @@ export function toApiError(err: unknown): ApiError {
       return new ApiError(502, 'integrator_unavailable', `Connections and operations were left out: ${text}`);
     }
     case 'IntegratorSignInFailed': {
-      const i = err as { status?: number | null; redirected?: boolean };
-      return new ApiError(502, 'integrator_sign_in', integratorSignInText({ status: typeof i.status === 'number' ? i.status : null, redirected: i.redirected === true }));
+      const i = err as { status?: number | null; redirected?: boolean; sso?: boolean };
+      return new ApiError(502, 'integrator_sign_in', integratorSignInText({ status: typeof i.status === 'number' ? i.status : null, redirected: i.redirected === true, sso: i.sso === true }));
     }
     case 'HttpError':
       return new ApiError(502, 'upstream_error', describePlatformError({ status: e.status, method: e.method, body: e.body }));

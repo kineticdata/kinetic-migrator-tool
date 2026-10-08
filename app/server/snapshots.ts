@@ -1,6 +1,6 @@
 // Snapshots: a full export of one environment into snapshots/<env>/, committed
 // as "Snapshot of <Env>" (with the items that drifted since their last
-// promotion), and the in-memory snapshot cache that Explore and Compare read:
+// promotion, and a `Platform:` trailer with the version it ran against), and the in-memory snapshot cache that Explore and Compare read:
 // artifacts, tree index and relationships, keyed by the snapshot commit.
 import { randomUUID } from 'node:crypto';
 import fs, { statSync } from 'node:fs';
@@ -18,6 +18,7 @@ import {
   DEFAULT_AUTHOR, commitChange, displayName, isPlainObject, readMeta, secretsId, withProjectLock, type ProjectRef,
 } from './project-meta.ts';
 import { log } from './repo.ts';
+import { capturingFactory, parseVersion, rememberPlatform } from './platforms.ts';
 import { makeScrubber, scrubError } from './scrub.ts';
 import { buildTreeIndex, type TreeIndex } from './tree-index.ts';
 import { commitMessage } from './trailers.ts';
@@ -117,9 +118,10 @@ export async function takeSnapshot(opts: {
 }): Promise<SnapshotResult> {
   const { ref, env } = opts;
   const temp = path.join(ref.dir, 'plans', `snap-${randomUUID()}`);
+  const capture = capturingFactory(opts.clientFactory);
   let r: Awaited<ReturnType<typeof runExport>>;
   try {
-    r = await runExport({ projectDir: ref.dir, env, dest: temp, onEvent: opts.onEvent, signal: opts.signal, clientFactory: opts.clientFactory, log: () => {} });
+    r = await runExport({ projectDir: ref.dir, env, dest: temp, onEvent: opts.onEvent, signal: opts.signal, clientFactory: capture.factory, log: () => {} });
   } catch (err) {
     fs.rmSync(temp, { recursive: true, force: true });
     throw scrubError(err, envSecrets(env));
@@ -133,7 +135,10 @@ export async function takeSnapshot(opts: {
     ...(drifted.length ? [`Drifted: ${drifted.length} item(s) changed since the last promotion.\n${drifted.join('\n')}`] : []),
   ];
   const body = parts.length ? parts.join('\n\n') : undefined;
-  const message = commitMessage(opts.title, { Environment: env.name, ...opts.trailers }, body);
+  // The version the export ran against, in History too.
+  const detected = await capture.platform();
+  rememberPlatform(ref.dir, env.name, detected);
+  const message = commitMessage(opts.title, { Environment: env.name, ...opts.trailers, Platform: parseVersion(detected?.version)?.version }, body);
   let commit = await commitChange(ref, message);
   if (!commit && opts.always) {
     const author = readMeta(ref.dir).author ?? DEFAULT_AUTHOR;

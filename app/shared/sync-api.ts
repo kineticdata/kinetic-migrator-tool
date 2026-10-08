@@ -138,6 +138,9 @@ export interface CompareResult {
   // What this comparison left out, and why (connections and operations when
   // either side's snapshot has none recorded).
   notes?: string[];
+  // "Dev runs 6.1.7 and Prod runs 7.0.0-rc3 — review differences carefully."
+  // when the two run different major versions of the platform.
+  crossVersion?: string | null;
 }
 
 export interface DiffEntry {
@@ -357,6 +360,8 @@ export interface PlanResult {
   secretsNeeded: SecretNeeded[];
   errors: string[];
   warnings: string[];
+  // As CompareResult.crossVersion.
+  crossVersion?: string | null;
 }
 
 export interface ApplyRequest {

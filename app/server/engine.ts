@@ -28,6 +28,8 @@ export interface EngineClient {
   mode: 'read' | 'write';
   request(api: string, method: string, path: string, opts?: { query?: Record<string, unknown>; body?: unknown }): Promise<unknown>;
   get(api: string, path: string, query?: Record<string, unknown>): Promise<unknown>;
+  // The platform version the client talks to, detected once (http.mjs).
+  platform?(): Promise<{ version: string | null; major: number | null; minor: number | null; source: string | null }>;
 }
 
 export type ClientFactory = (opts: { env: EngineEnv; mode: 'read' | 'write' }) => EngineClient;

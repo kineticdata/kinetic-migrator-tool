@@ -180,7 +180,7 @@ export const describePlatformError: (e: { status?: number; method?: string; body
 // the status, platform version and host only).
 export const integratorAuthText: (e: { status?: number | null; version?: string | null; host?: string | null }) => string = httpModule.integratorAuthText;
 // A refused or failed Integrator sign-in (never degrades), in plain words.
-export const integratorSignInText: (e: { status?: number | null; redirected?: boolean }) => string = httpModule.integratorSignInText;
+export const integratorSignInText: (e: { status?: number | null; redirected?: boolean; sso?: boolean }) => string = httpModule.integratorSignInText;
 export const describeFailureMessage: (message: unknown) => string | null = httpModule.describeFailureMessage;
 // Required handler properties that would be empty after apply (see lib/sync/artifacts/handlers.mjs).
 export const missingRequired: (desired: unknown, existing: TargetArtifact | null, has: (name: string) => boolean, hints?: EngineHints['handlers']) => string[] = handlersModule.missingRequired;

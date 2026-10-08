@@ -14,6 +14,7 @@ import {
   type ProjectRef,
 } from './project-meta.ts';
 import { rememberSecrets } from './log.ts';
+import { forgetPlatform, platformOf, rememberPlatform } from './platforms.ts';
 import { accountFor, type SecretStore } from './secrets.ts';
 
 export interface EnvironmentFile {
@@ -129,6 +130,7 @@ export async function deleteEnvironment(ref: ProjectRef, env: string, store: Sec
   await withProjectLock(ref, async () => {
     rmSync(envFile(ref.dir, env));
     saveOrder(ref.dir, pipelineOrder(ref.dir).filter((n) => n !== env));
+    forgetPlatform(ref.dir, env);
     await commitChange(ref, `Removed environment ${displayName(env)}`);
   });
   await forgetEnvSecrets(store, ref, env);
@@ -263,11 +265,14 @@ function stepMessage(err: unknown): string {
   return 'The check failed.';
 }
 
-// Core `/me` with basic auth, then the Integrator token (and one Integrator
-// call) through the engine's read-only client.
+// The platform version (open endpoints, so even when Core login fails), Core
+// `/me` with basic auth, then the Integrator token (and one Integrator call)
+// through the engine's read-only client. A detected version is remembered
+// for the environment (plans/platforms.json).
 export async function testConnection(ref: ProjectRef, env: string, store: SecretStore, clientFactory: ClientFactory): Promise<ConnectionTestResult> {
   const resolved = await resolveEnv(ref, env, store);
   const client = clientFactory({ env: resolved, mode: 'read' });
+  const platform = rememberPlatform(ref.dir, env, await platformOf(client));
   const steps: ConnectionTestStep[] = [];
   try {
     await client.get('core', '/me');
@@ -275,7 +280,7 @@ export async function testConnection(ref: ProjectRef, env: string, store: Secret
   } catch (err) {
     steps.push({ step: 'core', label: 'Core login', ok: false, message: stepMessage(err) });
     steps.push({ step: 'integrator', label: 'Integrator token', ok: false, skipped: true, message: 'Skipped until Core login works.' });
-    return { ok: false, steps };
+    return { ok: false, steps, platform };
   }
   try {
     await client.get('integrator', '/connections');
@@ -283,7 +288,7 @@ export async function testConnection(ref: ProjectRef, env: string, store: Secret
   } catch (err) {
     steps.push({ step: 'integrator', label: 'Integrator token', ok: false, message: stepMessage(err) });
   }
-  return { ok: steps.every((s) => s.ok), steps };
+  return { ok: steps.every((s) => s.ok), steps, platform };
 }
 
 // ---- Environment values (overrides) --------------------------------------

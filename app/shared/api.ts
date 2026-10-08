@@ -67,12 +67,25 @@ export interface SnapshotInfo {
   message: string;
 }
 
+// The Kinetic Platform version an environment was last seen running.
+// `source`: which version endpoint answered ('integrator' or 'core').
+export interface PlatformInfo {
+  version: string;
+  major: number;
+  minor: number;
+  source: string | null;
+  detectedAt: string | null;
+}
+
 export interface EnvironmentInfo {
   name: string;
   url: string;
   readOnly: boolean;
   credentials: CredentialsStatus;
   lastSnapshot: SnapshotInfo | null;
+  // Last detected (Test connection, snapshot, plan, live compare); null
+  // until then (absent from an older server).
+  platform?: PlatformInfo | null;
 }
 
 export interface ProjectDetail extends ProjectSummary {
@@ -121,6 +134,8 @@ export interface ConnectionTestStep {
 export interface ConnectionTestResult {
   ok: boolean;
   steps: ConnectionTestStep[];
+  // The version detected now (null when the server did not say).
+  platform?: PlatformInfo | null;
 }
 
 // A Field = Value condition; a reference-data entry copies only the records
