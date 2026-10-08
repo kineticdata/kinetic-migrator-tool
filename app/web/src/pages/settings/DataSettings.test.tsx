@@ -202,3 +202,60 @@ test('saving one card keeps unsaved edits in the other, and picking another form
   expect(within(match1).queryByRole('checkbox', { name: 'Code' })).toBeNull();
   expect(within(match1).getByRole('checkbox', { name: 'Priority' })).not.toBeChecked();
 });
+
+const DEFAULT_KEPT = ['displayType', 'displayValue', 'trustedFrameDomains', 'trustedResourceDomains', 'allowedIps', 'allowedIpsEnabled'];
+
+test('space settings: shows the saved list with the always-kept fields fixed, and saves ticked extras', async () => {
+  const m = setup({ envBoundSpaceFields: DEFAULT_KEPT });
+  const user = userEvent.setup();
+  open();
+  const space = await card('Space settings kept per environment');
+  for (const f of DEFAULT_KEPT) expect(within(space).getByRole('checkbox', { name: f })).toBeChecked();
+  expect(within(space).getByRole('checkbox', { name: 'displayValue' })).toHaveAccessibleDescription("Where the space's UI is served from");
+  expect(within(space).getByRole('checkbox', { name: 'loginPage' })).not.toBeChecked();
+  for (const f of ['name', 'slug', 'platformComponents', 'bundlePath', 'sharedBundleBase']) {
+    const box = within(space).getByRole('checkbox', { name: f });
+    expect(box).toBeChecked();
+    expect(box).toBeDisabled();
+  }
+  await user.click(within(space).getByRole('checkbox', { name: 'defaultLocale' }));
+  await user.click(within(space).getByRole('checkbox', { name: 'allowedIps' }));
+  await user.click(within(space).getByRole('checkbox', { name: 'loginPage' }));
+  await user.click(within(space).getByRole('button', { name: 'Save space settings' }));
+  await waitFor(() => expect(m.callsTo('PUT', '/api/projects/acme-demo/config')).toHaveLength(1));
+  expect(lastPut(m)).toEqual({
+    envBoundSpaceFields: ['displayType', 'displayValue', 'trustedFrameDomains', 'trustedResourceDomains', 'allowedIpsEnabled', 'loginPage', 'defaultLocale'],
+  });
+});
+
+test('space settings: a reply without the list (an older server) shows the defaults; saving another card keeps unsaved boxes', async () => {
+  const m = setup({});
+  const user = userEvent.setup();
+  open();
+  const space = await card('Space settings kept per environment');
+  for (const f of DEFAULT_KEPT) expect(within(space).getByRole('checkbox', { name: f })).toBeChecked();
+  await user.click(within(space).getByRole('checkbox', { name: 'defaultTimezone' }));
+  const rules = await card('Environment-specific attributes');
+  await user.click(within(rules).getByRole('button', { name: 'Save attributes' }));
+  await waitFor(() => expect(m.callsTo('PUT', '/api/projects/acme-demo/config')).toHaveLength(1));
+  expect(lastPut(m)).not.toHaveProperty('envBoundSpaceFields');
+  expect(within(space).getByRole('checkbox', { name: 'defaultTimezone' })).toBeChecked();
+});
+
+test('space settings: names ignored in the project file are shown on this card only', async () => {
+  setup({
+    envBoundSpaceFields: ['displayValue'],
+    warnings: [
+      'kinetic-sync.config.json: "envBoundSpaceFields": "colour" cannot be kept per environment; it is ignored.',
+      'kinetic-sync.config.json: "envBoundAttributes": unknown level "forms" (use space, kapp, form, team, category); it is ignored.',
+    ],
+  });
+  open();
+  const space = await card('Space settings kept per environment');
+  const rules = await card('Environment-specific attributes');
+  expect(within(space).getByText(/"colour" cannot be kept per environment/)).toBeInTheDocument();
+  expect(within(space).queryByText(/unknown level "forms"/)).toBeNull();
+  expect(within(rules).getByText(/unknown level "forms"/)).toBeInTheDocument();
+  expect(within(rules).queryByText(/"colour"/)).toBeNull();
+  expect(within(space).getByRole('checkbox', { name: 'displayType' })).not.toBeChecked();
+});

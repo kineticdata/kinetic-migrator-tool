@@ -1,12 +1,13 @@
-// Settings → Data & values: attributes whose values belong to each
-// environment (never promoted) and the reference data copied with the
-// configuration. Pickers list names from the latest snapshot (the catalog);
+// Settings → Data & values: space settings and attributes whose values
+// belong to each environment (never promoted) and the reference data copied
+// with the configuration. Pickers list names from the latest snapshot (the catalog);
 // without one they fall back to typing.
 import { useCatalog, useConfig } from '../../api/queries';
 import { ErrorState, LoadingState } from '../../components/ui/EmptyState';
 import { useProjectContext } from '../../lib/project';
 import { AttributeRulesCard } from './AttributeRulesCard';
 import { ReferenceDataCard } from './ReferenceDataCard';
+import { SpaceSettingsCard } from './SpaceSettingsCard';
 
 export function DataSettings() {
   const { project } = useProjectContext();
@@ -18,6 +19,7 @@ export function DataSettings() {
   const names = catalog.isError ? null : catalog.data;
   return (
     <div className="space-y-6">
+      <SpaceSettingsCard projectId={project.id} config={config.data} />
       <AttributeRulesCard projectId={project.id} config={config.data} catalog={names} />
       <ReferenceDataCard projectId={project.id} config={config.data} catalog={names} />
     </div>
