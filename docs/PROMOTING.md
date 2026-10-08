@@ -63,7 +63,8 @@ and Integrator APIs; the tool fetches the Integrator token itself.
 node kinetic-migrate.mjs export --project ../my-project --env dev
 ```
 
-This rewrites `export/` to match the space: one JSON file per artifact,
+This rewrites `snapshots/dev/` to match the space (each environment has its own
+snapshot folder): one JSON file per artifact,
 metadata and secrets removed, keys sorted. Commit it. Re-exporting an
 unchanged space produces no diff, so a pull request shows exactly what
 changed.
@@ -114,7 +115,7 @@ treated the same way:
 }
 ```
 
-- Keys under `artifacts` are file paths under `export/` without `.json`.
+- Keys under `artifacts` are file paths under a snapshot folder (`snapshots/<env>/`) without `.json`.
 - Paths are dot-separated. In a list, a segment matches the item with that
   `name`; setting a plain value on an attribute sets its `values`. Write a
   literal dot as `\.`.
@@ -229,7 +230,7 @@ runs the target form's submission workflows; the plan names them.
 ## 7. Plan
 
 ```bash
-node kinetic-migrate.mjs plan --project ../my-project --to test
+node kinetic-migrate.mjs plan --project ../my-project --from dev --to test
 ```
 
 Nothing is written. Each artifact is `create`, `update` (with field-level
@@ -243,13 +244,18 @@ Handlers in the export are installed by apply, so the plan only reports a
 missing handler that is not in the export (usually a handler in no category
 that the source no longer has installed). Built-in handlers are never
 reported. Missing global routines must exist in the target: create them in the target's workflow builder from
-`export/routines/<name>.json`.
+`snapshots/<from>/routines/<name>.json`.
 
 ## 8. Apply
 
 ```bash
-node kinetic-migrate.mjs apply --project ../my-project --to test
+node kinetic-migrate.mjs apply --project ../my-project --from dev --to test
 ```
+
+`--from <env>` names the environment whose snapshot (`snapshots/<env>/`) is
+promoted; `plan` takes it too. `export/` from older versions is still read
+when `--from` is omitted; with neither, the command stops and asks for
+`--from`.
 
 Apply shows the plan, asks you to type the environment name (`--yes` skips
 this for CI), saves a full export of the target under `backups/`, then
@@ -287,7 +293,7 @@ node kinetic-migrate.mjs compare --project ../my-project --from test --to prod -
 
 Both environments are read live with read-only clients, so this works for
 `readOnly` environments too. Nothing is written to either environment, and
-`export/` is not used or changed.
+snapshots are not used or changed.
 
 - **Default (preview)** answers "if `--from` were promoted into `--to` right
   now, what would change?" It is the plan you would get after exporting

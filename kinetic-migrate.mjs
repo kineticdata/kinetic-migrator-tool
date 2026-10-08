@@ -9,11 +9,13 @@ import { PRUNABLE } from './lib/sync/artifacts/index.mjs';
 const USAGE = `Usage:
   node kinetic-migrate.mjs init    [--project <dir>]
   node kinetic-migrate.mjs export  [--project <dir>] --env <name>
-  node kinetic-migrate.mjs plan    [--project <dir>] --to <name> [--overwrite-drift]
-  node kinetic-migrate.mjs apply   [--project <dir>] --to <name> [--yes] [--overwrite-drift] [--prune <type>]...
+  node kinetic-migrate.mjs plan    [--project <dir>] [--from <name>] --to <name> [--overwrite-drift]
+  node kinetic-migrate.mjs apply   [--project <dir>] [--from <name>] --to <name> [--yes] [--overwrite-drift] [--prune <type>]...
   node kinetic-migrate.mjs compare [--project <dir>] --from <name> --to <name> [--raw]
 
 --project defaults to the current directory.
+export writes snapshots/<name>/; plan and apply read snapshots/<from>/.
+Without --from they read a legacy export/ folder if one exists.
 --prune types: ${PRUNABLE.join(', ')}`;
 
 const OPTIONS = {
@@ -44,9 +46,9 @@ async function main(argv) {
   switch (command) {
     case 'init': return runInit({ projectDir, log });
     case 'export': return (await runExport({ projectDir, envName: need('env'), log })).code;
-    case 'plan': return (await runPlan({ projectDir, envName: need('to'), overwriteDrift: values['overwrite-drift'], log })).code;
+    case 'plan': return (await runPlan({ projectDir, envName: need('to'), from: values.from, overwriteDrift: values['overwrite-drift'], log })).code;
     case 'apply': return (await runApply({
-      projectDir, envName: need('to'), yes: values.yes, prune: values.prune ?? [],
+      projectDir, envName: need('to'), from: values.from, yes: values.yes, prune: values.prune ?? [],
       overwriteDrift: values['overwrite-drift'], log,
     })).code;
     case 'compare': return (await runCompare({ projectDir, from: need('from'), to: need('to'), raw: values.raw, log })).code;
