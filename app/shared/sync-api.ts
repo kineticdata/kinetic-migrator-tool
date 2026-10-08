@@ -1,0 +1,348 @@
+// HTTP API contract types for snapshots, explore, compare, changesets, plans,
+// apply and history (no runtime code). Secrets never appear: only `has` flags.
+
+// ---- Snapshots -------------------------------------------------------------
+
+export interface SnapshotRequest {
+  env: string;
+}
+
+export interface SnapshotResult {
+  env: string;
+  // null when the export matched the previous snapshot exactly.
+  commit: string | null;
+  total: number;
+  counts: Record<string, number>;
+  // Items changed in the environment since they were last promoted.
+  drifted: string[];
+}
+
+// ---- Trees (Explore and Compare) -------------------------------------------
+
+export type NodeKind =
+  | 'group' | 'space' | 'kapp' | 'form' | 'workflow' | 'webapi' | 'data'
+  | 'connection' | 'operation' | 'handler' | 'team' | 'model' | 'file-resource' | 'routine' | 'other';
+
+export interface TreeNode {
+  id: string;
+  label: string;
+  kind: NodeKind;
+  // Present when the node is an item (groups and placeholder parents have none).
+  key?: string;
+  // Items below this node (not counting itself).
+  count: number;
+  hasChildren: boolean;
+}
+
+export type CompareStatus = 'new' | 'changed' | 'drifted' | 'manual' | 'only-target' | 'same';
+
+export interface CompareTreeNode extends TreeNode {
+  // The item's own status (items only).
+  status?: CompareStatus;
+  // Statuses of the items below this node, rolled up.
+  counts: Partial<Record<CompareStatus, number>>;
+}
+
+// ---- Explore ---------------------------------------------------------------
+
+export interface RelatedItem {
+  key: string;
+  label: string;
+  kind: string;
+  reason: string;
+}
+
+export interface ItemHistoryEntry {
+  commit: string;
+  at: string;
+  message: string;
+}
+
+export interface SummaryCard {
+  title: string;
+  subtitle: string;
+  sections: Array<{ heading: string; rows?: Array<{ label: string; value: unknown }>; items?: unknown[] }>;
+}
+
+export interface ExploreItem {
+  key: string;
+  type: string;
+  label: string;
+  summary: SummaryCard;
+  relationships: { uses: RelatedItem[]; usedBy: RelatedItem[] };
+  // The normalized item as stored in the snapshot (secrets are never exported).
+  json: unknown;
+  history: ItemHistoryEntry[];
+}
+
+export interface SearchResult {
+  key: string;
+  label: string;
+  kind: NodeKind;
+  match: 'name' | 'slug' | 'field';
+  // The matching field name, for `field` matches.
+  field?: string;
+}
+
+export interface SearchResponse {
+  results: SearchResult[];
+  truncated: boolean;
+}
+
+// ---- Compare ---------------------------------------------------------------
+
+export type CompareMode = 'preview' | 'raw';
+
+export interface CompareRequest {
+  from: string;
+  to: string;
+  mode: CompareMode;
+  // Preview against snapshots/<to> instead of the live target.
+  useSnapshots?: boolean;
+}
+
+export interface CompareResult {
+  compareId: string;
+  from: string;
+  // Display name of the source ("Dev", or "the backup of …" for a restore).
+  fromName: string;
+  to: string;
+  mode: CompareMode;
+  // The source snapshot commit (pinning for changesets and restores).
+  sourceCommit: string | null;
+  counts: Partial<Record<CompareStatus, number>>;
+  // Items to tick up front (a restore pre-ticks what the apply touched).
+  preselected: string[];
+}
+
+export interface DiffEntry {
+  path: string;
+  from: unknown;
+  to: unknown;
+}
+
+export interface ThreeWay {
+  // The item as last promoted into the target (null when unknown).
+  lastPromoted: unknown;
+  lastPromotedAt: string | null;
+  target: unknown;
+  incoming: unknown;
+}
+
+export interface CompareItem {
+  key: string;
+  type: string;
+  label: string;
+  status: CompareStatus;
+  // `from` is the target's value, `to` the incoming one.
+  diff: DiffEntry[];
+  incoming: unknown;
+  current: unknown;
+  threeWay?: ThreeWay;
+}
+
+export interface SuggestionsRequest {
+  selected: string[];
+}
+
+export interface SuggestionOut {
+  key: string;
+  label: string;
+  forKey: string;
+  kind: string;
+  status: CompareStatus;
+  // Plain reason ending in "which is new in Dev" / "which changed in Dev".
+  reason: string;
+}
+
+// ---- Changesets ------------------------------------------------------------
+
+export interface AppliedTo {
+  env: string;
+  runId: string;
+  at: string;
+}
+
+export interface Changeset {
+  id: string;
+  name: string;
+  description: string;
+  from: string;
+  sourceCommit: string;
+  keys: string[];
+  createdAt: string;
+  appliedTo: AppliedTo[];
+}
+
+export interface CreateChangesetRequest {
+  name: string;
+  description?: string;
+  from: string;
+  keys: string[];
+  // Defaults to the newest snapshot of `from`.
+  sourceCommit?: string;
+}
+
+export interface UpdateChangesetRequest {
+  name?: string;
+  description?: string;
+  keys?: string[];
+}
+
+// ---- Plans and apply -------------------------------------------------------
+
+export type Resolution = 'overwrite' | 'keep';
+
+export interface PlanRequest {
+  to: string;
+  changesetId?: string;
+  from?: string;
+  selected?: string[];
+  // Pin the source to the snapshots/<from> tree at this commit (restores).
+  sourceCommit?: string;
+  restore?: boolean;
+  resolutions?: Record<string, Resolution>;
+}
+
+export type PlanAction = 'create' | 'update' | 'unchanged' | 'manual' | 'skip-drift';
+
+export interface PlanItemOut {
+  key: string;
+  type: string;
+  label: string;
+  action: PlanAction;
+  drift: boolean;
+  diff: DiffEntry[];
+}
+
+export type AttentionKind = 'handler' | 'index' | 'data-workflows' | 'connection-secrets' | 'drift';
+
+export interface NeedsAttention {
+  id: string;
+  kind: AttentionKind;
+  key: string;
+  message: string;
+}
+
+export interface EnvironmentValue {
+  id: string;
+  key: string;
+  // Override path (as in overrides/<env>.json).
+  path: string;
+  label: string;
+  from: unknown;
+  to: unknown;
+  origin: 'override' | 'environment' | 'attribute' | 'setting';
+  // Missing in the target with no override: a value must be given.
+  required: boolean;
+}
+
+export interface SecretNeeded {
+  // `<scope>/<name>`; the key of ApplyRequest.secrets.
+  id: string;
+  key: string;
+  scope: 'secret' | 'handler';
+  name: string;
+  label: string;
+  has: boolean;
+}
+
+export interface PlanResult {
+  planId: string;
+  name: string;
+  to: string;
+  from: string;
+  changesetId: string | null;
+  sourceCommit: string | null;
+  items: PlanItemOut[];
+  counts: Record<PlanAction | 'delete', number>;
+  needsAttention: NeedsAttention[];
+  environmentValues: EnvironmentValue[];
+  secretsNeeded: SecretNeeded[];
+  errors: string[];
+  warnings: string[];
+}
+
+export interface ApplyRequest {
+  // Ids of needs-attention entries.
+  acknowledgements: string[];
+  // { [itemKey]: { [path]: value } }, saved to overrides/<to>.json.
+  values?: Record<string, Record<string, unknown>>;
+  // { [SecretNeeded.id]: value } — write-only.
+  secrets?: Record<string, string>;
+  // Keep the secrets in the keychain; otherwise they are used for this run only.
+  remember?: boolean;
+  resolutions?: Record<string, Resolution>;
+  // The target environment's name, typed to confirm.
+  confirm: string;
+}
+
+export type RunStatus = 'applied' | 'partial' | 'failed' | 'cancelled';
+
+export interface RunItemOutcome {
+  key: string;
+  status: 'done' | 'skipped' | 'failed' | 'running';
+  message?: string;
+}
+
+export interface RunRecord {
+  id: string;
+  kind: 'apply' | 'restore';
+  name: string;
+  planId: string;
+  changesetId: string | null;
+  from: string;
+  to: string;
+  source: { commit: string | null; path: string };
+  backupCommit: string | null;
+  startedAt: string;
+  finishedAt: string;
+  status: RunStatus;
+  selection: string[];
+  acknowledgements: string[];
+  resolutions: Record<string, Resolution>;
+  // Environment values used (never secrets).
+  values: Record<string, Record<string, unknown>>;
+  // Names of the secrets supplied (never values).
+  secretsUsed: string[];
+  items: RunItemOutcome[];
+  done: number;
+  error: string | null;
+}
+
+export interface ApplyResult {
+  runId: string;
+  status: RunStatus;
+  commit: string | null;
+  backupCommit: string | null;
+  done: number;
+  error: string | null;
+}
+
+// ---- History ---------------------------------------------------------------
+
+export type HistoryType = 'snapshot' | 'changeset' | 'applied' | 'backup' | 'restore' | 'drift' | 'project';
+
+export interface HistoryEvent {
+  id: string;
+  commit: string;
+  type: HistoryType;
+  title: string;
+  at: string;
+  author: string;
+  env: string | null;
+  runId: string | null;
+  changesetId: string | null;
+  status: RunStatus | null;
+  drifted: string[];
+}
+
+export interface HistoryDetail {
+  event: HistoryEvent;
+  run: RunRecord | null;
+}
+
+export interface RestoreRequest {
+  commit: string;
+  mode?: CompareMode;
+}

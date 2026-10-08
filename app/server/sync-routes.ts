@@ -1,0 +1,15 @@
+// Registers the snapshot, explore, compare, changeset, plan/apply and history
+// routes on the server's router.
+import type { ClientFactory } from './engine.ts';
+import { registerExploreRoutes } from './explore.ts';
+import type { JobRegistry } from './jobs.ts';
+import { findProject } from './projects.ts';
+import type { Router } from './router.ts';
+import type { SecretStore } from './secrets.ts';
+import { registerSnapshotRoutes, type SyncContext } from './snapshots.ts';
+
+export function registerSyncRoutes(router: Router, opts: { workspace: string; secrets: SecretStore; clientFactory?: ClientFactory; jobs: JobRegistry }): void {
+  const ctx: SyncContext = { ...opts, find: (id) => findProject(opts.workspace, id) };
+  registerSnapshotRoutes(router, ctx);
+  registerExploreRoutes(router, ctx);
+}
