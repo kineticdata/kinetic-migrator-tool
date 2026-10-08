@@ -293,7 +293,10 @@ property. So:
   only because required properties are empty (for example an encrypted one,
   whose value is never read back) is reported the same way, and the app
   remembers those names (in `plans/`, names only), so the next plan asks for
-  them. A write refused for any other reason stops the run as before.
+  them. A remembered name never skips the write: if you set the value in the
+  Task console instead, the next apply still writes, the platform accepts
+  it and the name is forgotten. A write refused for any other reason stops
+  the run as before.
 - **Applying again finishes the job.** While a required property is empty in
   the target, or a secret was entered and not yet accepted, the next plan
   shows the handler as an update (its settings only). Enter what is missing

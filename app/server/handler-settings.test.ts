@@ -251,3 +251,75 @@ test('Encrypted, update then Resume: the platform names the empty encrypted prop
   assertNoSecret(h, [first.events, resumed.events, memoryText(h)]);
   for (const r of runs(h)) assert.ok(!JSON.stringify(r).includes(PLANTED_RUN));
 });
+
+test('Encrypted, remembered empty then set in the Task console: the next apply writes, the platform accepts, the memory clears and the plan is clean', async (t) => {
+  const h = await harness(t);
+  const task = withVault(h, [{ definitionId: VID, values: { host: 'old.example.com' } }]);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  mkdirSync(path.join(h.dir, 'overrides'), { recursive: true });
+  writeFileSync(path.join(h.dir, 'overrides', 'test.json'), JSON.stringify({ artifacts: { [VKEY]: { 'properties.host': { value: 'new.example.com' } } } }));
+  const p = await plan(h, { to: 'test', from: 'dev', selected: [VKEY] });
+  const first = await h.job('POST', `${P}/plans/${p.planId}/apply`, { confirm: 'test', acknowledgements: [`handler:${VKEY}`] });
+  assert.equal(first.result.status, 'partial');
+  assert.deepEqual(JSON.parse(memoryText(h)).empty, { [VID]: ['vault_password'] });
+
+  // The user follows the message and sets it in the console.
+  task.handlers.get(VID).values.vault_password = 'set-in-console';
+  const again = await plan(h, { to: 'test', from: 'dev', selected: [VKEY] });
+  assert.deepEqual(again.items.map((i) => i.action), ['update']);
+  const settings = again.needsAttention.filter((n) => n.kind === 'handler-settings');
+  assert.deepEqual(settings.map((n) => n.valueId), [VSECRET], 'still offered from memory');
+  const done = await h.job('POST', `${P}/plans/${again.planId}/apply`, { confirm: 'test', acknowledgements: again.needsAttention.map((n) => n.id) });
+  assert.equal(done.result.status, 'applied', done.result.error);
+  const puts = h.calls.filter((c) => c.method === 'PUT' && c.env === 'test');
+  assert.equal(puts.length, 2, 'the remembered name did not skip the write');
+  assert.deepEqual((puts[1].body as any).properties, { host: 'new.example.com' });
+  assert.deepEqual(JSON.parse(memoryText(h)), { pending: [], empty: {} });
+  const clean = await plan(h, { to: 'test', from: 'dev', selected: [VKEY] });
+  assert.deepEqual(clean.items.map((i) => i.action), ['unchanged']);
+  assert.deepEqual(clean.needsAttention.filter((n) => n.kind === 'handler-settings'), []);
+});
+
+test('a secret for one run only is never remembered as pending, and the message says it is not kept', async (t) => {
+  const h = await harness(t);
+  withVault(h);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  const p = await plan(h, { to: 'test', from: 'dev', selected: [VKEY] });
+  const job = await h.job('POST', `${P}/plans/${p.planId}/apply`, { confirm: 'test', acknowledgements: p.needsAttention.map((n) => n.id), secrets: { [VSECRET]: PLANTED_RUN } });
+  assert.equal(job.result.status, 'partial');
+  assert.match(runs(h)[0].items.find((i) => i.key === VKEY)!.message!, /vault_password was entered but not saved yet \(not kept: enter it again to use it\)\.$/);
+  assert.deepEqual(JSON.parse(memoryText(h)).pending, []);
+  assertNoSecret(h, [job.events, memoryText(h)]);
+});
+
+test('a run that stops after a handler accepted its settings still clears what it sent', async (t) => {
+  const h = await harness(t);
+  withVault(h);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  // A kept secret, pending after a first run that could not save it.
+  const p = await plan(h, { to: 'test', from: 'dev', selected: [VKEY] });
+  await h.job('POST', `${P}/plans/${p.planId}/apply`, { confirm: 'test', acknowledgements: p.needsAttention.map((n) => n.id), secrets: { [VSECRET]: PLANTED_RUN }, remember: true });
+  assert.deepEqual(JSON.parse(memoryText(h)).pending, ['VAULT_CALL_V1__VAULT_PASSWORD']);
+  // Then the handler saves and a later item (the form) fails.
+  const FORM = 'kapps/services/forms/it-request/form';
+  const sel = [VKEY, 'connections/Ticketing/connection', 'connections/Ticketing/operations/Create Ticket', FORM];
+  const q = await plan(h, { to: 'test', from: 'dev', selected: sel });
+  assert.deepEqual(q.errors, []);
+  const target = h.spaces.test;
+  h.spaces.test = () => ({ ...target(), 'PUT core/kapps/services/forms/it-request': () => { throw Object.assign(new Error('PUT /x failed with 500: busy'), { name: 'HttpError', status: 500 }); } });
+  const job = await h.job('POST', `${P}/plans/${q.planId}/apply`, {
+    confirm: 'test', acknowledgements: q.needsAttention.map((n) => n.id), values: { [VKEY]: { 'properties.host.value': 'vault.example.com' } },
+  });
+  assert.equal(job.result.status, 'partial', job.result.error);
+  assert.match(job.result.error, /^kapps\/services\/forms\/it-request\/form: /);
+  assert.deepEqual(JSON.parse(memoryText(h)), { pending: [], empty: {} }, 'recorded although the run stopped');
+});
+
+test('engine hints: a pending secret counts only while a value for it is at hand', async () => {
+  const { engineHints } = await import('./handler-memory.ts');
+  const memory = { pending: ['VAULT_CALL_V1__VAULT_PASSWORD'], empty: { [VID]: ['host'] } };
+  assert.equal(engineHints(memory, new Set()).handlers.pending(VID, 'vault_password'), false);
+  assert.equal(engineHints(memory, new Set(['VAULT_CALL_V1__VAULT_PASSWORD'])).handlers.pending(VID, 'vault_password'), true);
+  assert.equal(engineHints({ pending: [], empty: {} }, new Set(['VAULT_CALL_V1__VAULT_PASSWORD']), ['VAULT_CALL_V1__VAULT_PASSWORD']).handlers.pending(VID, 'vault_password'), true);
+  assert.deepEqual(engineHints(memory, new Set()).handlers.empty(VID), ['host']);
+});
