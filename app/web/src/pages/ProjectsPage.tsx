@@ -26,7 +26,7 @@ function OpenFolderDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
     <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) openProject.reset(); }}>
       <DialogContent
         title="Open a project folder"
-        description="Use a folder made by kinetic-migrate or the kinetic-sync command line. It will be managed from here on."
+        description="Use a folder made by Kinetic Migrator or the kinetic-sync command line. It will be managed from here on."
       >
         <form id="open-folder" onSubmit={submit} className="space-y-4">
           <Field label="Folder path" hint="The full path, for example /Users/you/migrations/my-project">
@@ -83,7 +83,7 @@ export function ProjectsPage() {
       {session.data && !session.data.keychain.available && !session.data.keychain.checking && (
         <p className="mb-6 flex items-start gap-2 rounded-lg border border-border bg-surface-2 px-3.5 py-2.5 text-sm text-muted">
           <Info size={16} aria-hidden className="mt-0.5 shrink-0 text-accent" />
-          No system keychain was found, so passwords are kept only until kinetic-migrate stops.
+          No system keychain was found, so passwords are kept only until Kinetic Migrator stops.
         </p>
       )}
 

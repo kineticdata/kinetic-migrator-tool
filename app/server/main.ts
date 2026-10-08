@@ -118,7 +118,7 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
   });
   port = (server.address() as AddressInfo).port;
   // Never the address with its key: the key opens the session.
-  logger.info?.(`kinetic-migrate ${VERSION} started on port ${port}${fake ? ' (fake mode)' : ''}; workspace ${workspace}`, { quiet: true });
+  logger.info?.(`Kinetic Migrator ${VERSION} started on port ${port}${fake ? ' (fake mode)' : ''}; workspace ${workspace}`, { quiet: true });
   const upgraded = upgradeWorkspace(workspace, (id, err) => logger.error(`Could not upgrade the file layout of project ${id}`, err));
   return {
     upgraded,
@@ -161,6 +161,6 @@ if (isMainModule(import.meta.url, process.argv[1])) {
     webDir: argValue(args, '--web-dir'),
     fake: args.includes('--fake'),
   });
-  console.log(`kinetic-migrate is running at ${handle.url}`);
+  console.log(`Kinetic Migrator is running at ${handle.url}`);
   if (handle.fake) console.log('Fake mode: synthetic dev and test spaces, nothing leaves this machine.');
 }

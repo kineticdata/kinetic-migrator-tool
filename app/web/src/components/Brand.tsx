@@ -21,9 +21,9 @@ export function KineticMark({ size = 28 }: { size?: number }) {
 
 export function BrandMark() {
   return (
-    <Link to="/" className="flex shrink-0 items-center gap-2.5 rounded-lg text-header-fg" aria-label="Kinetic Migrate: all projects">
+    <Link to="/" className="flex shrink-0 items-center gap-2.5 rounded-lg text-header-fg" aria-label="Kinetic Migrator: all projects">
       <KineticMark />
-      <span className="text-[15px] font-semibold tracking-tight whitespace-nowrap">Kinetic Migrate</span>
+      <span className="text-[15px] font-semibold tracking-tight whitespace-nowrap">Kinetic Migrator</span>
     </Link>
   );
 }

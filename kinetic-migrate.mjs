@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// kinetic-migrate: export a Kinetic Platform space into a project directory and
+// Kinetic Migrator (command: kinetic-migrate): export a Kinetic Platform space into a project directory and
 // promote it into another environment. See docs/PROMOTING.md.
 import { parseArgs } from 'node:util';
 import { resolve, dirname, join } from 'node:path';
@@ -10,7 +10,10 @@ import { runUi } from './lib/sync/ui-command.mjs';
 import { upgradeProjectLayout } from './lib/sync/layout.mjs';
 import { PRUNABLE } from './lib/sync/artifacts/index.mjs';
 
-const USAGE = `Usage:
+const USAGE = `Kinetic Migrator: explore, compare and promote Kinetic Platform configuration
+between environments.
+
+Usage:
   node kinetic-migrate.mjs init    [--project <dir>]
   node kinetic-migrate.mjs export  [--project <dir>] --env <name>
   node kinetic-migrate.mjs plan    [--project <dir>] [--from <name>] --to <name> [--overwrite-drift]

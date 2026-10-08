@@ -49,7 +49,7 @@ export async function request<T>(method: string, path: string, body?: unknown, s
     });
   } catch (err) {
     if ((err as { name?: string })?.name === 'AbortError') throw err;
-    throw new ApiError(0, 'offline', 'Could not reach kinetic-migrate. Is it still running?');
+    throw new ApiError(0, 'offline', 'Could not reach Kinetic Migrator. Is it still running?');
   }
   if (!res.ok) throw await toError(res);
   const text = await res.text();
