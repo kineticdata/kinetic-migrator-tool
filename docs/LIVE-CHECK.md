@@ -64,3 +64,18 @@ Platform behaviour this confirmed:
 - Deleting a kapp or a form does not delete its workflows' Task trees;
   deleting a workflow through the Core API does.
 - Deleting an Integrator connection deletes its operations.
+
+## Task categories (2026-10-08)
+
+| Step | Result |
+|------|--------|
+| Compare source → target | one Stored category changed (the target lacked a routine promoted earlier); the others the same |
+| Promote it | the routine was added to the category with a per-member POST; the category's other members were untouched |
+| Re-plan | unchanged |
+| Secret leaks | **0** |
+
+Platform behaviour this confirmed: `POST /categories` with name, description
+and type `Stored` creates a category; `POST /categories/{name}/handlers` and
+`/routines` with `{definitionId}` add members; `PUT /categories/{name}` with
+only name and description keeps the members, but a `trees` list in a PUT
+clears the category's routines, so the app never sends one.
