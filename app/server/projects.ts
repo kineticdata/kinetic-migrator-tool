@@ -14,7 +14,7 @@ import {
   commitChange, ensureGitignore, isPlainObject, manageProject, newSecretsId, readJsonFile, readMeta, withProjectLock, writeMeta,
   type ProjectRef,
 } from './project-meta.ts';
-import { ensureRepo, log } from './repo.ts';
+import { currentBranch, ensureRepo, log } from './repo.ts';
 import type { Router } from './router.ts';
 import type { SecretStore } from './secrets.ts';
 
@@ -35,8 +35,18 @@ function isDir(p: string): boolean {
   }
 }
 
+// A project has kinetic-sync.config.json (which init always writes), or at
+// least one environment file. A bare environments/ folder (common in
+// infrastructure repositories) is not enough.
 export function isProjectDir(dir: string): boolean {
-  return existsSync(path.join(dir, CONFIG_FILE)) || isDir(path.join(dir, 'environments'));
+  if (existsSync(path.join(dir, CONFIG_FILE))) return true;
+  const envDir = path.join(dir, 'environments');
+  if (!isDir(envDir)) return false;
+  try {
+    return readdirSync(envDir).some((f) => f.endsWith('.json') && !isDir(path.join(envDir, f)));
+  } catch {
+    return false;
+  }
 }
 
 function readOpened(workspace: string): Record<string, string> {
@@ -122,7 +132,12 @@ export async function openProject(workspace: string, body: unknown): Promise<Pro
   }
   if (!isDir(body.path)) throw badRequest('That folder does not exist.');
   const dir = realpathSync(body.path);
-  if (!isProjectDir(dir)) throw badRequest('That folder is not a Kinetic project (no kinetic-sync.config.json or environments/ folder).');
+  if (!isProjectDir(dir)) throw badRequest('That folder is not a Kinetic project (no kinetic-sync.config.json or environment files in environments/).');
+  // Commits only ever go to main: never into a repository checked out elsewhere.
+  const branch = await currentBranch(dir);
+  if (branch !== undefined && branch !== 'main') {
+    throw badRequest(`This folder is a git repository on ${branch === null ? 'a detached commit' : `branch ${branch}`}; kinetic-migrate manages projects on main.`);
+  }
   const ws = isDir(workspace) ? realpathSync(workspace) : path.resolve(workspace);
   let id: string;
   if (path.dirname(dir) === ws && ID.test(path.basename(dir))) {

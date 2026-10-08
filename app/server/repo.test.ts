@@ -2,7 +2,8 @@
 // clean, log by path, reading a JSON tree at a commit, ignored files.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import git from 'isomorphic-git';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { commitAll, ensureRepo, getRemote, log, push, readTreeAt, setRemote } from './repo.ts';
@@ -25,12 +26,12 @@ test('commitAll stages adds and deletes, and no-ops when clean', async (t) => {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   await ensureRepo(dir);
   await ensureRepo(dir); // idempotent
-  write(dir, 'a.json', '{"a":1}');
+  write(dir, 'state/a.json', '{"a":1}');
   write(dir, 'snapshots/dev/x.json', '{"x":1}');
   const first = await commitAll(dir, 'First', author);
   assert.ok(first);
   assert.equal(await commitAll(dir, 'Nothing', author), null);
-  rmSync(path.join(dir, 'a.json'));
+  rmSync(path.join(dir, 'state/a.json'));
   write(dir, 'snapshots/dev/y.json', '{"y":2}');
   const second = await commitAll(dir, 'Second', author);
   assert.ok(second);
@@ -66,10 +67,11 @@ test('ignored and .env files are never committed', async (t) => {
   write(dir, '.gitignore', 'backups/\n');
   write(dir, '.env.dev', 'KINETIC_DEV_PASSWORD=nope');
   write(dir, 'backups/b.json', '{}');
-  write(dir, 'keep.json', '{}');
+  write(dir, 'environments/.env.dev', 'nope');
+  write(dir, 'runs/keep.json', '{}');
   const c = await commitAll(dir, 'First', author);
   const tree = await readTreeAt(dir, c!, '');
-  assert.deepEqual([...tree.keys()], ['keep']);
+  assert.deepEqual([...tree.keys()], ['runs/keep']);
 });
 
 test('log on a repo with no commits is empty; remote round-trips; push without a remote fails cleanly', async (t) => {
@@ -82,4 +84,20 @@ test('log on a repo with no commits is empty; remote round-trips; push without a
   assert.equal(await getRemote(dir), 'https://git.example.com/team/project.git');
   await setRemote(dir, null);
   await assert.rejects(push(dir, { store: new MemoryStore(), account: 'p/_project/git/token' }), /remote/i);
+});
+
+test('commitAll stages only the project layout, never stray files beside it', async (t) => {
+  const dir = tempDir();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  await ensureRepo(dir);
+  for (const rel of ['kinetic-sync.config.json', 'kinetic-migrate.json', '.gitignore', 'environments/dev.json', 'overrides/dev.json', 'snapshots/dev/space.json',
+    'export/space.json', 'state/dev.json', 'changesets/c.json', 'runs/r.json']) write(dir, rel, '{}');
+  for (const rel of ['credentials.json', 'notes.txt', 'terraform/main.tf', 'environments.json']) write(dir, rel, 'stray');
+  const c = await commitAll(dir, 'First', author);
+  const files = (await git.listFiles({ fs, dir, ref: c! })).sort();
+  assert.deepEqual(files, ['.gitignore', 'changesets/c.json', 'environments/dev.json', 'export/space.json', 'kinetic-migrate.json', 'kinetic-sync.config.json',
+    'overrides/dev.json', 'runs/r.json', 'snapshots/dev/space.json', 'state/dev.json']);
+  // A stray file alone is no change to commit.
+  write(dir, 'other.txt', 'x');
+  assert.equal(await commitAll(dir, 'Nothing', author), null);
 });

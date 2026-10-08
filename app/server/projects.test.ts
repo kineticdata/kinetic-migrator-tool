@@ -8,7 +8,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { ConnectionTestResult, CredentialsStatus, ProjectDetail, ProjectSummary } from '../shared/api.ts';
 import { createClient, type ClientFactory } from './engine.ts';
-import { log, readTreeAt } from './repo.ts';
+import git from 'isomorphic-git';
+import fs from 'node:fs';
+import { ensureRepo, log, readTreeAt } from './repo.ts';
 import { MemoryStore } from './secrets.ts';
 import { readMeta } from './project-meta.ts';
 import { resolveEnv, setEnvSecret } from './environments.ts';
@@ -261,4 +263,54 @@ test('a CLI-created project in the workspace gets a secrets id when first used',
   assert.match(readMeta(dir).secretsId ?? '', /^[0-9a-f-]{36}$/);
   assert.ok(existsSync(path.join(dir, '.git')));
   assert.match(readFileSync(path.join(dir, '.gitignore'), 'utf8'), /^\.env\*$/m);
+});
+
+test('opening refuses folders that are not projects and repositories on another branch, and commits only the project layout', async (t) => {
+  const { call } = await setup(t);
+  const tmp = (prefix: string) => {
+    const d = mkdtempSync(path.join(tmpdir(), prefix));
+    t.after(() => rmSync(d, { recursive: true, force: true }));
+    return d;
+  };
+
+  // An infrastructure layout with an environments/ folder but no environment files.
+  const infra = tmp('km-infra-');
+  mkdirSync(path.join(infra, 'environments', 'prod'), { recursive: true });
+  writeFileSync(path.join(infra, 'environments', 'prod', 'main.tf'), 'resource "x" "y" {}');
+  writeFileSync(path.join(infra, 'credentials.yaml'), `token: ${PLANTED}`);
+  const notProject = await call('POST', '/api/projects/open', { path: infra });
+  assert.equal(notProject.status, 400);
+  assert.match(notProject.json.error.message, /not a Kinetic project/);
+  assert.equal(existsSync(path.join(infra, '.git')), false, 'no repository created');
+  assert.equal(existsSync(path.join(infra, 'kinetic-migrate.json')), false, 'nothing written');
+
+  // A project folder inside a repository checked out on another branch.
+  const feature = tmp('km-branch-');
+  writeFileSync(path.join(feature, 'kinetic-sync.config.json'), '{}');
+  await ensureRepo(feature);
+  writeFileSync(path.join(feature, 'README.md'), 'x');
+  await git.add({ fs, dir: feature, filepath: 'README.md' });
+  await git.commit({ fs, dir: feature, message: 'init', author: { name: 'a', email: 'a@example.com' } });
+  await git.branch({ fs, dir: feature, ref: 'infra-work', checkout: true });
+  const otherBranch = await call('POST', '/api/projects/open', { path: feature });
+  assert.equal(otherBranch.status, 400);
+  assert.equal(otherBranch.json.error.message, 'This folder is a git repository on branch infra-work; kinetic-migrate manages projects on main.');
+  assert.equal((await log(feature, { limit: 10 })).length, 1, 'nothing committed');
+  assert.equal(existsSync(path.join(feature, 'kinetic-migrate.json')), false, 'nothing written');
+
+  // A valid project with stray files outside the layout: only the layout is committed.
+  const cli = tmp('km-layout-');
+  mkdirSync(path.join(cli, 'environments'));
+  writeFileSync(path.join(cli, 'environments', 'test.json'), JSON.stringify({ url: 'https://test.example.com' }));
+  mkdirSync(path.join(cli, 'snapshots', 'test'), { recursive: true });
+  writeFileSync(path.join(cli, 'snapshots', 'test', 'space.json'), '{}');
+  writeFileSync(path.join(cli, 'credentials.yaml'), `token: ${PLANTED}`);
+  mkdirSync(path.join(cli, 'terraform'));
+  writeFileSync(path.join(cli, 'terraform', 'main.tf'), 'x');
+  const opened = await call('POST', '/api/projects/open', { path: cli });
+  assert.equal(opened.status, 200, opened.body);
+  const head = (await log(cli, { limit: 1 }))[0];
+  const files = (await git.listFiles({ fs, dir: cli, ref: head.oid })).sort();
+  assert.deepEqual(files, ['.gitignore', 'environments/test.json', 'kinetic-migrate.json', 'snapshots/test/space.json']);
+  assert.equal(existsSync(path.join(cli, 'credentials.yaml')), true, 'left alone on disk');
 });

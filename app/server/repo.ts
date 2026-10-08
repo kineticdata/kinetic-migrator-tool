@@ -21,15 +21,37 @@ const BRANCH = 'main';
 // Belt and braces on top of .gitignore: credentials files are never staged.
 const NEVER_STAGE = (filepath: string) => /(^|\/)\.env[^/]*$/.test(filepath);
 
+// The project layout: what the app and the CLI write and keep in history.
+// Nothing else in the folder is ever staged (a project opened inside another
+// repository must not sweep up that repository's files). plans/, compares/
+// and backups/ are local-only and ignored.
+export const LAYOUT_DIRS = ['environments', 'overrides', 'snapshots', 'export', 'state', 'changesets', 'runs'];
+export const LAYOUT_FILES = ['kinetic-sync.config.json', 'kinetic-migrate.json', '.gitignore'];
+export const inLayout = (filepath: string): boolean => (
+  LAYOUT_FILES.includes(filepath) || (filepath.includes('/') && LAYOUT_DIRS.includes(filepath.split('/')[0]))
+);
+
 export async function ensureRepo(dir: string): Promise<void> {
   if (fs.existsSync(`${dir}/.git`)) return;
   await git.init({ fs, dir, defaultBranch: BRANCH });
 }
 
-// Stages every change (adds, modifications, deletions) and commits. Returns
-// the new commit id, or null when nothing differs from HEAD.
+// The checked-out branch: undefined when there is no repository, null when
+// HEAD is detached.
+export async function currentBranch(dir: string): Promise<string | null | undefined> {
+  if (!fs.existsSync(`${dir}/.git`)) return undefined;
+  try {
+    return (await git.currentBranch({ fs, dir, fullname: false })) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Stages every change (adds, modifications, deletions) within the project
+// layout and commits. Returns the new commit id, or null when nothing
+// differs from HEAD.
 export async function commitAll(dir: string, message: string, author: Author): Promise<string | null> {
-  const status = () => git.statusMatrix({ fs, dir, filter: (f) => !NEVER_STAGE(f) });
+  const status = () => git.statusMatrix({ fs, dir, filter: (f) => inLayout(f) && !NEVER_STAGE(f) });
   // Every present file is re-added: statusMatrix trusts file stats, which
   // miss same-size rewrites within the same second ("racy git").
   const present: string[] = [];
