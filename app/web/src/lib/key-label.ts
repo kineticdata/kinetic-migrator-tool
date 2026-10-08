@@ -12,8 +12,9 @@ export function segmentLabel(segment: string): string {
 }
 
 // Sub-collection entry keys: `<item key>#<collection>/<encoded name>`.
-export const isEntryKey = (key: string): boolean => key.includes('#');
-export const entryItemKey = (key: string): string => key.split('#')[0];
+// Only the space and kapps have entries; other keys may contain '#' in a name.
+export const isEntryKey = (key: string): boolean => /^(space|kapps\/[^/#]+\/kapp)#[^/]+\/./.test(key);
+export const entryItemKey = (key: string): string => (isEntryKey(key) ? key.slice(0, key.indexOf('#')) : key);
 
 const WORDS: Record<string, string> = {
   spaceAttributeDefinitions: 'space attribute definition', teamAttributeDefinitions: 'team attribute definition',

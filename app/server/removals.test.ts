@@ -4,7 +4,7 @@
 // in the run and History, and recreated by a restore from the backup.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ApplyResult, Changeset, CompareResult, HistoryEvent, PlanResult, RunRecord } from '../shared/sync-api.ts';
 import { log } from './repo.ts';
@@ -18,14 +18,17 @@ const LEGACY = 'kapps/legacy/kapp';
 
 // Test also has a team, a kapp with a form, and a routine a space workflow
 // runs: none of them in Dev.
+// The legacy kapp's delete takes its form with it (the platform cascades).
 function withExtras(h: Harness, extra: { team?: boolean; teamDescription?: string } = {}): void {
+  let legacyGone = false;
   h.spaces.test = () => {
     const r = testRoutes();
     const teams = (r['GET core/teams'] as { teams: unknown[] }).teams;
     return {
       ...r,
       'GET core/teams': { teams: extra.team === false ? teams : [...teams, { name: 'Old', slug: 'old', description: extra.teamDescription ?? 'Retired' }] },
-      'GET core/kapps': { kapps: [{ slug: 'services' }, { slug: 'legacy' }] },
+      'GET core/kapps': () => ({ kapps: legacyGone ? [{ slug: 'services' }] : [{ slug: 'services' }, { slug: 'legacy' }] }),
+      'DELETE core/kapps/legacy': () => { legacyGone = true; return {}; },
       'GET core/kapps/legacy': { kapp: { slug: 'legacy', name: 'Legacy', webApis: [], forms: [{ slug: 'old-form', name: 'Old Form', status: 'Active' }] } },
       'GET core/kapps/legacy/workflows': { workflows: [] },
       'GET core/kapps/legacy/forms/old-form/workflows': { workflows: [] },
@@ -44,17 +47,19 @@ async function plan(h: Harness, body: unknown): Promise<PlanResult> {
 test('changesets save removals beside the keys; never-removable or source items are refused; old changesets still load and plan', async (t) => {
   const h = await harness(t);
   await h.job('POST', `${P}/snapshots`, { env: 'dev' });
-  const created = await h.call('POST', `${P}/changesets`, { name: 'Tidy', from: 'dev', keys: [], remove: [OLD, OLD, LEGACY] });
+  assert.equal((await h.call('POST', `${P}/changesets`, { name: 'Tidy', from: 'dev', keys: [], remove: [OLD] })).status, 400, 'removals need the target they were chosen for');
+  assert.equal((await h.call('POST', `${P}/changesets`, { name: 'Tidy', from: 'dev', keys: [], remove: [OLD], removeFrom: 'dev' })).status, 400, 'not the source');
+  const created = await h.call('POST', `${P}/changesets`, { name: 'Tidy', from: 'dev', keys: [], remove: [OLD, OLD, LEGACY], removeFrom: 'test' });
   assert.equal(created.status, 201, created.body);
   const cs = created.json as Changeset;
-  assert.deepEqual([cs.keys, cs.remove], [[], [LEGACY, OLD]]);
+  assert.deepEqual([cs.keys, cs.remove, cs.removeFrom], [[], [LEGACY, OLD], 'test']);
   assert.deepEqual(JSON.parse(readFileSync(path.join(h.dir, 'changesets', `${cs.id}.json`), 'utf8')).remove, [LEGACY, OLD]);
 
-  const refused = await h.call('POST', `${P}/changesets`, { name: 'x', from: 'dev', keys: [], remove: ['space'] });
+  const refused = await h.call('POST', `${P}/changesets`, { name: 'x', from: 'dev', keys: [], remove: ['space'], removeFrom: 'test' });
   assert.equal(refused.status, 400);
   assert.match(refused.json.error.message, /space itself can never be removed/);
-  assert.equal((await h.call('POST', `${P}/changesets`, { name: 'x', from: 'dev', keys: [], remove: ['handlers/system_wait_v1/handler'] })).status, 400);
-  assert.equal((await h.call('POST', `${P}/changesets`, { name: 'x', from: 'dev', keys: [], remove: ['teams/Ops'] })).status, 400, 'in the source');
+  assert.equal((await h.call('POST', `${P}/changesets`, { name: 'x', from: 'dev', keys: [], remove: ['handlers/system_wait_v1/handler'], removeFrom: 'test' })).status, 400);
+  assert.equal((await h.call('POST', `${P}/changesets`, { name: 'x', from: 'dev', keys: [], remove: ['teams/Ops'], removeFrom: 'test' })).status, 400, 'in the source');
   assert.equal((await h.call('POST', `${P}/changesets`, { name: 'x', from: 'dev', keys: [] })).status, 400, 'nothing at all');
 
   const updated = await h.call('PUT', `${P}/changesets/${cs.id}`, { keys: ['teams/Ops'], remove: [OLD] });
@@ -62,6 +67,26 @@ test('changesets save removals beside the keys; never-removable or source items 
   assert.deepEqual([(updated.json as Changeset).keys, (updated.json as Changeset).remove], [['teams/Ops'], [OLD]]);
   const cleared = (await h.call('PUT', `${P}/changesets/${cs.id}`, { remove: [] })).json as Changeset;
   assert.equal(cleared.remove, undefined);
+
+  // Bound to Test: planned against Test, refused (with a warning) against Prod.
+  withExtras(h);
+  assert.equal((await h.call('PUT', `${P}/changesets/${cs.id}`, { remove: [OLD] })).status, 400, 'cleared removals lost their target');
+  const bound = (await h.call('PUT', `${P}/changesets/${cs.id}`, { remove: [OLD], removeFrom: 'test' })).json as Changeset;
+  assert.equal(bound.removeFrom, 'test');
+  assert.deepEqual((await plan(h, { to: 'test', changesetId: cs.id })).remove, [OLD]);
+  h.spaces.prod = h.spaces.test;
+  const elsewhere = await plan(h, { to: 'prod', changesetId: cs.id });
+  assert.deepEqual([elsewhere.remove, elsewhere.removals], [[], []]);
+  assert.ok(elsewhere.warnings.includes("This changeset's 1 removal were chosen for Test and are not planned against Prod"), elsewhere.warnings.join('|'));
+  // Saved before removals were bound: not planned until confirmed for a target.
+  const raw = JSON.parse(readFileSync(path.join(h.dir, 'changesets', `${cs.id}.json`), 'utf8'));
+  delete raw.removeFrom;
+  writeFileSync(path.join(h.dir, 'changesets', `${cs.id}.json`), JSON.stringify(raw));
+  const unbound = await plan(h, { to: 'test', changesetId: cs.id });
+  assert.deepEqual(unbound.remove, []);
+  assert.ok(unbound.warnings.some((w) => /saved without a target environment and are not planned: confirm them for Test/.test(w)));
+  assert.equal((await h.call('PUT', `${P}/changesets/${cs.id}`, { removeFrom: 'test' })).status, 200);
+  assert.deepEqual((await plan(h, { to: 'test', changesetId: cs.id })).remove, [OLD]);
 
   // A changeset written before removals existed (no `remove`).
   const legacy = { ...(cleared as Changeset), id: 'legacy-000000', name: 'Legacy' } as Partial<Changeset>;
@@ -199,9 +224,9 @@ test('a sub-collection entry only in the target: listed on its item in Compare, 
   const roots = (await h.call('GET', `${P}/compare/${cmp.compareId}/tree`)).json;
   assert.equal(roots.find((n: { id: string }) => n.id === 'group:kapps').entriesBelow, 1);
 
-  const cs = (await h.call('POST', `${P}/changesets`, { name: 'Tidy categories', from: 'dev', keys: [], remove: [ENTRY] })).json as Changeset;
+  const cs = (await h.call('POST', `${P}/changesets`, { name: 'Tidy categories', from: 'dev', keys: [], remove: [ENTRY], removeFrom: 'test' })).json as Changeset;
   assert.deepEqual(cs.remove, [ENTRY]);
-  assert.equal((await h.call('POST', `${P}/changesets`, { name: 'x', from: 'dev', keys: [], remove: [`${KAPP}#attributes/x`] })).status, 400);
+  assert.equal((await h.call('POST', `${P}/changesets`, { name: 'x', from: 'dev', keys: [], remove: [`${KAPP}#attributes/x`], removeFrom: 'test' })).status, 400);
   const p = await plan(h, { to: 'test', changesetId: cs.id });
   assert.deepEqual(p.errors, []);
   assert.deepEqual(p.removals.map((r) => [r.key, r.label, r.action, r.entry?.collection]), [[ENTRY, 'old-hardware (category of services)', 'delete', 'categories']]);
@@ -213,4 +238,66 @@ test('a sub-collection entry only in the target: listed on its item in Compare, 
   h.spaces.test = testRoutes;
   const rr = (await h.job('POST', `${P}/restore`, { commit: done.backupCommit })).result as CompareResult;
   assert.deepEqual(rr.preselected, [KAPP]);
+});
+
+test('C1: a removal the plan kept (changed since last promoted) or found gone is never deleted at apply, even when it changes back or reappears', async (t) => {
+  const h = await harness(t);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  // Kept: the team was promoted, then edited in Test.
+  const { stateEntry } = await import('../../lib/sync/normalize.mjs' as string);
+  mkdirSync(path.join(h.dir, 'state'), { recursive: true });
+  writeFileSync(path.join(h.dir, 'state', 'test.json'), JSON.stringify({ [OLD]: stateEntry('team', { name: 'Old', description: 'as promoted' }, {}, OLD) }));
+  withExtras(h, { teamDescription: 'edited in Test' });
+  const kept = await plan(h, { to: 'test', from: 'dev', remove: [OLD] });
+  assert.deepEqual(kept.removals.map((r) => [r.key, r.action]), [[OLD, 'skip-drift']]);
+  assert.equal(kept.counts.delete, 0);
+  const a1 = (await h.job('POST', `${P}/plans/${kept.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result as ApplyResult;
+  assert.equal(a1.status, 'applied', String(a1.error));
+  assert.deepEqual(h.writes('test'), [], 'kept means kept');
+
+  // Gone at plan time, then created in Test before Apply.
+  withExtras(h, { team: false });
+  const gone = await plan(h, { to: 'test', from: 'dev', remove: [OLD] });
+  assert.deepEqual(gone.removals.map((r) => [r.key, r.action]), [[OLD, 'gone']]);
+  withExtras(h);
+  await h.job('POST', `${P}/plans/${gone.planId}/apply`, { acknowledgements: [], confirm: 'test' });
+  assert.deepEqual(h.writes('test'), [], 'an item the user never saw is never deleted');
+});
+
+test('I1: an item that is back in the newest snapshot of the source is not removed, even by a changeset pinned before it came back', async (t) => {
+  const h = await harness(t);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  withExtras(h);
+  const cs = (await h.call('POST', `${P}/changesets`, { name: 'Cleanup', from: 'dev', keys: [], remove: [OLD], removeFrom: 'test' })).json as Changeset;
+  // The team is then created in Dev, and Dev is snapshotted again.
+  const dev = h.spaces.dev;
+  h.spaces.dev = () => ({ ...dev(), 'GET core/teams': { teams: [{ name: 'Ops', slug: 'ops', description: 'Operations (dev)' }, { name: 'Old', slug: 'old' }] } });
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  const p = await plan(h, { to: 'test', changesetId: cs.id });
+  assert.deepEqual([p.removals, p.counts.delete], [[], 0]);
+  assert.ok(p.warnings.includes(`${OLD}: still exists in Dev (newest snapshot) — not removed`), p.warnings.join('|'));
+  // A plan from the newest snapshot drops it the same way.
+  const live = await plan(h, { to: 'test', from: 'dev', remove: [OLD] });
+  assert.deepEqual(live.removals, []);
+  assert.ok(live.warnings.includes(`${OLD}: still exists in dev — not removed`), live.warnings.join('|'));
+  await h.job('POST', `${P}/plans/${live.planId}/apply`, { acknowledgements: [], confirm: 'test' });
+  assert.deepEqual(h.writes('test').filter((w) => w.startsWith('DELETE')), []);
+});
+
+test('I4: a child still in the target after its kapp was removed, and that cannot be deleted, makes the run partial and is reported failed', async (t) => {
+  const h = await harness(t);
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  withExtras(h);
+  const cascading = h.spaces.test;
+  // No cascade, and the form's own delete fails.
+  h.spaces.test = () => ({
+    ...cascading(), 'GET core/kapps': { kapps: [{ slug: 'services' }, { slug: 'legacy' }] },
+    'DELETE core/kapps/legacy/forms/old-form': () => { throw Object.assign(new Error('DELETE x failed with 500'), { status: 500 }); },
+  });
+  const p = await plan(h, { to: 'test', from: 'dev', remove: [LEGACY] });
+  const result = (await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result as ApplyResult;
+  assert.equal(result.status, 'partial');
+  assert.match(String(result.error), /still in Test/);
+  const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${result.runId}.json`), 'utf8')) as RunRecord;
+  assert.deepEqual(run.items.map((i) => [i.key, i.status]), [['kapps/legacy/forms/old-form/form', 'failed'], [LEGACY, 'done']]);
 });

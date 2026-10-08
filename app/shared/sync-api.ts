@@ -195,6 +195,10 @@ export interface Changeset {
   // Items only in the target to remove (absent in changesets saved before
   // removals existed: nothing to remove).
   remove?: string[];
+  // The environment the removals were chosen for: they are only planned
+  // against it. Absent with `remove`: saved before removals were bound to a
+  // target; they are not planned until confirmed for one (update removeFrom).
+  removeFrom?: string;
   createdAt: string;
   appliedTo: AppliedTo[];
   // 2: `keys` use today's file-name encoding. Absent: saved against a
@@ -210,6 +214,8 @@ export interface CreateChangesetRequest {
   // May be empty when `remove` is not.
   keys: string[];
   remove?: string[];
+  // Required with `remove`: the target the removals were chosen against.
+  removeFrom?: string;
   // Defaults to the newest snapshot of `from`.
   sourceCommit?: string;
 }
@@ -219,6 +225,7 @@ export interface UpdateChangesetRequest {
   description?: string;
   keys?: string[];
   remove?: string[];
+  removeFrom?: string;
 }
 
 // ---- Plans and apply -------------------------------------------------------

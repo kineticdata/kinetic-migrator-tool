@@ -409,7 +409,7 @@ test('an item only in the target has no tick: its own Remove action puts it in t
   await user.click(within(dialog).getByRole('button', { name: 'Save changeset' }));
   await waitFor(() => expect(m.callsTo('POST', '/api/projects/acme-demo/changesets')).toHaveLength(1));
   expect(m.callsTo('POST', '/api/projects/acme-demo/changesets')[0].body).toEqual({
-    name: 'Tidy', description: '', from: 'dev', keys: [], remove: ['teams/ops'], sourceCommit: 'c-dev',
+    name: 'Tidy', description: '', from: 'dev', keys: [], remove: ['teams/ops'], removeFrom: 'test', sourceCommit: 'c-dev',
   });
 
   await user.click(within(tray).getByRole('button', { name: /Review plan/ }));

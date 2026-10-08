@@ -9,7 +9,7 @@ import { ArrowLeft, ArrowRight, CheckCircle2, GitCompare, Layers, Lock, Trash2 }
 import { useQueries } from '@tanstack/react-query';
 import type { Changeset, CompareItem, CompareResult, NodeKind, PlanResult } from '../../../shared/sync-api';
 import { ApiError, api, projectPath } from '../api/client';
-import { qk, startCompare, startPlan, useChangeset, useChangesets, useDeleteChangeset } from '../api/queries';
+import { qk, startCompare, startPlan, useChangeset, useChangesets, useDeleteChangeset, useUpdateChangeset } from '../api/queries';
 import { useJob } from '../api/useJob';
 import { ItemStatus } from '../components/CountBar';
 import { FieldDiffTable } from '../components/FieldDiffTable';
@@ -157,11 +157,37 @@ function ItemsCard({ keys }: { keys: string[] }) {
   );
 }
 
-// Items only in a target that applying the changeset removes from it.
-function RemovalsCard({ keys }: { keys: string[] }) {
+// Items only in a target that applying the changeset removes from it, and
+// the environment they were chosen for (they are planned only against it).
+// Removals saved before that was recorded must be confirmed for one first.
+function RemovalsCard({ projectId, cs }: { projectId: string; cs: Changeset }) {
+  const keys = cs.remove ?? [];
+  const { project } = useProjectContext();
+  const targets = project.environments.filter((e) => e.name !== cs.from);
+  const [env, setEnv] = useState(targets[0]?.name ?? '');
+  const update = useUpdateChangeset(projectId, cs.id);
+  const selectId = useId();
+  const where = cs.removeFrom ? envLabel(cs.removeFrom) : null;
   return (
     <Card>
-      <CardHeader title="Remove from the target" description={`${plural(keys.length, 'item')} deleted from the target it is applied to, after everything else (each one only if it is there and unchanged since you review the plan).`} />
+      <CardHeader
+        title={where ? `Remove from ${where}` : 'Remove from the target'}
+        description={where
+          ? `${plural(keys.length, 'item')} deleted from ${where} when this changeset is applied there, after everything else (each one only if it is there and unchanged since you review the plan). Not planned against other environments.`
+          : `${plural(keys.length, 'item')} saved without the environment they were chosen for: they are not planned until you confirm one.`}
+      />
+      {!where && (
+        <div role="alert" className="flex flex-wrap items-end gap-2 border-b border-border bg-drift-soft px-5 py-3">
+          <div className="min-w-40 flex-1 space-y-1.5">
+            <label htmlFor={selectId} className="text-[13px] font-medium text-fg">These removals are for</label>
+            <select id={selectId} value={env} onChange={(e) => setEnv(e.target.value)} className={inputClasses}>
+              {targets.map((e) => <option key={e.name} value={e.name}>{envLabel(e.name)}</option>)}
+            </select>
+          </div>
+          <Button variant="danger" size="sm" disabled={!env} loading={update.isPending} onClick={() => update.mutate({ removeFrom: env })}>Confirm removals for {envLabel(env)}</Button>
+          <InlineError error={update.error} />
+        </div>
+      )}
       <ul aria-label="Removals" className="space-y-1 px-5 py-3">
         {keys.map((k) => (
           <li key={k} className="flex min-w-0 items-center gap-2.5">
@@ -344,7 +370,7 @@ export function ChangesetDetailPage() {
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="space-y-5">
           {c.keys.length > 0 && <ItemsCard keys={c.keys} />}
-          {(c.remove?.length ?? 0) > 0 && <RemovalsCard keys={c.remove!} />}
+          {(c.remove?.length ?? 0) > 0 && <RemovalsCard projectId={project.id} cs={c} />}
         </div>
         <div className="space-y-5">
           <Card>

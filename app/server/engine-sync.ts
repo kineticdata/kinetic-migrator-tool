@@ -99,7 +99,7 @@ export const runApply: (opts: RunCommon & {
   envName: string; from?: string; sourceName?: string; sourceDir?: string; yes: boolean; select?: Set<string>; resolutions?: Record<string, 'overwrite' | 'keep'>;
   remove?: string[]; removeExpected?: Record<string, string>;
   onPlan?: (plan: EnginePlan) => void;
-}) => Promise<{ code: number; done: number; backupDir?: string }> = commandsModule.runApply;
+}) => Promise<{ code: number; done: number; backupDir?: string; failed?: string[] }> = commandsModule.runApply;
 export const stamp: () => string = commandsModule.stamp;
 export const compareArtifacts: (opts: { modules: EngineModule[]; left: Map<string, { data: unknown }>; right: Map<string, { data: unknown }> }) => {
   items: Array<{ key: string; type: string; status: 'same' | 'differs' | 'only-left' | 'only-right'; diff: DiffEntry[] }>;
@@ -148,6 +148,8 @@ export const loadState: (projectDir: string, env: string) => Record<string, stri
 // Why a key can never be removed, or null (see lib/sync/removals.mjs).
 export const notRemovable: (key: string, mod: EngineModule | undefined) => string | null = removalsModule.notRemovable;
 // The same for any removal key, an item's or a sub-collection entry's.
+// Whether a removal key (item or entry) is in a source tree.
+export const removalInSource: (key: string, tree: Map<string, unknown>, modules: EngineModule[]) => boolean = removalsModule.removalInSource;
 export const removalRefusal: (key: string, modules: EngineModule[]) => string | null = removalsModule.removalRefusal;
 // Sub-collection entries (`<item>#<collection>/<name>`, see lib/sync/entries.mjs).
 export interface TargetOnlyEntry { key: string; collection: string; name: string }

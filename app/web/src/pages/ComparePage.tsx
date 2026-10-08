@@ -830,7 +830,7 @@ export function ComparePage() {
   const savedId = [...keys, '', ...removing].join('\n');
   const save = async (v: { name: string; description: string }) => {
     const cs = await create.mutateAsync({
-      name: v.name, description: v.description, from, keys, ...(removing.length ? { remove: removing } : {}), ...(result?.sourceCommit ? { sourceCommit: result.sourceCommit } : {}),
+      name: v.name, description: v.description, from, keys, ...(removing.length ? { remove: removing, removeFrom: to } : {}), ...(result?.sourceCommit ? { sourceCommit: result.sourceCommit } : {}),
     });
     setSaved({ id: cs.id, name: cs.name, href: `/p/${project.id}/changesets/${encodeURIComponent(cs.id)}`, keys: savedId });
     const removed = cs.remove?.length ?? 0;

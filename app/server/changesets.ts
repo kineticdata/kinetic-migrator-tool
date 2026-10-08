@@ -116,8 +116,15 @@ async function checkKeys(ref: ProjectRef, env: string, commit: string, keys: str
   if (inSource.length) throw badRequest('Only items that are not in the source can be removed.', { inSource });
 }
 
-const ALLOWED_CREATE = ['name', 'description', 'from', 'keys', 'remove', 'sourceCommit'];
-const ALLOWED_UPDATE = ['name', 'description', 'keys', 'remove'];
+const ALLOWED_CREATE = ['name', 'description', 'from', 'keys', 'remove', 'removeFrom', 'sourceCommit'];
+const ALLOWED_UPDATE = ['name', 'description', 'keys', 'remove', 'removeFrom'];
+
+// The environment removals are bound to: one of the project's, not the source.
+function removeTarget(ref: ProjectRef, v: unknown, from: string): string {
+  const env = requireEnvironment(ref, v);
+  if (env === from) throw badRequest('"removeFrom" must be a target, not the changeset\'s source environment.');
+  return env;
+}
 
 export async function createChangeset(ref: ProjectRef, body: unknown): Promise<Changeset> {
   if (!isPlainObject(body)) throw badRequest('Expected a JSON object.');
@@ -128,6 +135,8 @@ export async function createChangeset(ref: ProjectRef, body: unknown): Promise<C
   const remove = removeList(body.remove);
   const keys = keyList(body.keys, remove.length > 0);
   needSomething(keys, remove);
+  if (remove.length && body.removeFrom === undefined) throw badRequest('"removeFrom" names the environment the removals were chosen for.');
+  const removeFrom = remove.length ? removeTarget(ref, body.removeFrom, from) : undefined;
   let sourceCommit: string | null;
   if (body.sourceCommit !== undefined) {
     sourceCommit = typeof body.sourceCommit === 'string' ? await resolveCommit(ref.dir, body.sourceCommit) : null;
@@ -139,7 +148,7 @@ export async function createChangeset(ref: ProjectRef, body: unknown): Promise<C
   await checkKeys(ref, from, sourceCommit, keys, remove);
   const id = `${slugify(name) || 'changeset'}-${randomBytes(3).toString('hex')}`;
   const cs: Changeset = {
-    id, name, description, from, sourceCommit, keys, ...(remove.length ? { remove } : {}), createdAt: new Date().toISOString(), appliedTo: [], layoutVersion: LAYOUT_VERSION,
+    id, name, description, from, sourceCommit, keys, ...(remove.length ? { remove, removeFrom } : {}), createdAt: new Date().toISOString(), appliedTo: [], layoutVersion: LAYOUT_VERSION,
   };
   await withProjectLock(ref, async () => {
     writeChangeset(ref, cs);
@@ -155,10 +164,16 @@ export async function updateChangeset(ref: ProjectRef, id: string, body: unknown
   const next: Changeset = { ...current };
   if (body.name !== undefined) next.name = text(body.name, 'name', 100, true)!;
   if (body.description !== undefined) next.description = text(body.description, 'description', 2000, false) ?? '';
+  if (body.removeFrom !== undefined) next.removeFrom = removeTarget(ref, body.removeFrom, current.from);
   if (body.remove !== undefined) {
     const remove = removeList(body.remove);
-    if (remove.length) next.remove = remove;
-    else delete next.remove;
+    if (remove.length) {
+      next.remove = remove;
+      if (!next.removeFrom) throw badRequest('"removeFrom" names the environment the removals were chosen for.');
+    } else {
+      delete next.remove;
+      delete next.removeFrom;
+    }
   }
   if (body.keys !== undefined) {
     next.keys = keyList(body.keys, true);

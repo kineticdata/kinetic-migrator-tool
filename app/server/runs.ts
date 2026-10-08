@@ -22,7 +22,7 @@ import type {
 import { ApiError, badRequest, notFound, toApiError } from './errors.ts';
 import { envBoundNamesFor, envKey, loadConfig, spaceFieldPair, loadOverrides, stableStringify, type EngineEnv } from './engine.ts';
 import {
-  collectionWord, computePlan, envBoundFields, isEmptyValue, isSecretName, isSecretProperty, parseEntryKey, parsePath, readTree, runApply, segmentLabel, stamp,
+  MODULES, collectionWord, computePlan, removalInSource, envBoundFields, isEmptyValue, isSecretName, isSecretProperty, parseEntryKey, parsePath, readTree, runApply, segmentLabel, stamp,
   type EngineRemoval, type EnginePlan, type PlanItem,
 } from './engine-sync.ts';
 import { currentKeys, readChangeset, recordApplied, removeList } from './changesets.ts';
@@ -37,7 +37,7 @@ import {
   connectionSecretFields, connectionSecretName, handlerSecretName, handlerSecretProperties,
 } from './secret-names.ts';
 import type { SecretStore } from './secrets.ts';
-import { forwardEvents, latestSnapshotCommit, requireEnvironment, takeSnapshot, type SyncContext } from './snapshots.ts';
+import { forwardEvents, latestSnapshotCommit, loadSnapshot, requireEnvironment, takeSnapshot, type SyncContext } from './snapshots.ts';
 import { labelFor } from './tree-index.ts';
 import { commitMessage } from './trailers.ts';
 
@@ -49,8 +49,8 @@ interface StoredPlan {
   sourceDir: string;
   sourcePath: string;
   resolutions: Record<string, Resolution>;
-  // Explicit removals, and each one's fingerprint as reviewed (an item
-  // changed since is not deleted).
+  // Removals reviewed as deletes (the only ones apply is given), and each
+  // one's fingerprint as reviewed (an item changed since is not deleted).
   remove: string[];
   removeExpected: Record<string, string>;
 }
@@ -266,6 +266,9 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
   const to = requireEnvironment(ref, body.to);
   const resolutions = resolutionsOf(body.resolutions);
   let remove = removeList(body.remove);
+  if (remove.length && body.restore === true) throw badRequest('A restore cannot remove items.');
+  // Removals not planned, and why (warnings in the plan).
+  const unplanned: string[] = [];
   let from: string;
   let keys: string[];
   let commit: string | null;
@@ -278,7 +281,15 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     ({ from, sourceCommit: commit, name } = cs);
     // Keys of a changeset from before the file-name change follow its pinned tree.
     keys = await currentKeys(ref, cs);
-    remove = [...new Set([...(cs.remove ?? []), ...remove])].sort();
+    // A changeset's removals were chosen against one environment: only
+    // planned against that one (legacy unbound ones need confirming first).
+    const saved = cs.remove ?? [];
+    if (saved.length && cs.removeFrom === to) remove = [...new Set([...saved, ...remove])].sort();
+    else if (saved.length && !cs.removeFrom) {
+      unplanned.push(`This changeset's ${items(saved.length).replace(/item/, 'removal')} were saved without a target environment and are not planned: confirm them for ${displayName(to)} on the changeset's page, then plan again`);
+    } else if (saved.length) {
+      unplanned.push(`This changeset's ${items(saved.length).replace(/item/, 'removal')} were chosen for ${displayName(cs.removeFrom!)} and are not planned against ${displayName(to)}`);
+    }
     changesetId = cs.id;
   } else {
     from = requireEnvironment(ref, body.from);
@@ -309,11 +320,23 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
       throw new ApiError(404, 'no_snapshot', `The pinned snapshot of ${displayName(from)} is missing from the project history.`);
     }
     const select = new Set(keys);
+    // An item that is in the newest snapshot of the source again (not only the
+    // pinned one) is not removed.
+    const newest = remove.length ? await latestSnapshotCommit(ref, from) : null;
+    if (newest && newest !== pinned) {
+      const latest = (await loadSnapshot(ref, from)).artifacts;
+      const back = remove.filter((k) => removalInSource(k, latest, MODULES));
+      for (const k of back) unplanned.push(`${k}: still exists in ${displayName(from)} (newest snapshot) — not removed`);
+      remove = remove.filter((k) => !back.includes(k));
+    }
     const { plan } = await computePlan({
       projectDir: ref.dir, envName: to, env, sourceDir, sourceName: from, select, resolutions, remove, onEvent: forwardEvents(emit, [env.password, ...Object.values(env.vars)]),
       signal, clientFactory: ctx.clientFactory,
     });
-    const removeExpected = Object.fromEntries((plan.removals ?? []).filter((x) => x.hash).map((x) => [x.key, x.hash!]));
+    plan.warnings.push(...unplanned);
+    // Only what the plan shows as a delete is ever sent to apply.
+    const deletes = (plan.removals ?? []).filter((x) => x.action === 'delete' && x.hash);
+    const removeExpected = Object.fromEntries(deletes.map((x) => [x.key, x.hash!]));
     const active = plan.items.filter((i) => i.action !== 'excluded');
     const missing = keys.filter((k) => !plan.items.some((i) => i.key === k));
     if (missing.length) plan.errors.push(...missing.map((k) => `${k}: not in the source snapshot`));
@@ -322,7 +345,7 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
       environmentValues: environmentValues(ref.dir, to, active, readTree(sourceDir)), secretsNeeded: secrets,
     });
     const scrubbed = makeScrubber([env.password, ...Object.values(env.vars)])(result);
-    remember(planId, { projectDir: ref.dir, result: scrubbed, kind, select, sourceDir, sourcePath, resolutions, remove, removeExpected });
+    remember(planId, { projectDir: ref.dir, result: scrubbed, kind, select, sourceDir, sourcePath, resolutions, remove: deletes.map((x) => x.key), removeExpected });
     return scrubbed;
   }
 }
@@ -492,9 +515,13 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
       onEvent, onPlan, signal, clientFactory: ctx.clientFactory, log: () => {},
     });
     done = res.done;
+    const leftOver = res.failed ?? [];
     if (res.code !== 0) {
       status = 'failed';
       error = 'The plan has errors against the current target; nothing was applied. Plan again.';
+    } else if (leftOver.length) {
+      status = 'partial';
+      error = `${leftOver.length === 1 ? '1 item' : `${leftOver.length} items`} a removal should have taken with it ${leftOver.length === 1 ? 'is' : 'are'} still in ${To} (see the list below).`;
     } else if (skipped.length) {
       status = 'partial';
       error = `${skipped.length === 1 ? '1 item was' : `${skipped.length} items were`} not applied or removed (see the list below). Plan again to review ${skipped.length === 1 ? 'it' : 'them'}.`;
@@ -532,7 +559,9 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   if (r.changesetId && (status === 'applied' || status === 'partial') && existsSync(path.join(ref.dir, 'changesets', `${r.changesetId}.json`))) {
     recordApplied(ref, r.changesetId, { env: r.to, runId, at: safe.finishedAt });
   }
-  const title = runTitle(plan.kind, status, r.name, To, r.selected.length, (r.removals ?? []).filter((x) => x.action === 'delete').length);
+  // Removals actually made (as planned when none was).
+  const removedCount = plan.remove.filter((k) => outcomes.get(k)?.status === 'done').length || plan.remove.length;
+  const title = runTitle(plan.kind, status, r.name, To, r.selected.length, removedCount);
   const commit = await commitChange(ref, commitMessage(title, { Environment: r.to, Run: runId, Changeset: r.changesetId, Plan: r.planId }));
 
   // 6. A fresh snapshot of the target once anything was written, so Compare,

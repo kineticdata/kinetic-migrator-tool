@@ -459,7 +459,11 @@ remove it on purpose:
   from <target>** action (it has no tick box, a parent tick never selects it,
   and nothing is ever suggested for removal). Removals sit in their own red
   section of the changeset tray and are saved with the changeset (a
-  `remove` list beside its keys; changesets saved before this have none).
+  `remove` list beside its keys, and `removeFrom`, the environment they were
+  chosen for; changesets saved before removals existed have neither). A
+  changeset's removals are planned only against that environment; against
+  any other the plan says so and leaves them out. Removals saved without an
+  environment are not planned until you confirm one on the changeset's page.
 - On the command line, `apply --remove <key>` (repeatable) removes one item
   by its key, its path under `snapshots/<to>/` without `.json`, for example
   `--remove teams/Contractors` or `--remove kapps/legacy/kapp`. `--prune`
@@ -467,23 +471,34 @@ remove it on purpose:
 
 What happens:
 
-- Only the listed items are deleted, after every create and update, in
+- Only the items the plan shows as **Remove** are deleted. One the plan
+  keeps (changed since it was last promoted), finds already gone, or finds
+  in the source again (the snapshot being promoted, or the source's newest
+  snapshot when a changeset is pinned to an older one: "still exists in
+  <source> — not removed") is never sent to apply.
+- They are deleted after every create and update, in
   reverse dependency order (workflows and WebAPIs before the routines and
   handlers they run, operations before connections).
 - A kapp takes its forms, workflows, WebAPIs and reference data with it; a
   form its workflows and data; a connection its operations. The plan lists
-  them, and they are not deleted one by one.
+  them, and they are not deleted one by one. After the deletes the target is
+  read again: anything listed that is still there is deleted on its own (or,
+  if that fails, reported as failed, kept in drift state, and the run is
+  partial).
 - The plan warns about anything that will still use a removed item (a
   workflow running a removed routine, a form calling a removed operation,
   and so on), with **Also remove** for users that are only in the target.
-  It is a warning: the apply is not blocked.
+  For teams, models and file resources it also looks by name: a team named
+  in a security policy rule or set as an attribute value, a model a form's
+  bridged resources use, a file resource named in a value ("may be used
+  by"). It is a warning: the apply is not blocked.
 - If the item (or anything it takes with it) changed in the target after
   you reviewed the plan, it is not deleted; the run says so and is partial.
   One that is already gone is fine.
 - Never removable: the space itself, built-in handlers (`utilities_*`,
   `system_*`), reference data records (use `--prune data`) and the
-  `task-refs` summary. An item that is also in the source cannot be removed
-  (it would be promoted instead).
+  `task-refs` summary. A changeset cannot save a removal of an item that
+  is in its pinned source snapshot.
 - The backup taken before the apply can restore removed items (History,
   Restore…), with limits the plan and the confirm step spell out: a kapp
   or form comes back without its submissions (other than reference data),

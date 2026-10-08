@@ -8,6 +8,7 @@ import git from 'isomorphic-git';
 import type { HistoryDetail, HistoryEvent, HistoryType } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
 import { startCompare } from './compare.ts';
+import { isEntryKey, parseEntryKey } from './engine-sync.ts';
 import { resolveCommit } from './pinned.ts';
 import { isPlainObject, type ProjectRef } from './project-meta.ts';
 import { log, readTreeAt, type LogEntry } from './repo.ts';
@@ -99,7 +100,7 @@ export function registerHistoryRoutes(router: Router, ctx: SyncContext): void {
       source: { artifacts, commit: entry.oid },
       // Run records keep the keys of their day; an older backup is re-keyed.
       // A removed sub-collection entry is restored with its item.
-      preselected: touched ? [...new Set(touched.items.filter((i) => i.status === 'done').map((i) => i.key.split('#')[0]).map((k) => artifacts.rekeyed?.get(k) ?? k))] : [],
+      preselected: touched ? [...new Set(touched.items.filter((i) => i.status === 'done').map((i) => (isEntryKey(i.key) ? parseEntryKey(i.key)!.itemKey : i.key)).map((k) => artifacts.rekeyed?.get(k) ?? k))] : [],
     });
     return { status: 202, json: { jobId } };
   });
