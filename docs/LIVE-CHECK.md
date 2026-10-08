@@ -39,3 +39,28 @@ run.
   CLI-level full promotion into scratch reached a clean re-plan.
 - The OS keychain. The run used the in-memory store.
 - The web UI against real data. The e2e test covers the UI in fake mode.
+
+## Second live check: routines, removals and restore (2026-10-08)
+
+Run against a read-only **source** space and a disposable **target** space,
+through the server API, with credentials from the OS keychain. Every test
+item was created in the target only, with a `km-livecheck` prefix, and
+removed again afterwards.
+
+| Step | Result |
+|------|--------|
+| Promote a global routine the target lacked | created with its tree, inputs and outputs; re-plan unchanged (after fixing the export to include inputs/outputs) |
+| Remove a team, a connection with an operation, and a kapp with a form, a form workflow and a kapp workflow | all removed; the plan listed the kapp's children; backup taken first |
+| Task trees of removed workflows | none left behind (the platform leaves them when a kapp or form is deleted; the app now deletes workflows first and cleans up leftovers) |
+| Remove single entries: a category, a form type, a kapp attribute definition, a space attribute definition | all removed |
+| Restore from the backup | every removed item came back, including the workflows' Task trees |
+| Snapshot after removing entries | no false drift (after re-recording the parent's state) |
+| History | backup → applied/removed → snapshot, and restore, in plain language |
+| Secret leaks in any response | **0** |
+
+Platform behaviour this confirmed:
+- Creating a routine through the Task API in one call keeps its tree, inputs
+  and outputs, as long as the inputs and outputs sent are not empty lists.
+- Deleting a kapp or a form does not delete its workflows' Task trees;
+  deleting a workflow through the Core API does.
+- Deleting an Integrator connection deletes its operations.
