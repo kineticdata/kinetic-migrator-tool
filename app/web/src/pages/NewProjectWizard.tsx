@@ -1,5 +1,6 @@
 // First-run wizard: project name → first environment (tested before Next is
-// allowed) → first snapshot with live progress → Overview.
+// allowed) → first snapshot with live progress (and, optionally, the user's
+// name for History) → Overview.
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -7,6 +8,7 @@ import { Camera, Check } from 'lucide-react';
 import type { ConnectionTestResult, CredentialsStatus, ProjectDetail } from '../../../shared/api';
 import type { SnapshotResult } from '../../../shared/sync-api';
 import { api, projectPath } from '../api/client';
+import { putRepository } from '../api/history';
 import { qk, startSnapshot, testConnection } from '../api/queries';
 import { useJob } from '../api/useJob';
 import { PlainFrame } from '../components/Brand';
@@ -71,6 +73,11 @@ export function NewProjectWizard() {
   const [tested, setTested] = useState<{ sig: string; result: ConnectionTestResult } | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  // Optional: who History records the user's snapshots and promotions as.
+  const [authorName, setAuthorName] = useState('');
+  const [authorEmail, setAuthorEmail] = useState('');
+  const [authorError, setAuthorError] = useState<unknown>(null);
+  const [finishing, setFinishing] = useState(false);
 
   const job = useJob<SnapshotResult>(jobId, { invalidate: project ? [qk.project(project.id), qk.projects] : [] });
   const passed = useMemo(() => Boolean(tested?.result.ok && tested.sig === signature(draft)), [tested, draft]);
@@ -128,6 +135,28 @@ export function NewProjectWizard() {
   };
 
   const overview = project ? `/p/${project.id}/overview` : '/';
+
+  // Saves the name for History (when one was entered), then opens Overview.
+  const finish = async () => {
+    const n = authorName.trim();
+    const e = authorEmail.trim();
+    if (project && (n || e)) {
+      if (!n || !/^[^\s@<>]+@[^\s@<>]+$/.test(e)) {
+        setAuthorError(!n ? 'Enter your name, or clear the email to skip this.' : 'Enter a valid email address, or clear your name to skip this.');
+        return;
+      }
+      setFinishing(true);
+      setAuthorError(null);
+      try {
+        await putRepository(project.id, { author: { name: n, email: e } });
+      } catch (err) {
+        setAuthorError(err);
+        setFinishing(false);
+        return;
+      }
+    }
+    navigate(overview);
+  };
 
   return (
     <PlainFrame>
@@ -216,12 +245,22 @@ export function NewProjectWizard() {
               {(job.status === 'failed' || job.status === 'cancelled') && <InlineError error={job.error ?? 'The snapshot was cancelled.'} />}
               <InlineError error={error} />
             </div>
+            <fieldset className="mt-6 border-t border-border pt-5">
+              <legend className="sr-only">Your name for History</legend>
+              <p className="text-sm font-medium text-fg">Your name <span className="font-normal text-muted">(optional)</span></p>
+              <p className="mt-0.5 text-xs text-muted">History records your snapshots and promotions under it. You can change it later in Settings → Repository.</p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <Field label="Your name">{(p) => <Input {...p} value={authorName} onChange={(ev) => setAuthorName(ev.target.value)} autoComplete="name" maxLength={200} />}</Field>
+                <Field label="Your email">{(p) => <Input {...p} type="email" value={authorEmail} onChange={(ev) => setAuthorEmail(ev.target.value)} autoComplete="email" maxLength={200} />}</Field>
+              </div>
+              {authorError ? <div className="mt-3"><InlineError error={authorError} /></div> : null}
+            </fieldset>
             <div className="mt-6 flex items-center justify-between gap-2">
               {job.status === 'succeeded'
                 ? <span />
-                : <Button variant="ghost" onClick={() => navigate(overview)}>Skip for now</Button>}
+                : <Button variant="ghost" loading={finishing} onClick={finish}>Skip for now</Button>}
               {job.status === 'succeeded' ? (
-                <Button variant="primary" onClick={() => navigate(overview)}>Open overview</Button>
+                <Button variant="primary" loading={finishing} onClick={finish}>Open overview</Button>
               ) : job.status === 'running' ? (
                 <Button onClick={job.cancel}>Cancel</Button>
               ) : (

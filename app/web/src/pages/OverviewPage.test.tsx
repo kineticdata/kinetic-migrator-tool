@@ -10,6 +10,14 @@ import { historyEvent, project } from '../test/fixtures';
 
 afterEach(() => vi.unstubAllGlobals());
 
+const node = (id: string, kind: string, count = 0, key?: string) => ({ id, label: id, kind, count, hasChildren: count > 0, ...(key ? { key } : {}) });
+const TREE: Record<string, unknown[]> = {
+  '': [node('space', 'space', 0, 'space'), node('group:kapps', 'group', 11), node('group:teams', 'group', 3)],
+  'group:kapps': [node('kapps/services/kapp', 'kapp', 10, 'kapps/services/kapp')],
+  'kapps/services/kapp': [node('group:kapps/services/forms', 'group', 10)],
+  'group:kapps/services/forms': [node('kapps/services/forms/a/form', 'form', 6, 'kapps/services/forms/a/form'), node('kapps/services/forms/b/form', 'form', 2, 'kapps/services/forms/b/form')],
+};
+
 function setup() {
   let projectCalls = 0;
   const m = mockApi({
@@ -18,10 +26,7 @@ function setup() {
       historyEvent({ id: 'h2', type: 'applied', title: "Applied 'Q4 forms' to Test", env: 'test', status: 'applied', at: '2026-10-08T11:00:00Z' }),
       historyEvent({ id: 'h1', type: 'snapshot', title: 'Snapshot of Test', env: 'test', drifted: ['forms/a', 'forms/b'] }),
     ],
-    'GET /api/projects/:p/explore/:env/tree': [
-      { id: 'kapps', label: 'Kapps', kind: 'group', count: 12, hasChildren: true },
-      { id: 'teams', label: 'Teams', kind: 'group', count: 3, hasChildren: true },
-    ],
+    'GET /api/projects/:p/explore/:env/tree': (call: { search: string }) => TREE[new URLSearchParams(call.search).get('parent') ?? ''] ?? [],
     'POST /api/projects/:p/compare': { status: 202, json: { jobId: 'cmp1' } },
     'GET /api/jobs/cmp1': { id: 'cmp1', kind: 'compare', status: 'succeeded', createdAt: 'x', result: { compareId: 'k', from: 'dev', fromName: 'Dev', to: 'test', mode: 'raw', sourceCommit: 'c', counts: { new: 2, changed: 3, same: 40 }, preselected: [] } },
     'POST /api/projects/:p/snapshots': { status: 202, json: { jobId: 'snap1' } },
@@ -38,6 +43,8 @@ test('shows a lane per environment with counts, drift and the latest run', async
   renderWithApp(<AppRoutes />, { route: '/p/acme-demo/overview' });
   const test1 = await lane('Test');
   expect(await within(test1).findByText('15 items')).toBeInTheDocument();
+  // Counts by type: kapps and forms on their own, never the space.
+  expect(await within(test1).findByText('1 kapp · 2 forms · 3 teams')).toBeInTheDocument();
   expect(within(test1).getByText('2 drifted')).toBeInTheDocument();
   expect(within(test1).getByText("Applied 'Q4 forms' to Test")).toBeInTheDocument();
   // Dev has a snapshot but no snapshot event in history: drift is unknown.

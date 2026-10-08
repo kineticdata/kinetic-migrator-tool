@@ -28,6 +28,7 @@ function apiWith(testOk: boolean[]) {
     'GET /api/jobs/:id': { id: 'snap1', kind: 'snapshot', status: 'succeeded', createdAt: 'x', result: { env: 'dev', commit: 'c1', total: 3, counts: {}, drifted: [] } },
     'GET /api/projects/:p/history': [],
     'GET /api/projects': [],
+    'PUT /api/projects/:p/repository': (c: { body: unknown }) => ({ author: (c.body as { author: unknown }).author, remote: { url: null, token: { has: false } }, lastPush: null }),
   });
 }
 
@@ -90,4 +91,36 @@ test('the snapshot step shows progress and then opens the overview', async () =>
   expect(m.callsTo('POST', '/api/projects/acme-demo/snapshots')[0].body).toEqual({ env: 'dev' });
   await user.click(await screen.findByRole('button', { name: 'Open overview' }));
   await waitFor(() => expect(currentLocation()).toBe('/p/acme-demo/overview'));
+});
+
+test('the last step can record the user’s name for History', async () => {
+  const m = apiWith([true]);
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/new' });
+  await fillEnvironment(user);
+  await user.click(screen.getByRole('button', { name: 'Test connection' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+  await user.click(screen.getByRole('button', { name: 'Next' }));
+  await user.type(screen.getByLabelText('Your name'), 'Pat Example');
+  // A name needs an email.
+  await user.click(screen.getByRole('button', { name: 'Skip for now' }));
+  expect(await screen.findByText(/Enter a valid email address/)).toBeInTheDocument();
+  expect(currentLocation()).toBe('/new');
+  await user.type(screen.getByLabelText('Your email'), 'pat@example.com');
+  await user.click(screen.getByRole('button', { name: 'Skip for now' }));
+  await waitFor(() => expect(currentLocation()).toBe('/p/acme-demo/overview'));
+  expect(m.callsTo('PUT', '/api/projects/acme-demo/repository')[0].body).toEqual({ author: { name: 'Pat Example', email: 'pat@example.com' } });
+});
+
+test('leaving the name empty saves nothing', async () => {
+  const m = apiWith([true]);
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/new' });
+  await fillEnvironment(user);
+  await user.click(screen.getByRole('button', { name: 'Test connection' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+  await user.click(screen.getByRole('button', { name: 'Next' }));
+  await user.click(screen.getByRole('button', { name: 'Skip for now' }));
+  await waitFor(() => expect(currentLocation()).toBe('/p/acme-demo/overview'));
+  expect(m.callsTo('PUT', '/api/projects/acme-demo/repository')).toHaveLength(0);
 });

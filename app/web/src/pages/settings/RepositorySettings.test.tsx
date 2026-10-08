@@ -55,10 +55,10 @@ test('saves the commit author', async () => {
   const user = userEvent.setup();
   renderWithApp(<AppRoutes />, { route: '/p/acme-demo/settings/repository' });
   const name = await screen.findByLabelText('Name');
-  expect(name).toHaveValue('kinetic-migrate');
-  await user.clear(name);
+  // The built-in author shows as not set.
+  expect(name).toHaveValue('');
+  expect(screen.getByText(/No name is set yet/)).toBeInTheDocument();
   await user.type(name, 'Pat Example');
-  await user.clear(screen.getByLabelText('Email'));
   await user.type(screen.getByLabelText('Email'), 'pat@example.com');
   await user.click(screen.getByRole('button', { name: 'Save author' }));
   await waitFor(() => expect(m.callsTo('PUT', '/api/projects/acme-demo/repository')).toHaveLength(1));

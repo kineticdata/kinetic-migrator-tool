@@ -60,10 +60,13 @@ export function ProjectsPage() {
             {session.data && <> Stored in <span className="font-mono text-[13px] text-fg">{session.data.workspace}</span>.</>}
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button icon={<FolderOpen size={16} aria-hidden />} onClick={() => setOpening(true)}>Open folder…</Button>
-          <LinkButton to="/new" variant="primary" icon={<Plus size={16} aria-hidden />}>New project</LinkButton>
-        </div>
+        {/* An empty workspace offers the same actions in its empty state. */}
+        {list.length > 0 && (
+          <div className="flex gap-2">
+            <Button icon={<FolderOpen size={16} aria-hidden />} onClick={() => setOpening(true)}>Open folder…</Button>
+            <LinkButton to="/new" variant="primary" icon={<Plus size={16} aria-hidden />}>New project</LinkButton>
+          </div>
+        )}
       </div>
 
       {session.data && !session.data.keychain.available && (

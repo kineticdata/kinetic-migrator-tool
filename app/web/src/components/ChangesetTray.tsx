@@ -1,7 +1,7 @@
 // ChangesetTray: the changeset being built in Compare, always visible. The
 // selected items grouped by kind (each removable), the suggestions for what
 // they depend on, and the actions: Review plan → and Save as changeset….
-import { useId, useState, type FormEvent } from 'react';
+import { useId, useRef, useState, type FormEvent } from 'react';
 import { ArrowRight, Layers, Save, X } from 'lucide-react';
 import { Link } from 'react-router';
 import type { CompareStatus, NodeKind, Resolution, SuggestionOut } from '../../../shared/sync-api';
@@ -15,6 +15,7 @@ import { Dialog, DialogContent } from './ui/Dialog';
 import { InlineError } from './ui/EmptyState';
 import { Field, Input, inputClasses } from './ui/Field';
 import { Spinner } from './ui/Spinner';
+import { useToastClearance } from './ui/Toast';
 import { cn } from './ui/cn';
 
 export interface TrayItem {
@@ -122,6 +123,8 @@ export function ChangesetTray(props: ChangesetTrayProps) {
   const { from, to, items, resolutions, suggestions, onOpen, onRemove, onClear, onAdd, onAddAll, onReview, reviewing, reviewError, saved } = props;
   const [saving, setSaving] = useState(false);
   const headingId = useId();
+  const footer = useRef<HTMLDivElement>(null);
+  useToastClearance(footer);
   const groups = GROUPS.map(([kind, title]) => ({ kind, title, list: items.filter((i) => i.kind === kind) })).filter((g) => g.list.length);
 
   return (
@@ -190,7 +193,7 @@ export function ChangesetTray(props: ChangesetTrayProps) {
         )}
       </div>
 
-      <div className="space-y-2 border-t border-border p-3">
+      <div ref={footer} className="space-y-2 border-t border-border p-3">
         <InlineError error={reviewError} />
         <Button variant="primary" className="w-full" disabled={!items.length} loading={reviewing} onClick={onReview}>
           {reviewing ? 'Preparing plan…' : <>Review plan <ArrowRight size={15} aria-hidden /></>}

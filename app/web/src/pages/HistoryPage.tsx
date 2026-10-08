@@ -4,10 +4,11 @@
 // duration, counts, acknowledgements, values used) with Open in Compare,
 // View plan and Restore…; the commit id shows under Advanced only.
 import { useId, useMemo, type ReactNode } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
-import { GitCompare, History as HistoryIcon, ListChecks, RotateCcw } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router';
+import { Check, GitCompare, History as HistoryIcon, ListChecks, RotateCcw } from 'lucide-react';
 import type { HistoryEvent, RunRecord } from '../../../shared/sync-api';
 import { useHistoryDetail } from '../api/history';
+import { useItemLabels } from '../api/queries';
 import { Timeline } from '../components/Timeline';
 import { Badge } from '../components/ui/Badge';
 import { Button, LinkButton } from '../components/ui/Button';
@@ -17,7 +18,8 @@ import { inputClasses } from '../components/ui/Field';
 import { cn } from '../components/ui/cn';
 import { envLabel, formatDateTime, plural } from '../lib/format';
 import {
-  TYPE_FILTERS, compareHrefFor, eventForCommit, eventInfo, filterEvents, restoreTargetFor, runCounts, runDuration, runValues,
+  TYPE_FILTERS, acknowledgementText, compareHrefFor, eventForCommit, eventInfo, fallbackName, filterEvents, isDefaultAuthor, restoreTargetFor, runCounts,
+  runDuration, runValues, valuePathLabel,
 } from '../lib/history';
 import { restoreHref, valueText } from '../lib/plan';
 import { useProjectContext } from '../lib/project';
@@ -45,10 +47,22 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function RunFacts({ run }: { run: RunRecord }) {
+// Item names from the target's newest snapshot, else the source's.
+function useRunLabels(projectId: string, run: RunRecord, keys: string[]): (key: string) => string {
+  const { project } = useProjectContext();
+  const commitOf = (env: string) => project.environments.find((e) => e.name === env)?.lastSnapshot?.commit;
+  const fromEnv = project.environments.some((e) => e.name === run.from) ? run.from : null;
+  const target = useItemLabels(projectId, run.to, commitOf(run.to), keys);
+  const source = useItemLabels(projectId, fromEnv, fromEnv ? commitOf(fromEnv) : undefined, keys);
+  return (key) => target[key] ?? source[key] ?? fallbackName(key);
+}
+
+function RunFacts({ projectId, run }: { projectId: string; run: RunRecord }) {
   const c = runCounts(run);
   const values = runValues(run);
   const failed = run.items.filter((i) => i.status === 'failed');
+  const ackKeys = run.acknowledgements.map((a) => a.slice(a.indexOf(':') + 1)).filter(Boolean);
+  const labelOf = useRunLabels(projectId, run, [...new Set([...ackKeys, ...values.map((v) => v.key), ...failed.map((i) => i.key)])]);
   return (
     <>
       <div className="flex flex-wrap gap-1.5 text-sm">
@@ -63,7 +77,10 @@ function RunFacts({ run }: { run: RunRecord }) {
           <h3 className="mb-1 text-xs font-semibold text-muted">Failed items</h3>
           <ul className="space-y-1 text-sm">
             {failed.map((i) => (
-              <li key={i.key}><span className="font-mono text-[13px]">{i.key}</span>{i.message && <span className="text-muted"> — {i.message}</span>}</li>
+              <li key={i.key}>
+                <span className="text-fg">{labelOf(i.key)}</span>{i.message && <span className="text-muted"> — {i.message}</span>}
+                <span className="block truncate font-mono text-[11px] text-subtle" title={i.key}>{i.key}</span>
+              </li>
             ))}
           </ul>
         </div>
@@ -71,20 +88,34 @@ function RunFacts({ run }: { run: RunRecord }) {
       <div>
         <h3 className="mb-1 text-xs font-semibold text-muted">Acknowledgements</h3>
         {run.acknowledgements.length
-          ? <ul className="space-y-0.5 font-mono text-[13px]">{run.acknowledgements.map((a) => <li key={a}>{a}</li>)}</ul>
+          ? (
+            <ul className="space-y-1.5 text-sm text-fg">
+              {run.acknowledgements.map((a) => (
+                <li key={a} className="flex items-start gap-2">
+                  <Check size={14} aria-hidden className="mt-0.5 shrink-0 text-added" />
+                  <span className="min-w-0">
+                    {acknowledgementText(a, run.to, labelOf)}
+                    <span className="block truncate font-mono text-[11px] text-subtle" title={a}>{a.slice(a.indexOf(':') + 1)}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )
           : <p className="text-sm text-subtle">None needed</p>}
       </div>
       <div>
         <h3 className="mb-1 text-xs font-semibold text-muted">Environment values used</h3>
         {values.length ? (
-          <table className="w-full text-left text-[13px]">
-            <thead className="text-xs text-muted"><tr><th className="py-1 pr-2 font-medium">Item</th><th className="py-1 pr-2 font-medium">Value</th><th className="py-1 font-medium">Set to</th></tr></thead>
+          <table className="w-full table-fixed text-left text-[13px]">
+            <thead className="text-xs text-muted"><tr><th className="w-[55%] py-1 pr-3 font-medium">Setting</th><th className="py-1 font-medium">Set to</th></tr></thead>
             <tbody>
               {values.map((v) => (
                 <tr key={`${v.key}#${v.path}`} className="border-t border-border align-top">
-                  <td className="py-1 pr-2 font-mono break-all">{v.key}</td>
-                  <td className="py-1 pr-2 break-all">{v.path.split('/').at(-1)}</td>
-                  <td className="py-1 font-mono break-all">{valueText(v.value)}</td>
+                  <td className="py-1.5 pr-3">
+                    <span className="block break-words text-fg">{labelOf(v.key)} › {valuePathLabel(v.path)}</span>
+                    <span className="block truncate font-mono text-[11px] text-subtle" title={`${v.key} · ${v.path}`}>{v.key} · {v.path}</span>
+                  </td>
+                  <td className="py-1.5 break-words text-fg">{valueText(v.value) || <span className="text-subtle italic">Empty</span>}</td>
                 </tr>
               ))}
             </tbody>
@@ -92,6 +123,21 @@ function RunFacts({ run }: { run: RunRecord }) {
         ) : <p className="text-sm text-subtle">None changed</p>}
       </div>
     </>
+  );
+}
+
+function DriftedList({ projectId, env, keys }: { projectId: string; env: string | null; keys: string[] }) {
+  const { project } = useProjectContext();
+  const labels = useItemLabels(projectId, env, project.environments.find((e) => e.name === env)?.lastSnapshot?.commit, keys);
+  return (
+    <ul className="space-y-1 text-sm text-fg">
+      {keys.map((k) => (
+        <li key={k}>
+          {labels[k] ?? fallbackName(k)}
+          <span className="block truncate font-mono text-[11px] text-subtle" title={k}>{k}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -119,7 +165,16 @@ function DetailPanel({ projectId, selected, listed }: { projectId: string; selec
               <h2 className="text-base font-semibold text-fg">{event.title}</h2>
             </div>
             <dl className="grid grid-cols-2 gap-3">
-              <Fact label="Who">{event.author || 'Unknown'}</Fact>
+              <Fact label="Who">
+                {isDefaultAuthor(event.author) ? (
+                  <>
+                    You
+                    <Link to={`/p/${encodeURIComponent(projectId)}/settings/repository`} className="block text-xs font-medium text-accent hover:underline">
+                      Set your name in Settings → Repository
+                    </Link>
+                  </>
+                ) : event.author}
+              </Fact>
               <Fact label="When">{formatDateTime(event.at)}</Fact>
               {event.env && <Fact label="Environment">{envLabel(event.env)}</Fact>}
               {run && <Fact label="Duration">{duration ?? '—'}</Fact>}
@@ -128,12 +183,12 @@ function DetailPanel({ projectId, selected, listed }: { projectId: string; selec
             {event.drifted.length > 0 && (
               <div>
                 <h3 className="mb-1 text-xs font-semibold text-muted">{plural(event.drifted.length, 'item')} changed since the last promotion</h3>
-                <ul className="space-y-0.5 font-mono text-[13px]">{event.drifted.map((k) => <li key={k}>{k}</li>)}</ul>
+                <DriftedList projectId={projectId} env={event.env} keys={event.drifted} />
               </div>
             )}
             {detail.isPending && event.runId && <LoadingState label="Loading the run…" className="py-4" />}
             {detail.isError && listed && <InlineError error={detail.error} />}
-            {run && <RunFacts run={run} />}
+            {run && <RunFacts projectId={projectId} run={run} />}
             <div className="flex flex-wrap gap-2 border-t border-border pt-4">
               {compare && <LinkButton size="sm" to={compare} icon={<GitCompare size={14} aria-hidden />}>Open in Compare</LinkButton>}
               {run && <LinkButton size="sm" to={`/p/${encodeURIComponent(projectId)}/plan/${encodeURIComponent(run.planId)}`} icon={<ListChecks size={14} aria-hidden />}>View plan</LinkButton>}

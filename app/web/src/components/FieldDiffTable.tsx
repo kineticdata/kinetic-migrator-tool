@@ -1,25 +1,67 @@
 // FieldDiffTable: what an item's promotion would change, one row per
-// difference (What · <To> now · <From> incoming), with readable path labels.
+// difference (What · <To> now · <From> incoming), with readable path labels
+// and values summarised in words (the full value one click away).
 // ThreeWayDiff: a drifted item — last promoted · target now · incoming — with
 // the Overwrite / Keep target decision.
-import type { ReactNode } from 'react';
+import { createContext, useContext, useState, type ReactNode } from 'react';
 import { AlertTriangle, Check } from 'lucide-react';
 import type { DiffEntry, Resolution, ThreeWay } from '../../../shared/sync-api';
-import { displayValue, pathLabel, threeWayRows } from '../lib/diff';
+import { pathLabel, threeWayRows } from '../lib/diff';
+import { fullValueText, hasFullValue, summarizeValue, type IdNames } from '../lib/value-summary';
 import { envLabel, formatDateTime, timeAgo } from '../lib/format';
 import { Button } from './ui/Button';
 import { cn } from './ui/cn';
 
-function Value({ value, strong, className }: { value: unknown; strong?: boolean; className?: string }) {
-  const text = displayValue(value);
-  const quiet = value === undefined || value === null || value === '';
+// Names for connection and operation ids, per side: `target` for the target's
+// values, `incoming` for the source's (ids differ between environments).
+export interface DiffNames { target: IdNames; incoming: IdNames }
+const NamesContext = createContext<DiffNames>({ target: {}, incoming: {} });
+export const DiffNamesProvider = NamesContext.Provider;
+
+function Value({ value, strong, side }: { value: unknown; strong?: boolean; side: keyof DiffNames }) {
+  const names = useContext(NamesContext)[side];
+  const [open, setOpen] = useState(false);
+  const s = summarizeValue(value, names);
+  const tone = strong ? 'text-fg' : 'text-muted';
+  let body: ReactNode;
+  if (s.kind === 'empty') body = <span className="text-subtle italic">{s.text}</span>;
+  else if (s.kind === 'text') body = <span className={cn('break-words', strong && 'font-medium', tone)}>{s.text}</span>;
+  else if (s.kind === 'props') {
+    body = (
+      <dl className={cn('space-y-0.5', tone)}>
+        {s.entries.map(([k, v]) => (
+          <div key={k} className="flex min-w-0 gap-1.5">
+            <dt className="shrink-0 text-subtle">{k}:</dt>
+            <dd className={cn('min-w-0 break-words', strong && 'font-medium text-fg')}>{v}</dd>
+          </div>
+        ))}
+      </dl>
+    );
+  } else if (s.items.length === 1 && s.more === 0) {
+    body = <span className={cn('break-words', strong && 'font-medium', tone)}>{s.items[0]}</span>;
+  } else {
+    body = (
+      <ul className={cn('list-disc space-y-0.5 pl-4 marker:text-subtle', tone)}>
+        {s.items.map((t, i) => <li key={i} className={cn('break-words', strong && 'text-fg')}>{t}</li>)}
+        {s.more > 0 && <li className="-ml-4 list-none text-subtle">and {s.more} more</li>}
+      </ul>
+    );
+  }
+  if (!hasFullValue(value, s)) return body;
   return (
-    <span
-      title={typeof value === 'object' && value !== null ? JSON.stringify(value, null, 2) : undefined}
-      className={cn('break-words', quiet ? 'text-subtle italic' : strong ? 'font-medium text-fg' : 'text-muted', typeof value === 'object' && value !== null && 'font-mono text-xs', className)}
-    >
-      {text}
-    </span>
+    <div className="min-w-0">
+      {open
+        ? <pre className="max-h-80 overflow-auto rounded-lg bg-surface-2 p-2.5 font-mono text-xs whitespace-pre-wrap break-words text-fg">{fullValueText(value)}</pre>
+        : body}
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="mt-1 block text-xs font-medium text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+      >
+        {open ? 'Show summary' : 'Show full value'}
+      </button>
+    </div>
   );
 }
 
@@ -45,8 +87,8 @@ export function FieldDiffTable({ diff, from, to }: { diff: DiffEntry[]; from: st
                 <span className="block break-words">{pathLabel(d.path)}</span>
                 {d.path !== '(root)' && <span className="mt-0.5 block truncate font-mono text-[11px] text-subtle" title={d.path}>{d.path}</span>}
               </th>
-              <td className="px-4 py-2.5"><Value value={d.from} /></td>
-              <td className="bg-accent-soft/40 px-4 py-2.5"><Value value={d.to} strong /></td>
+              <td className="px-4 py-2.5"><Value value={d.from} side="target" /></td>
+              <td className="bg-accent-soft/40 px-4 py-2.5"><Value value={d.to} strong side="incoming" /></td>
             </tr>
           ))}
         </tbody>
@@ -112,9 +154,9 @@ export function ThreeWayDiff({ threeWay, incoming, from, to, resolution, onResol
                   <span className="block break-words">{pathLabel(r.path)}</span>
                   {r.drifted && known && <span className="mt-1 inline-flex items-center gap-1 rounded bg-drift-soft px-1.5 py-px text-[11px] font-medium text-drift"><span aria-hidden>⚠</span>changed in {envLabel(to)}</span>}
                 </th>
-                {known && <td className="px-4 py-2.5"><Value value={r.last} /></td>}
-                <td className={cn('px-4 py-2.5', r.drifted && known && 'bg-drift-soft/50')}><Value value={r.target} strong={r.drifted && known} /></td>
-                <td className="bg-accent-soft/40 px-4 py-2.5"><Value value={r.incoming} strong /></td>
+                {known && <td className="px-4 py-2.5"><Value value={r.last} side="target" /></td>}
+                <td className={cn('px-4 py-2.5', r.drifted && known && 'bg-drift-soft/50')}><Value value={r.target} strong={r.drifted && known} side="target" /></td>
+                <td className="bg-accent-soft/40 px-4 py-2.5"><Value value={r.incoming} strong side="incoming" /></td>
               </tr>
             ))}
           </tbody>

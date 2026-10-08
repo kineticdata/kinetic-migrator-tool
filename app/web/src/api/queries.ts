@@ -235,3 +235,42 @@ export const useCreateChangeset = (p: string) => useProjectMutation(p, (body: Cr
 export const useDeleteChangeset = (p: string) => useProjectMutation(p, (id: string) => api.del<{ deleted: string }>(projectPath(p, 'changesets', id)));
 
 export const startPlan = (p: string, body: PlanRequest) => api.post<JobStarted>(projectPath(p, 'plans'), body);
+
+// Names for the connection and operation ids an item's integrations refer
+// to, from the item's "calls" relationships in an environment's snapshot.
+// Ids differ between environments, so each side is resolved on its own.
+export function useIntegrationNames(p: string, env: string | null, commit: string | undefined, key: string | null): Record<string, string> {
+  const item = useExploreItem(p, env ?? '', env ? commit : undefined, key);
+  const keys = (item.data?.relationships.uses ?? []).filter((r) => r.kind === 'calls').map((r) => r.key);
+  const related = useQueries({
+    queries: keys.map((k) => ({
+      queryKey: qk.exploreItem(p, env ?? '', commit ?? '', k),
+      staleTime: Infinity,
+      retry: false,
+      queryFn: () => api.get<ExploreItem>(`${projectPath(p, 'explore', env ?? '', 'item')}?key=${encodeURIComponent(k)}`),
+    })),
+  });
+  const out: Record<string, string> = {};
+  for (const r of related) {
+    const id = (r.data?.json as { id?: unknown } | undefined)?.id;
+    if (r.data && typeof id === 'string') out[id] = r.data.label;
+  }
+  return out;
+}
+
+// Labels of items in an environment's newest snapshot ({ key: label }); keys
+// not in it (or still loading) are left out.
+export function useItemLabels(p: string, env: string | null, commit: string | undefined, keys: string[]): Record<string, string> {
+  const results = useQueries({
+    queries: keys.map((k) => ({
+      queryKey: qk.exploreItem(p, env ?? '', commit ?? '', k),
+      enabled: Boolean(env && commit),
+      staleTime: Infinity,
+      retry: false,
+      queryFn: () => api.get<ExploreItem>(`${projectPath(p, 'explore', env ?? '', 'item')}?key=${encodeURIComponent(k)}`),
+    })),
+  });
+  const out: Record<string, string> = {};
+  results.forEach((r, i) => { if (r.data?.label) out[keys[i]] = r.data.label; });
+  return out;
+}

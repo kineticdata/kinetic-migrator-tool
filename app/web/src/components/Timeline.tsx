@@ -3,7 +3,7 @@
 // plain title, the environment, the time and who did it.
 import type { HistoryEvent } from '../../../shared/sync-api';
 import { envLabel } from '../lib/format';
-import { eventInfo, groupByDay } from '../lib/history';
+import { eventInfo, groupByDay, isDefaultAuthor } from '../lib/history';
 import { Badge } from './ui/Badge';
 import { cn } from './ui/cn';
 
@@ -52,7 +52,7 @@ export function Timeline({ events, selectedId, onSelect, now }: {
                     <span className="flex flex-wrap gap-x-2 text-xs text-muted">
                       <span>{timeOf(e.at)}</span>
                       {e.env && <span>· {envLabel(e.env)}</span>}
-                      {e.author && <span>· {e.author}</span>}
+                      {!isDefaultAuthor(e.author) && <span>· {e.author}</span>}
                     </span>
                   </button>
                 </li>

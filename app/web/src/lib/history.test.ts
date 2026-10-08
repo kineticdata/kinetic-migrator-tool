@@ -3,7 +3,9 @@
 import { expect, test } from 'vitest';
 import type { RunRecord } from '../../../shared/sync-api';
 import { historyEvent } from '../test/fixtures';
-import { compareHrefFor, eventInfo, filterEvents, groupByDay, restoreTargetFor, runCounts, runDuration } from './history';
+import {
+  acknowledgementText, compareHrefFor, eventInfo, fallbackName, filterEvents, groupByDay, isDefaultAuthor, restoreTargetFor, runCounts, runDuration, valuePathLabel,
+} from './history';
 
 const run = (over: Partial<RunRecord> = {}): RunRecord => ({
   id: 'r1', kind: 'apply', name: 'Q4 forms', planId: 'pl1', changesetId: null, from: 'dev', to: 'test',
@@ -82,4 +84,20 @@ test('run counts and duration', () => {
   expect(runCounts(run())).toEqual({ selected: 3, done: 2, failed: 1, skipped: 0 });
   expect(runDuration(run())).toBe('1m 5s');
   expect(runDuration(run({ finishedAt: '2026-10-08T10:00:12Z' }))).toBe('12s');
+});
+
+test('acknowledgements and environment values read as words', () => {
+  const labels: Record<string, string> = { 'kapps/services/forms/it-request/form': 'IT Request' };
+  const labelOf = (k: string) => labels[k] ?? fallbackName(k);
+  expect(acknowledgementText('handler:handlers/mail_send_v1/handler', 'test', labelOf)).toBe('Install handler Mail Send');
+  expect(acknowledgementText('connection-secrets:connections/Ticketing/connection', 'test', labelOf)).toBe('Create connection Ticketing without credentials');
+  expect(acknowledgementText('index:kapps/services/forms/it-request/form', 'test', labelOf)).toBe('Rebuild indexes on IT Request');
+  expect(acknowledgementText('drift:teams/Ops', 'test', labelOf)).toBe('Overwrite changes made in Test to Ops');
+  expect(acknowledgementText('something-else', 'test', labelOf)).toBe('something-else');
+  expect(valuePathLabel('properties.Server.value')).toBe('Server');
+  expect(valuePathLabel('properties.Mail\\.Host.value')).toBe('Mail.Host');
+  expect(valuePathLabel('attributes.Web Server Url')).toBe('Web Server Url');
+  expect(valuePathLabel('config.baseUrl')).toBe('Config › Base url');
+  expect(isDefaultAuthor('kinetic-migrate')).toBe(true);
+  expect(isDefaultAuthor('Pat Example')).toBe(false);
 });

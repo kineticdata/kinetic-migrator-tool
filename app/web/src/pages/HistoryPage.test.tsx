@@ -19,7 +19,10 @@ const RUN: RunRecord = {
   source: { commit: 'c-src', path: 'snapshots/dev' }, backupCommit: 'c-backup',
   startedAt: '2026-10-07T10:00:00Z', finishedAt: '2026-10-07T10:01:05Z', status: 'partial',
   selection: ['teams/Ops', 'kapps/hr/forms/leave/form'], acknowledgements: ['drift:teams/Ops'], resolutions: {},
-  values: { 'kapps/hr/forms/leave/form': { 'attributes/Web Server Url': 'https://test.your-space.kinops.io' } },
+  values: {
+    'kapps/hr/forms/leave/form': { 'attributes.Web Server Url': 'https://test.your-space.kinops.io' },
+    'handlers/mail_send_v1/handler': { 'properties.Server.value': 'smtp.test.example.com' },
+  },
   secretsUsed: [], items: [{ key: 'teams/Ops', status: 'done' }, { key: 'kapps/hr/forms/leave/form', status: 'failed', message: 'Form rejected' }],
   done: 1, error: 'Form rejected',
 };
@@ -28,7 +31,7 @@ const EVENTS: HistoryEvent[] = [
   historyEvent({ id: 'c-snap-t', commit: 'c-snap-t', type: 'snapshot', title: 'Snapshot of Test', env: 'test', at: '2026-10-08T11:00:00Z' }),
   historyEvent({ id: 'c-snap-t:drift', commit: 'c-snap-t', type: 'drift', title: 'Drift detected in Test: 1 item(s) changed since the last promotion', env: 'test', at: '2026-10-08T11:00:00Z', drifted: ['teams/Ops'] }),
   historyEvent({ id: 'c-applied', commit: 'c-applied', type: 'applied', title: "Partly applied 'Q4 forms' to Test", env: 'test', at: '2026-10-07T10:01:05Z', runId: 'r1', status: 'partial', author: 'Pat Example' }),
-  historyEvent({ id: 'c-backup', commit: 'c-backup', type: 'backup', title: 'Backup of Test', env: 'test', at: '2026-10-07T10:00:10Z' }),
+  historyEvent({ id: 'c-backup', commit: 'c-backup', type: 'backup', title: 'Backup of Test', env: 'test', at: '2026-10-07T10:00:10Z', author: 'kinetic-migrate' }),
   historyEvent({ id: 'c-cs', commit: 'c-cs', type: 'changeset', title: "Saved changeset 'Q4 forms'", env: 'dev', at: '2026-10-06T09:00:00Z' }),
   historyEvent({ id: 'c-restore', commit: 'c-restore', type: 'restore', title: 'Restored Test from a backup', env: 'test', at: '2026-10-05T09:00:00Z', status: 'applied' }),
   historyEvent({ id: 'c-snap-d', commit: 'c-snap-d', type: 'snapshot', title: 'Snapshot of Dev', env: 'dev', at: '2026-10-05T08:00:00Z' }),
@@ -43,6 +46,12 @@ function setup() {
       const event = EVENTS.find((e) => e.commit === commit && e.type !== 'drift');
       if (!event) return { status: 404, json: { error: { code: 'not_found', message: 'No such commit in this project.' } } };
       return { event, run: event.runId ? RUN : null };
+    },
+    // Item names come from the snapshot (the handler's is left to the fallback).
+    'GET /api/projects/:p/explore/:env/item': (c: { search: string }) => {
+      const key = new URLSearchParams(c.search).get('key') ?? '';
+      const label = ({ 'teams/Ops': 'Operations', 'kapps/hr/forms/leave/form': 'Leave Request' } as Record<string, string>)[key];
+      return label ? { key, label } : { status: 404, json: { error: { code: 'not_found', message: 'No such item.' } } };
     },
   });
 }
@@ -89,8 +98,12 @@ test('?commit= opens that entry’s detail: who, when, duration, counts, acknowl
   expect(panel).toHaveTextContent('2 selected');
   expect(panel).toHaveTextContent('1 done');
   expect(panel).toHaveTextContent('1 failed');
-  expect(panel).toHaveTextContent('drift:teams/Ops');
-  expect(panel).toHaveTextContent('Web Server Url');
+  // Acknowledgements and values in words, with the raw key as secondary text.
+  expect(await within(panel).findByText('Overwrite changes made in Test to Operations')).toBeInTheDocument();
+  expect(panel).not.toHaveTextContent('drift:teams/Ops');
+  expect(within(panel).getByText('Leave Request › Web Server Url')).toBeInTheDocument();
+  expect(within(panel).getByText('Mail Send › Server')).toBeInTheDocument();
+  expect(panel).toHaveTextContent('handlers/mail_send_v1/handler · properties.Server.value');
   expect(panel).toHaveTextContent('https://test.your-space.kinops.io');
   expect(panel).toHaveTextContent('Form rejected');
   // The selected entry is marked on the timeline.
@@ -102,6 +115,14 @@ test('?commit= opens that entry’s detail: who, when, duration, counts, acknowl
 
   expect(within(panel).getByRole('link', { name: /View plan/ })).toHaveAttribute('href', '/p/acme-demo/plan/pl1');
   expect(within(panel).getByRole('link', { name: /Open in Compare/ })).toHaveAttribute('href', '/p/acme-demo/compare?from=dev&to=test');
+});
+
+test('with no author set, Who reads You and points at Settings → Repository', async () => {
+  setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/history?commit=c-backup' });
+  const panel = await screen.findByRole('region', { name: 'Details' });
+  expect(panel).not.toHaveTextContent('kinetic-migrate');
+  expect(within(panel).getByRole('link', { name: 'Set your name in Settings → Repository' })).toHaveAttribute('href', '/p/acme-demo/settings/repository');
 });
 
 test('Restore… on an apply opens Compare with its backup as From and the target as To', async () => {

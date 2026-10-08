@@ -7,8 +7,8 @@ import {
   ArrowRight, Camera, CheckCircle2, Compass, GitCompare, History as HistoryIcon, Layers, Lock, Plus, RotateCcw, Server, Undo2,
 } from 'lucide-react';
 import type { EnvironmentInfo } from '../../../shared/api';
-import type { HistoryEvent, HistoryType, SnapshotResult } from '../../../shared/sync-api';
-import { qk, startSnapshot, useRawDifferences, useTreeRoot } from '../api/queries';
+import type { HistoryEvent, HistoryType, SnapshotResult, TreeNode } from '../../../shared/sync-api';
+import { qk, startSnapshot, useRawDifferences, useTreeChildren, useTreeRoot } from '../api/queries';
 import { useJob } from '../api/useJob';
 import { JobProgress } from '../components/JobProgress';
 import { Badge, StatusChip } from '../components/ui/Badge';
@@ -19,22 +19,41 @@ import { Spinner } from '../components/ui/Spinner';
 import { useToast } from '../components/ui/Toast';
 import { envLabel, hostOf, plural, timeAgo } from '../lib/format';
 import { latestByEnv, newestFirst, useProjectContext } from '../lib/project';
+import { groupOf, typeCounts } from '../lib/type-counts';
 import { ApiError } from '../api/client';
 
+// The children of the tree nodes in `parents` (loaded and cached like Explore's tree).
+function useChildren(projectId: string, env: string, commit: string | undefined, parents: string[]) {
+  const results = useTreeChildren(projectId, env, commit, parents);
+  const map = new Map<string, TreeNode[]>();
+  parents.forEach((id, i) => { if (results[i]?.data) map.set(id, results[i].data!); });
+  return { map, ready: results.every((r) => r.isSuccess), failed: results.some((r) => r.isError) };
+}
+
 function ItemCounts({ projectId, env }: { projectId: string; env: EnvironmentInfo }) {
-  const tree = useTreeRoot(projectId, env.name, env.lastSnapshot?.commit);
+  const commit = env.lastSnapshot?.commit;
+  const tree = useTreeRoot(projectId, env.name, commit);
+  const root = tree.data ?? [];
+  // Kapps and connections hold more than one type: open them to count kapps,
+  // forms and connections on their own.
+  const level1 = useChildren(projectId, env.name, commit, root.filter((n) => groupOf(n) === 'kapps' || groupOf(n) === 'connections').map((n) => n.id));
+  const kapps = [...level1.map.entries()].filter(([id]) => groupOf({ id }) === 'kapps').flatMap(([, ns]) => ns.filter((n) => n.kind === 'kapp' && n.hasChildren));
+  const level2 = useChildren(projectId, env.name, commit, kapps.map((k) => k.id));
+  const formGroups = [...level2.map.values()].flatMap((ns) => ns.filter((n) => n.kind === 'group' && /\/forms$/.test(n.id)).map((n) => n.id));
+  const level3 = useChildren(projectId, env.name, commit, formGroups);
   if (!env.lastSnapshot) return null;
   if (tree.isPending) return <p className="text-sm text-subtle">Counting items…</p>;
   if (tree.isError) return <p className="text-sm text-subtle">Item counts unavailable</p>;
-  const groups = tree.data.map((n) => ({ label: n.label, count: n.count + (n.key ? 1 : 0) })).filter((g) => g.count > 0);
-  const total = groups.reduce((s, g) => s + g.count, 0);
+  const total = root.reduce((s, n) => s + n.count + (n.key ? 1 : 0), 0);
+  const ready = level1.ready && level2.ready && level3.ready;
+  const types = ready || level1.failed || level2.failed || level3.failed
+    ? typeCounts(root, new Map([...level1.map, ...level2.map, ...level3.map]))
+    : [];
   return (
     <div>
       <p className="text-2xl font-semibold tracking-tight text-fg tabular-nums">{plural(total, 'item')}</p>
-      {groups.length > 0 && (
-        <p className="mt-1 text-xs leading-relaxed text-muted">
-          {[...groups].sort((a, b) => b.count - a.count).slice(0, 4).map((g) => `${g.count.toLocaleString('en')} ${g.label.toLowerCase()}`).join(' · ')}
-        </p>
+      {types.length > 0 && (
+        <p className="mt-1 text-xs leading-relaxed text-muted">{types.map((t) => plural(t.count, t.one, t.many)).join(' · ')}</p>
       )}
     </div>
   );

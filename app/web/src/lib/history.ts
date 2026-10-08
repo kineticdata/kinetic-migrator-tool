@@ -3,6 +3,9 @@
 // filters, run counts and duration, and where Restore… and Open in Compare go.
 import type { HistoryEvent, HistoryType, RunRecord } from '../../../shared/sync-api';
 import type { Tone } from '../components/ui/Badge';
+import { humanize } from './diff';
+import { envLabel } from './format';
+import { nameOfKey } from './tree-layout';
 
 export interface EventInfo {
   label: string;
@@ -136,4 +139,61 @@ export function runDuration(run: RunRecord): string | null {
 // Environment values a run used, flattened for display.
 export function runValues(run: RunRecord): Array<{ key: string; path: string; value: unknown }> {
   return Object.entries(run.values ?? {}).flatMap(([key, paths]) => Object.entries(paths ?? {}).map(([path, value]) => ({ key, path, value })));
+}
+
+// ---- Run details in words ----------------------------------------------------
+
+// The name of the person history is recorded as when no author is set.
+export const DEFAULT_AUTHOR_NAME = 'kinetic-migrate';
+
+// Whether an author is the built-in default (nobody set a name yet).
+export const isDefaultAuthor = (author: string | null | undefined): boolean => !author || author === DEFAULT_AUTHOR_NAME;
+
+// A readable name for an item key when its label is not known:
+// "handlers/mail_send_v1/handler" → "Mail Send", "connections/Ticketing/connection" → "Ticketing".
+export function fallbackName(key: string): string {
+  const name = nameOfKey(key);
+  if (key.startsWith('handlers/')) {
+    const words = name.replace(/_v\d+$/, '').split(/[_-]+/).filter(Boolean);
+    return words.map((w) => w[0].toUpperCase() + w.slice(1)).join(' ') || name;
+  }
+  return name;
+}
+
+// An acknowledgement id (`<kind>:<item key>`) as the sentence it stood for.
+export function acknowledgementText(id: string, to: string, labelOf: (key: string) => string): string {
+  const i = id.indexOf(':');
+  const kind = i > 0 ? id.slice(0, i) : '';
+  const key = i > 0 ? id.slice(i + 1) : '';
+  const name = key ? labelOf(key) : '';
+  switch (kind) {
+    case 'handler': return `Install handler ${name}`;
+    case 'index': return `Rebuild indexes on ${name}`;
+    case 'connection-secrets': return `Create connection ${name} without credentials`;
+    case 'data-workflows': return `Run workflows when writing the reference data of ${name}`;
+    case 'drift': return `Overwrite changes made in ${envLabel(to)} to ${name}`;
+    default: return id;
+  }
+}
+
+// An environment value's path in words: "properties.Server.value" → "Server",
+// "attributes.Owner" → "Owner", "config.baseUrl" → "Config › Base url".
+export function valuePathLabel(path: string): string {
+  const segs: string[] = [];
+  let cur = '';
+  for (let i = 0; i < path.length; i++) {
+    if (path[i] === '\\' && path[i + 1] === '.') {
+      cur += '.';
+      i++;
+    } else if (path[i] === '.') {
+      segs.push(cur);
+      cur = '';
+    } else cur += path[i];
+  }
+  segs.push(cur);
+  // Older records used "/" between segments.
+  if (segs.length === 1 && path.includes('/')) segs.splice(0, 1, ...path.split('/'));
+  if (segs.length === 3 && segs[0] === 'properties' && segs[2] === 'value') return segs[1];
+  if (segs.length === 2 && segs[0] === 'attributes') return segs[1];
+  return segs.map((s) => (/^\d+$/.test(s) ? `#${Number(s) + 1}` : /\s/.test(s) ? s : humanize(s))).join(' › ');
 }

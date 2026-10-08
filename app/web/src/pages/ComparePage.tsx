@@ -21,12 +21,12 @@ import type {
 } from '../../../shared/sync-api';
 import { ApiError, api, projectPath } from '../api/client';
 import {
-  compareChildrenQuery, qk, startCompare, startPlan, useCompareChildren, useCompareItem, useCreateChangeset, useSuggestions,
+  compareChildrenQuery, qk, startCompare, startPlan, useCompareChildren, useCompareItem, useCreateChangeset, useIntegrationNames, useSuggestions,
 } from '../api/queries';
 import { useJob } from '../api/useJob';
 import { ChangesetTray, type TrayItem } from '../components/ChangesetTray';
 import { CountBar, ItemStatus, RollupCounts } from '../components/CountBar';
-import { FieldDiffTable, ThreeWayDiff } from '../components/FieldDiffTable';
+import { DiffNamesProvider, FieldDiffTable, ThreeWayDiff } from '../components/FieldDiffTable';
 import { JobProgress } from '../components/JobProgress';
 import { JsonView } from '../components/JsonView';
 import { KindIcon, ObjectTree, flattenTree, type ChildrenState, type TreeRow } from '../components/ObjectTree';
@@ -426,6 +426,13 @@ function ItemDetail({ projectId, result, itemKey, sel, setSel, suggestions, onAd
   }, [expired]); // eslint-disable-line react-hooks/exhaustive-deps
   const [view, setView] = useState('changes');
   const headingId = useId();
+  const { project } = useProjectContext();
+  const snapshotOf = (name: string) => project.environments.find((e) => e.name === name)?.lastSnapshot?.commit;
+  const fromEnv = result.sourceCommit && !snapshotOf(result.from) ? null : result.from;
+  const names = {
+    target: useIntegrationNames(projectId, result.to, snapshotOf(result.to), itemKey),
+    incoming: useIntegrationNames(projectId, fromEnv, fromEnv ? snapshotOf(fromEnv) : undefined, itemKey),
+  };
   if (!itemKey) {
     return <EmptyState icon={<MousePointerClick size={20} />} title="Select an item" description="Pick something in the tree to see exactly what promoting it would change." className="h-full" />;
   }
@@ -446,7 +453,7 @@ function ItemDetail({ projectId, result, itemKey, sel, setSel, suggestions, onAd
   if (it.status === 'new') changes = <p className="text-sm text-muted">New in {from}: {envLabel(to)} doesn’t have it yet. Everything below is incoming.</p>;
   else if (it.status === 'only-target') changes = <p className="text-sm text-muted">Only in {envLabel(to)}. Promoting never deletes it.</p>;
   else if (!diff.length) changes = <p className="text-sm text-muted">No differences{it.status === 'manual' ? ': this item is promoted by hand.' : '.'}</p>;
-  else changes = <FieldDiffTable diff={diff} from={from} to={to} />;
+  else changes = <DiffNamesProvider value={names}><FieldDiffTable diff={diff} from={from} to={to} /></DiffNamesProvider>;
 
   return (
     <section aria-labelledby={headingId} className="flex h-full min-h-0 flex-col">
@@ -469,7 +476,7 @@ function ItemDetail({ projectId, result, itemKey, sel, setSel, suggestions, onAd
       </div>
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 pb-8">
         {it.status === 'drifted' && it.threeWay && (
-          <ThreeWayDiff threeWay={it.threeWay} incoming={it.diff} from={from} to={to} resolution={resolution} onResolve={(r) => setSel((s) => setResolution(s, it.key, it.status, r))} />
+          <DiffNamesProvider value={names}><ThreeWayDiff threeWay={it.threeWay} incoming={it.diff} from={from} to={to} resolution={resolution} onResolve={(r) => setSel((s) => setResolution(s, it.key, it.status, r))} /></DiffNamesProvider>
         )}
         {mine.length > 0 && <SuggestionsList title="This item needs" suggestions={mine} onAdd={onAddSuggestion} />}
         <Tabs value={view} onValueChange={setView}>

@@ -16,18 +16,23 @@ import { Field, Input } from '../../components/ui/Field';
 import { SecretInput } from '../../components/ui/SecretInput';
 import { useToast } from '../../components/ui/Toast';
 import { formatDateTime } from '../../lib/format';
+import { isDefaultAuthor } from '../../lib/history';
 import { useProjectContext } from '../../lib/project';
+
+// The built-in author (nobody set a name yet) shows as empty fields.
+const shown = (a: Settings['author']) => (isDefaultAuthor(a.name) ? { name: '', email: '' } : a);
 
 function AuthorCard({ projectId, settings, onSaved }: { projectId: string; settings: Settings; onSaved: (s: Settings) => void }) {
   const toast = useToast();
-  const [name, setName] = useState(settings.author.name);
-  const [email, setEmail] = useState(settings.author.email);
+  const unset = isDefaultAuthor(settings.author.name);
+  const [name, setName] = useState(shown(settings.author).name);
+  const [email, setEmail] = useState(shown(settings.author).email);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   useEffect(() => {
-    setName(settings.author.name);
-    setEmail(settings.author.email);
-  }, [settings.author.name, settings.author.email]);
+    setName(shown(settings.author).name);
+    setEmail(shown(settings.author).email);
+  }, [settings.author]);
 
   const submit = async () => {
     setBusy(true);
@@ -44,7 +49,12 @@ function AuthorCard({ projectId, settings, onSaved }: { projectId: string; setti
 
   return (
     <Card>
-      <CardHeader title="Author" description="Snapshots, changesets and promotions are recorded in History under this name." />
+      <CardHeader
+        title="Author"
+        description={unset
+          ? 'No name is set yet, so History shows your snapshots, changesets and promotions as “You”. Add your name so others can tell who did what.'
+          : 'Snapshots, changesets and promotions are recorded in History under this name.'}
+      />
       <div className="grid gap-4 px-5 py-4 sm:grid-cols-2">
         <Field label="Name">{(p) => <Input {...p} value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" />}</Field>
         <Field label="Email">{(p) => <Input {...p} type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />}</Field>
