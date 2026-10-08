@@ -5,7 +5,7 @@
 // not itself in the key set (for example an unchanged form in a compare)
 // appears as a placeholder without a key. Children are served lazily.
 import type { NodeKind, TreeNode } from '../shared/sync-api.ts';
-import { compareText } from './engine-sync.ts';
+import { compareText, segmentLabel } from './engine-sync.ts';
 
 export interface IndexNode {
   id: string;
@@ -34,13 +34,15 @@ const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : undefined);
 
 export function labelFor(key: string, data: unknown): string {
   const d = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
-  const last = key.split('/').pop() ?? key;
+  // Key segments are encoded file names; labels show the names they encode.
+  const seg = (i: number) => segmentLabel(key.split('/')[i] ?? '');
+  const last = segmentLabel(key.split('/').pop() ?? key);
   if (key === 'space') return str(d.name) ?? 'Space';
-  if (/^kapps\/[^/]+\/kapp$/.test(key)) return str(d.name) ?? key.split('/')[1];
-  if (/\/form$/.test(key)) return str(d.name) ?? key.split('/')[3];
+  if (/^kapps\/[^/]+\/kapp$/.test(key)) return str(d.name) ?? seg(1);
+  if (/\/form$/.test(key)) return str(d.name) ?? seg(3);
   if (/\/data$/.test(key)) return 'Reference data';
-  if (/^connections\/[^/]+\/connection$/.test(key)) return str(d.name) ?? key.split('/')[1];
-  if (/^handlers\/[^/]+\/handler$/.test(key)) return str(d.name) ?? key.split('/')[1];
+  if (/^connections\/[^/]+\/connection$/.test(key)) return str(d.name) ?? seg(1);
+  if (/^handlers\/[^/]+\/handler$/.test(key)) return str(d.name) ?? seg(1);
   return str(d.name) ?? str(d.slug) ?? last;
 }
 
@@ -59,11 +61,11 @@ function place(key: string): Placement | null {
   if (p[0] === 'workflows' && p.length === 3) return { kind: 'workflow', parents: [['space', 'Space', 'space', 0], g('group:space/workflows', 'Workflows', 1)] };
   if (p[0] === 'webapis' && p.length === 2) return { kind: 'webapi', parents: [['space', 'Space', 'space', 0], g('group:space/webapis', 'WebAPIs', 2)] };
   if (p[0] === 'kapps' && p.length >= 3) {
-    const kapp: [string, string, NodeKind, number] = [`kapps/${p[1]}/kapp`, p[1], 'kapp', 10];
+    const kapp: [string, string, NodeKind, number] = [`kapps/${p[1]}/kapp`, segmentLabel(p[1]), 'kapp', 10];
     const base = [g('group:kapps', 'Kapps'), kapp];
     if (p.length === 3 && p[2] === 'kapp') return { kind: 'kapp', parents: [g('group:kapps', 'Kapps')] };
     if (p[2] === 'forms' && p.length >= 5) {
-      const form: [string, string, NodeKind, number] = [`kapps/${p[1]}/forms/${p[3]}/form`, p[3], 'form', 10];
+      const form: [string, string, NodeKind, number] = [`kapps/${p[1]}/forms/${p[3]}/form`, segmentLabel(p[3]), 'form', 10];
       const forms = [...base, g(`group:kapps/${p[1]}/forms`, 'Forms', 1)];
       if (p.length === 5 && p[4] === 'form') return { kind: 'form', parents: forms };
       if (p.length === 5 && p[4] === 'data') return { kind: 'data', parents: [...forms, form] };
@@ -75,7 +77,7 @@ function place(key: string): Placement | null {
   if (p[0] === 'connections' && p.length >= 3) {
     if (p.length === 3 && p[2] === 'connection') return { kind: 'connection', parents: [g('group:connections', 'Connections')] };
     if (p[2] === 'operations' && p.length === 4) {
-      return { kind: 'operation', parents: [g('group:connections', 'Connections'), [`connections/${p[1]}/connection`, p[1], 'connection', 10]] };
+      return { kind: 'operation', parents: [g('group:connections', 'Connections'), [`connections/${p[1]}/connection`, segmentLabel(p[1]), 'connection', 10]] };
     }
   }
   if (p[0] === 'handlers' && p.length === 3) return { kind: 'handler', parents: [g('group:handlers', 'Handlers')] };

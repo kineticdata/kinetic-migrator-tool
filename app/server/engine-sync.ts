@@ -89,6 +89,8 @@ export const buildPlan: (opts: {
 export const diffValues: (from: unknown, to: unknown) => DiffEntry[] = planModule.diffValues;
 export const readTree: (dir: string) => Map<string, unknown> = storeModule.readTree;
 export const writeTree: (dir: string, artifacts: Artifact[]) => void = storeModule.writeTree;
+export const segmentLabel: (segment: string) => string = storeModule.segmentLabel;
+export const removeTree: (dir: string) => void = storeModule.removeTree;
 export const MODULES: EngineModule[] = indexModule.MODULES;
 export const moduleFor: (key: string) => EngineModule | undefined = indexModule.moduleFor;
 export const buildRelationships: (artifacts: Array<{ key: string; data: unknown }>) => Relationships = relationshipsModule.buildRelationships;

@@ -125,7 +125,7 @@ export async function readTreeAt(dir: string, commit: string, subdir: string): P
       if (entry.type === 'tree') await walk(entry.oid, rel);
       else if (entry.type === 'blob' && entry.path.endsWith('.json')) {
         const { blob } = await git.readBlob({ fs, dir, oid: entry.oid });
-        out.set(rel.slice(0, -'.json'.length), JSON.parse(Buffer.from(blob).toString('utf8')));
+        out.set(rel.slice(0, -'.json'.length).normalize('NFC'), JSON.parse(Buffer.from(blob).toString('utf8').replace(/^\uFEFF/, '')));
       }
     }
   };
