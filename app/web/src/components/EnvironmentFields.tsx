@@ -15,13 +15,20 @@ export interface EnvironmentDraft {
 export const emptyDraft = (name = ''): EnvironmentDraft => ({ name, url: '', readOnly: false, username: '', password: '' });
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+// The server says the same (app/server/environments.ts HTTPS_REQUIRED).
+export const HTTPS_REQUIRED = 'Start the address with https://. Plain http:// is only accepted for this computer (localhost, 127.0.0.1 or [::1]).';
+const LOOPBACK = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i;
+
+// https://, or plain http:// to this computer only (credentials never cross a network in clear).
+export const secureAddress = (url: string) => /^https:\/\/[^\s/]+/i.test(url) || LOOPBACK.test(url);
 
 export function draftErrors(d: EnvironmentDraft): { name?: string; url?: string } {
   const out: { name?: string; url?: string } = {};
   if (!d.name.trim()) out.name = 'Give the environment a short name, like dev or test.';
   else if (!NAME.test(d.name)) out.name = 'Use letters, digits, - and _, starting with a letter or digit.';
   if (!d.url.trim()) out.url = 'Enter the address of the Kinetic space.';
-  else if (!/^https?:\/\/[^\s/]+/i.test(d.url.trim())) out.url = 'Start the address with https://';
+  else if (/^http:\/\//i.test(d.url.trim()) && !secureAddress(d.url.trim())) out.url = HTTPS_REQUIRED;
+  else if (!secureAddress(d.url.trim())) out.url = 'Start the address with https://';
   return out;
 }
 

@@ -55,3 +55,16 @@ test('shows protected and credentials status, and tests a connection', async () 
   // The version Test connection detected.
   expect(within(prod).getByText('Kinetic Platform 7.0.0-rc3')).toBeInTheDocument();
 });
+
+test('an environment saved with an http:// address says so on its card', async () => {
+  const problem = 'This address uses http://, which would send your password unencrypted. Change it to https://.';
+  mockApi({
+    'GET /api/projects/:p': project({ environments: [env('dev', { url: 'http://dev.your-space.kinops.io', problem }), env('test')] }),
+    'GET /api/projects/:p/history': [],
+  });
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/settings/environments' });
+  const dev = (await screen.findAllByRole('listitem')).find((li) => li.getAttribute('data-env') === 'dev')!;
+  expect(within(dev).getByRole('alert')).toHaveTextContent(problem);
+  const test = (await screen.findAllByRole('listitem')).find((li) => li.getAttribute('data-env') === 'test')!;
+  expect(within(test).queryByRole('alert')).toBeNull();
+});

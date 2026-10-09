@@ -4,7 +4,7 @@
 // when its body has them (names, not values; redacted and capped). URLs and
 // the rest of the body stay server-side.
 import type { ApiErrorBody } from '../shared/api.ts';
-import { describePlatformError, integratorAuthText, integratorSignInText } from './engine-sync.ts';
+import { describePlatformError, INSECURE_URL_MESSAGE, integratorAuthText, integratorSignInText } from './engine-sync.ts';
 
 export class ApiError extends Error {
   status: number;
@@ -35,6 +35,9 @@ export function toApiError(err: unknown): ApiError {
       return new ApiError(409, 'cancelled', 'The job was cancelled.');
     case 'ReadOnlyError':
       return new ApiError(403, 'read_only', 'This environment is read-only.');
+    case 'InsecureUrlError':
+      // Never sent anything: the address would have carried the password in clear.
+      return new ApiError(400, 'insecure_url', INSECURE_URL_MESSAGE);
     case 'IntegratorAuthUnavailable': {
       // Rebuilt from its fields (never its message), worded as the snapshot warning.
       const i = err as { status?: number | null; version?: string | null; host?: string | null };

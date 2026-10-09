@@ -178,6 +178,10 @@ export const isSecretProperty: (p: unknown) => boolean = secretsModule.isSecretP
 export const describePlatformError: (e: { status?: number; method?: string; body?: unknown }) => string = httpModule.describePlatformError;
 // Why the Integrator could not be signed in to, in plain words (built from
 // the status, platform version and host only).
+// Why credentials must not be sent to an environment address (plain http to
+// another machine), or null when they may (see lib/sync/http.mjs).
+export const insecureUrlReason: (url: string) => string | null = httpModule.insecureUrlReason;
+export const INSECURE_URL_MESSAGE: string = httpModule.INSECURE_URL_MESSAGE;
 export const integratorAuthText: (e: { status?: number | null; version?: string | null; host?: string | null }) => string = httpModule.integratorAuthText;
 // A refused or failed Integrator sign-in (never degrades), in plain words.
 export const integratorSignInText: (e: { status?: number | null; redirected?: boolean; sso?: boolean; refused?: boolean; noSession?: boolean; attempts?: number; host?: string | null }) => string = httpModule.integratorSignInText;

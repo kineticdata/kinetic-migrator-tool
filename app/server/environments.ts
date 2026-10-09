@@ -9,6 +9,7 @@ import type {
 } from '../shared/api.ts';
 import { ApiError, badRequest, notFound, toApiError } from './errors.ts';
 import { envKey, loadOverrides, stableStringify, validateEnvName, type ClientFactory, type EngineEnv } from './engine.ts';
+import { insecureUrlReason } from './engine-sync.ts';
 import {
   commitChange, displayName, isPlainObject, readJsonFile, readMeta, secretsId, withProjectLock, withSecretsLock, writeMeta,
   type ProjectRef,
@@ -75,7 +76,20 @@ function saveOrder(dir: string, order: string[]): void {
   writeMeta(dir, { ...readMeta(dir), order });
 }
 
-function parseUrl(value: unknown): string {
+// The form says the same (app/web/src/components/EnvironmentFields.tsx).
+export const HTTPS_REQUIRED = 'Start the address with https://. Plain http:// is only accepted for this computer (localhost, 127.0.0.1 or [::1]).';
+
+// Why this environment's address cannot be used (plain http to another
+// machine), or null. Such a project still opens; every action that would
+// sign in refuses with this message.
+export function environmentUrlProblem(url: string): string | null {
+  return url ? insecureUrlReason(url) : null;
+}
+
+// `keep`: the environment's current address, accepted unchanged even when it
+// is plain http (so it can still be reordered or protected while the address
+// is fixed); a new or changed address must be https://.
+function parseUrl(value: unknown, keep?: string): string {
   if (typeof value !== 'string') throw badRequest('"url" is required.');
   let u: URL;
   try {
@@ -86,7 +100,9 @@ function parseUrl(value: unknown): string {
   if (u.protocol !== 'https:' && u.protocol !== 'http:') throw badRequest('"url" must start with https:// or http://.');
   if (u.username || u.password) throw badRequest('"url" must not contain credentials.');
   if (u.search || u.hash) throw badRequest('"url" must be the space address only.');
-  return `${u.origin}${u.pathname}`.replace(/\/+$/, '');
+  const url = `${u.origin}${u.pathname}`.replace(/\/+$/, '');
+  if (insecureUrlReason(url) && url !== keep) throw badRequest(HTTPS_REQUIRED);
+  return url;
 }
 
 export function writeEnvironment(dir: string, env: string, def: EnvironmentFile): void {
@@ -94,7 +110,7 @@ export function writeEnvironment(dir: string, env: string, def: EnvironmentFile)
   writeFileSync(envFile(dir, env), stableStringify({ url: def.url, readOnly: def.readOnly }));
 }
 
-export function validateNewEnvironment(body: unknown): EnvironmentFile & { position?: number } {
+export function validateNewEnvironment(body: unknown, keepUrl?: string): EnvironmentFile & { position?: number } {
   if (!isPlainObject(body)) throw badRequest('Expected a JSON object.');
   for (const k of Object.keys(body)) {
     if (!['url', 'readOnly', 'position', 'name'].includes(k)) throw badRequest('Unknown field.');
@@ -103,13 +119,14 @@ export function validateNewEnvironment(body: unknown): EnvironmentFile & { posit
   if ('position' in body && (!Number.isInteger(body.position) || (body.position as number) < 0)) {
     throw badRequest('"position" must be a whole number from 0.');
   }
-  return { url: parseUrl(body.url), readOnly: body.readOnly === true, position: body.position as number | undefined };
+  return { url: parseUrl(body.url, keepUrl), readOnly: body.readOnly === true, position: body.position as number | undefined };
 }
 
 export async function putEnvironment(ref: ProjectRef, env: string, body: unknown): Promise<void> {
   checkEnvName(env);
   if (isPlainObject(body) && 'name' in body) throw badRequest('Unknown field.');
-  const input = validateNewEnvironment(body);
+  const current = environmentExists(ref.dir, env) ? readEnvironmentFile(ref.dir, env).url : undefined;
+  const input = validateNewEnvironment(body, current);
   await withProjectLock(ref, async () => {
     const existed = environmentExists(ref.dir, env);
     if (!existed && environmentNames(ref.dir).some((n) => n.toLowerCase() === env.toLowerCase())) {
@@ -229,6 +246,9 @@ export async function setCredentials(ref: ProjectRef, env: string, body: unknown
 export async function resolveEnv(ref: ProjectRef, env: string, store: SecretStore, extraVars: Record<string, string> = {}): Promise<EngineEnv> {
   requireEnv(ref, env);
   const def = readEnvironmentFile(ref.dir, env);
+  // Before any credential is read: nothing signs in over plain http.
+  const insecure = environmentUrlProblem(def.url);
+  if (insecure) throw new ApiError(400, 'insecure_url', `${displayName(env)}: ${insecure}`);
   const sid = await secretsId(ref);
   const username = await store.get(accountFor(sid, env, 'credentials', 'username'));
   const password = await store.get(accountFor(sid, env, 'credentials', 'password'));
