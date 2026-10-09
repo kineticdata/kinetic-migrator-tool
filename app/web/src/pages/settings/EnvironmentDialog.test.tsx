@@ -35,3 +35,27 @@ test('saving sends the password once and leaves no copy in the query client', as
   expect(mutations).not.toContain(SECRET);
   expect(queries).not.toContain(SECRET);
 });
+
+test('an http:// address to another machine is refused before anything is sent; localhost is accepted', async () => {
+  const m = mockApi({
+    'PUT /api/projects/:p/environments/:env': project({ environments: [env('dev'), env('qa')] }),
+    'PUT /api/projects/:p/environments/:env/credentials': { username: true, password: true },
+    'POST /api/projects/:p/environments/:env/test': { ok: true, steps: [{ step: 'core', label: 'Core sign-in', ok: true }] },
+  });
+  const user = userEvent.setup();
+  renderWithApp(<EnvironmentDialog projectId="acme-demo" environment={null} onClose={() => {}} />);
+  await user.type(screen.getByLabelText('Environment name'), 'qa');
+  await user.type(screen.getByLabelText('Space URL'), 'http://qa.your-space.kinops.io');
+  await user.type(screen.getByLabelText('Username'), 'admin');
+  await user.type(screen.getByLabelText('Password'), SECRET);
+  await user.click(screen.getByRole('button', { name: 'Test connection' }));
+  expect(await screen.findByText(/^Start the address with https:\/\/\. Plain http:\/\/ is only accepted for this computer/)).toBeInTheDocument();
+  expect(m.callsTo('PUT', '/api/projects/acme-demo/environments/qa')).toHaveLength(0);
+  expect(m.callsTo('PUT', '/api/projects/acme-demo/environments/qa/credentials')).toHaveLength(0);
+
+  await user.clear(screen.getByLabelText('Space URL'));
+  await user.type(screen.getByLabelText('Space URL'), 'http://localhost:8080');
+  await user.click(screen.getByRole('button', { name: 'Test connection' }));
+  await screen.findByText('Connected');
+  expect(m.callsTo('PUT', '/api/projects/acme-demo/environments/qa')[0].body).toMatchObject({ url: 'http://localhost:8080' });
+});

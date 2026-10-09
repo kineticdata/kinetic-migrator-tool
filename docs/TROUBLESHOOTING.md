@@ -66,6 +66,32 @@ Environments → Edit. On the command line the message is "No credentials for
 Settings → Environments → Edit, then **Test connection**. The account must
 be a space admin with a local password.
 
+### "This address uses http://, which would send your password unencrypted. Change it to https://."
+
+**Cause:** the environment's Space URL starts with `http://` and is not this
+computer. Kinetic Migrator never sends a username or password over plain
+`http://` to another machine, so Test connection, snapshots, comparisons
+against the live space, plans and applies refuse it; the environment card in
+Settings → Environments shows the same message. The project still opens.
+**Fix:** Settings → Environments → Edit, and change the Space URL to its
+`https://` address. On the command line, edit `url` in
+`environments/<env>.json`.
+
+### "Start the address with https://. Plain http:// is only accepted for this computer (localhost, 127.0.0.1 or [::1])."
+
+**Cause:** a new or changed Space URL starts with `http://`. Only
+`http://localhost`, `http://127.0.0.1` and `http://[::1]` (any port) are
+accepted, for a space running on this computer. **Fix:** use the space's
+`https://` address.
+
+### "The space redirected the request to …; not following."
+
+**Cause:** the space (or a proxy in front of it) answered with a redirect
+that Kinetic Migrator will not follow: to another address, to plain
+`http://`, or for a change (a write), whose body can hold passwords. A
+common cause is a proxy that redirects https requests to http. **Fix:** use
+the space's final `https://` address as the Space URL, or fix the proxy.
+
 ### "Could not reach the server; check the URL."
 
 **Cause:** the host does not answer (wrong address, VPN, proxy).
@@ -146,7 +172,7 @@ edited by hand). Take a new snapshot of that environment.
 
 ## Plans
 
-### "Routine … is used by exported workflows but does not exist in the target" / "Handler … is used by exported workflows but is not installed in the target"
+### "Routine … is used by workflows being promoted but does not exist in the target" / "Handler … is used by workflows being promoted but is not installed in the target"
 
 **Cause:** a selected workflow, WebAPI or routine runs a routine or handler the
 target lacks, and it is not in the selection. **Fix:** add it to the changeset
@@ -160,6 +186,14 @@ must be installed by hand.
 the same name, or renamed. Forms and workflows refer to connections by id,
 so the promoted one needs the source's id. **Fix:** delete or rename the
 target's copy, take a new snapshot, then plan again.
+
+### "Override for "<key>" matches nothing in the source snapshot (check the key against the file paths under snapshots/<env>/)"
+
+**Cause:** a saved environment value (`overrides/<target>.json`) names an item
+that is not being promoted, often after a rename. The app shows "A saved
+environment value for … matches nothing being promoted, so it is ignored."
+**Fix:** compare the key with the file paths under `snapshots/<source>/`
+(without `.json`), and correct or remove the entry.
 
 ### "<key>: not in the source snapshot"
 
@@ -230,16 +264,21 @@ shows only "The Kinetic Platform returned an error (<status>)." **Fix:**
 depends on the message. For "<name> may not be empty" on a handler, see
 [Handlers](#handlers).
 
-### "The apply finished, but Kinetic Migrator could not take a new snapshot of Test. Take one before comparing."
+### "The changes were applied, but the snapshot of Test afterwards failed: …. Take a snapshot before comparing again."
 
-**Cause:** the snapshot taken after the apply failed. The apply itself is
-complete. **Fix:** take a snapshot of the target before comparing, otherwise
-Compare shows the pre-apply state.
+**Cause:** the snapshot taken after the apply failed; the reason follows
+"failed:". The apply itself is complete. The Plan page shows "Applied to
+Test, with a warning" and History labels the run "Applied, snapshot failed"
+(the run record keeps the warning; a separate commit "Recorded that the
+snapshot of Test after the apply failed" saves it). **Fix:** take a snapshot
+of the target before comparing, otherwise Compare shows the pre-apply state.
 
-### "Connection … will be created without credentials" / "created with an empty auth "password"; set it in the target"
+### "Connection … will be created without credentials" / "created with an empty auth "password"; set it in the target" / "created with an empty "password"; set it in the target"
 
-**Cause:** no secret was entered for a new connection. **Fix:** enter it under
-Secrets needed, or set it in the target's console after the apply.
+**Cause:** no secret was entered for a new connection. The second form is a
+credential kept outside the connection's auth settings, such as a database
+connection's password. **Fix:** enter it under Secrets needed, or set it in
+the target's console after the apply.
 
 ### A KQL search fails with "requires index definition" after a promotion
 

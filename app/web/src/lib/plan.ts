@@ -49,7 +49,7 @@ function plainWarning(w: string, plan: PlanResult): { message: string; key: stri
   if (w.startsWith('Drift check for the space skipped: ')) {
     return { key: 'space', message: `The space's kept settings changed since it was last promoted to ${To}, so changes made to it in ${To} since then cannot be detected this time; this plan does not report the space as drifted. Applying records the current settings, and later plans check again.` };
   }
-  m = /^Override for "(.+)" matches nothing in the export/.exec(w);
+  m = /^Override for "(.+)" matches nothing in the (export|source snapshot)/.exec(w);
   if (m) return { key: m[1], message: `A saved environment value for ${nameOfKey(m[1])} matches nothing being promoted, so it is ignored.` };
   m = /^(.+?): secret property "(.+)" is not set; set it in the target console$/.exec(w);
   if (m) return { key: m[1], message: `The secret ${m[2]} of ${nameOfKey(m[1])} is not set; set it in ${To}’s console.` };
@@ -87,11 +87,11 @@ export function errorFix(message: string, from: string, to: string): { message: 
   const From = envLabel(from);
   const To = envLabel(to);
   const rules: Array<[RegExp, string]> = [
-    [/^Routine .+ is used by exported workflows but does not exist in the target/, `Add the routine to the changeset, or create it in ${To} first, then plan again.`],
-    [/^Handler .+ is used by exported workflows but is not installed in the target/, `Add the handler to the changeset, or install it in ${To} first, then plan again.`],
+    [/^Routine .+ is used by (?:exported workflows|workflows being promoted) but does not exist in the target/, `Add the routine to the changeset, or create it in ${To} first, then plan again.`],
+    [/^Handler .+ is used by (?:exported workflows|workflows being promoted) but is not installed in the target/, `Add the handler to the changeset, or install it in ${To} first, then plan again.`],
     [/: not in the source snapshot$/, `Take a new snapshot of ${From}, or take this item out of the changeset.`],
     [/(same name but id|probably renamed)/, `Reconcile it by hand in ${To} (rename or remove one of the two), take a new snapshot, then plan again.`],
-    [/^Unrecognized file in export/, `Take a new snapshot of ${From}.`],
+    [/^Unrecognized file in (export|the source snapshot)/, `Take a new snapshot of ${From}.`],
     [/can never be removed|cannot be removed|are never removed as an item/, 'Take it out of the removals, then plan again.'],
     [/: is in the source too; only items that are only in the target can be removed$/, `It is in ${From} too, so it would be promoted, not removed: take it out of the removals, then plan again.`],
   ];
@@ -279,20 +279,22 @@ export interface ApplyOutcome {
   done: number;
   error: string | null;
   backupCommit: string | null;
+  // Applied, but the snapshot taken afterwards failed (see ApplyResult).
+  warnings: string[];
 }
 
 // The outcome of a finished apply job, with or without a result (a job that
 // failed or was cancelled before reporting has none).
 export function applyOutcome(
-  job: { status: string; result?: { status: Outcome; done: number; error: string | null; backupCommit: string | null }; error: string | null },
+  job: { status: string; result?: { status: Outcome; done: number; error: string | null; backupCommit: string | null; warnings?: string[] }; error: string | null },
   checklist: ChecklistState,
 ): ApplyOutcome {
   const r = job.status === 'succeeded' ? job.result : undefined;
-  if (r) return { status: r.status, done: r.done, error: r.error, backupCommit: r.backupCommit };
+  if (r) return { status: r.status, done: r.done, error: r.error, backupCommit: r.backupCommit, warnings: r.warnings ?? [] };
   const status: Outcome = job.status === 'cancelled' ? 'cancelled' : 'failed';
   const done = Object.values(checklist.items).filter((i) => i.status === 'done').length;
   const error = job.error ?? (status === 'cancelled' ? 'The apply was cancelled.' : 'The apply did not finish.');
-  return { status, done, error, backupCommit: null };
+  return { status, done, error, backupCommit: null, warnings: [] };
 }
 
 // A finished run leaves no row running: on success a row still running

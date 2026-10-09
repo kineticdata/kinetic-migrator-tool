@@ -73,6 +73,9 @@ function RunFacts({ projectId, run }: { projectId: string; run: RunRecord }) {
         {c.skipped > 0 && <Badge>{c.skipped} skipped</Badge>}
       </div>
       {run.error && <InlineError error={run.error} />}
+      {(run.warnings ?? []).map((w) => (
+        <p key={w} role="alert" className="rounded-lg border border-drift/40 bg-drift-soft px-3 py-2 text-sm text-fg">{w}</p>
+      ))}
       {failed.length > 0 && (
         <div>
           <h3 className="mb-1 text-xs font-semibold text-muted">Failed items</h3>

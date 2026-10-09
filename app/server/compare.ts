@@ -14,7 +14,7 @@ import { capturingFactory, crossVersionFor, rememberPlatform } from './platforms
 import { readTreeAt } from './repo.ts';
 import { loadConfig, loadOverrides, type ClientFactory, type EngineEnv } from './engine.ts';
 import {
-  MODULES, buildPlan, buildRelationships, collectionWord, compareArtifacts, computePlan, diffItem, isOmittedKey, loadState, moduleFor, omittedBetween, suggest, targetOnlyEntries,
+  MODULES, buildPlan, buildRelationships, collectionWord, compareArtifacts, computePlan, diffItem, isOmittedKey, loadState, moduleFor, omittedBetween, redacted, suggest, targetOnlyEntries,
   unresolvedErrors, withoutOmitted, type EnginePlan, type LoadedTree, type Omission, type Relationships, type TargetOnlyEntry,
 } from './engine-sync.ts';
 import { readEnvironmentFile, resolveEnv } from './environments.ts';
@@ -287,12 +287,12 @@ export function registerCompareRoutes(router: Router, ctx: SyncContext): void {
     const key = query.get('key') ?? '';
     const i = c.items.get(key);
     if (!i) throw notFound('No such item in this comparison.');
-    const item: CompareItem = { key, type: i.type, label: label(c, key), status: i.status, diff: i.diff, incoming: i.incoming, current: i.current };
+    const item: CompareItem = { key, type: i.type, label: label(c, key), status: i.status, diff: i.diff, incoming: redacted(key, i.incoming), current: redacted(key, i.current) };
     if (i.entries?.length) item.targetOnlyEntries = i.entries.map((e) => ({ ...e, word: collectionWord(e.collection) }));
     if (i.status === 'drifted') {
       const last = await lastPromoted(ref, c.result.to, key);
       item.threeWay = {
-        lastPromoted: last?.data ?? null, lastPromotedAt: last?.at ?? null, target: i.current, incoming: i.incoming,
+        lastPromoted: redacted(key, last?.data ?? null), lastPromotedAt: last?.at ?? null, target: redacted(key, i.current), incoming: redacted(key, i.incoming),
         targetChanges: last ? diffItem(moduleFor(key), last.data, i.current) : [],
       };
     }

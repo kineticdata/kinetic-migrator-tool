@@ -119,7 +119,7 @@ environments go at the end of the pipeline.
 | Field | Notes |
 |-------|-------|
 | Environment name | Letters, digits, `-` and `_`, starting with a letter or digit, for example `dev`, `test` or `prod`. It is shown capitalised ("Dev"). It cannot be changed later. |
-| Space URL | The address of the space, for example `https://dev.example.com`. No path, query or sign-in details. |
+| Space URL | The address of the space, for example `https://dev.example.com`. It must start with `https://`; plain `http://` is accepted only for a space on this computer (`localhost`, `127.0.0.1` or `[::1]`), because it would send the password unencrypted. No path, query or sign-in details. |
 | Protected | When on, Kinetic Migrator only reads from this environment and never changes it. |
 | Username | A space admin with a password. |
 | Password | Write-only: once saved, the field shows that a password is set but never shows it. |
@@ -143,7 +143,10 @@ Credentials are kept in your system keychain (macOS Keychain, Windows
 Credential Manager, or the Secret Service on Linux), never in the project.
 The environment list shows "Username set · Password set", or a warning when
 something is missing. An environment without a password shows "No password
-saved. Add credentials" on the Overview.
+saved. Add credentials" on the Overview. An environment saved earlier with
+a plain `http://` address to another machine shows "This address uses
+http://, which would send your password unencrypted. Change it to https://."
+on its card, and nothing signs in to it until the address is changed.
 
 If no keychain is available, the Projects page says "No system keychain was
 found, so passwords are kept only until Kinetic Migrator stops." See
@@ -478,7 +481,9 @@ Applying then saves it as Test's value.
 
 **Secrets needed.** Passwords and keys for connections being created and
 for handlers, each labelled like "Ticketing › password" or "Mail Send ›
-Password". "They are never shown again; leave one empty to keep what Test
+Password". A database connection's password, kept in its settings rather
+than its authentication, is asked for the same way ("Warehouse DB ›
+password"). "They are never shown again; leave one empty to keep what Test
 has." For a handler already in the target, a secret it has stored is "Not
 readable in Test — leave blank to keep Test's value"; a required one that is
 empty there says "Empty in Test; needed before the handler's settings can
@@ -518,13 +523,14 @@ Behind the scenes, in this order:
    order.
 6. The run record and the changeset's "Applied to" are committed.
 7. A fresh snapshot of the target is taken, so Compare and Explore show it as
-   the apply left it.
+   the apply left it. If it fails, the run keeps a warning (see Outcomes).
 
 ### Outcomes
 
 | Heading | Meaning |
 |---------|---------|
 | Applied to Test | Every change was made. Choose **View in History** or **Back to Compare**. |
+| Applied to Test, with a warning | Every change was made, but the snapshot taken afterwards failed: "The changes were applied, but the snapshot of Test afterwards failed: …. Take a snapshot before comparing again." History shows the run as "Applied, snapshot failed". |
 | Partly applied to Test | Some items were skipped or need attention (for example a handler installed without a required setting). |
 | Failed to apply to Test | An item failed; the run stopped there. |
 | Cancelled applying to Test | You cancelled. |
@@ -593,7 +599,8 @@ from Test**.
   still go ahead." For an item that is also only in the target, choose
   **Also remove** (or **Also remove all**) to add it to the removals. Teams,
   models and file resources are also found by name ("may use"), for example a
-  team named in a security policy. A warning never blocks the apply.
+  team named in a security policy. A team is matched by its whole name: team
+  `Ops` is not found in `DevOps` or `IT::Ops`. A warning never blocks the apply.
 - **Notes.** "Removing a team also removes its memberships; they are not kept
   in any snapshot." "Removing a kapp deletes all of its forms and
   submissions." "Removing a form deletes all of its submissions."

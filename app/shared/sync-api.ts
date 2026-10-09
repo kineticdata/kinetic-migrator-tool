@@ -413,6 +413,9 @@ export interface RunRecord {
   items: RunItemOutcome[];
   done: number;
   error: string | null;
+  // What went wrong after the outcome was decided (the snapshot taken after
+  // the apply failed); absent when nothing did.
+  warnings?: string[];
 }
 
 export interface ApplyResult {
@@ -425,6 +428,8 @@ export interface ApplyResult {
   snapshotCommit?: string | null;
   done: number;
   error: string | null;
+  // As in the run record: the snapshot after the apply failed.
+  warnings?: string[];
 }
 
 // ---- History ---------------------------------------------------------------
@@ -445,6 +450,8 @@ export interface HistoryEvent {
   drifted: string[];
   // Snapshots and backups: what was not captured, and why.
   notes?: string[];
+  // Applies and restores: the run's warnings (the snapshot afterwards failed).
+  warnings?: string[];
 }
 
 export interface HistoryDetail {

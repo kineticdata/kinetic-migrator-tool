@@ -160,3 +160,21 @@ test('an empty history shows a calm empty state', async () => {
   renderWithApp(<AppRoutes />, { route: '/p/acme-demo/history' });
   expect(await screen.findByText(/Nothing has happened yet/)).toBeInTheDocument();
 });
+
+test('an apply whose snapshot afterwards failed is not a plain Applied: the timeline and the detail say so', async () => {
+  const warning = 'The changes were applied, but the snapshot of Test afterwards failed: the server returned an error (503). Take a snapshot before comparing again.';
+  const event = historyEvent({ id: 'c-warn', commit: 'c-warn', type: 'applied', title: "Applied 'Q4 forms' to Test", env: 'test', at: '2026-10-08T10:00:00Z', runId: 'r2', status: 'applied', warnings: [warning] });
+  const run: RunRecord = { ...RUN, id: 'r2', status: 'applied', items: [{ key: 'teams/Ops', status: 'done' }], done: 1, error: null, warnings: [warning] };
+  mockApi({
+    'GET /api/projects/:p': project(),
+    'GET /api/projects/:p/history': [event],
+    'GET /api/projects/:p/history/:commit': { event, run },
+    'GET /api/projects/:p/explore/:env/item': { status: 404, json: { error: { code: 'not_found', message: 'No such item.' } } },
+  });
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/history?commit=c-warn' });
+  const timeline = await screen.findByRole('list', { name: 'Timeline' });
+  expect(within(timeline).getByText('Applied, snapshot failed')).toBeInTheDocument();
+  expect(within(timeline).queryByText('Applied')).toBeNull();
+  const panel = await screen.findByRole('region', { name: 'Details' });
+  expect(await within(panel).findByRole('alert')).toHaveTextContent(warning);
+});

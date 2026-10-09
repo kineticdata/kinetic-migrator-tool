@@ -5,7 +5,7 @@ import type { CatalogKapp, ProjectCatalog } from '../shared/api.ts';
 import type { ExploreItem, RelatedItem, SearchResponse, SearchResult, TreeNode } from '../shared/sync-api.ts';
 import { NOT_CAPTURED } from './history.ts';
 import { badRequest, notFound } from './errors.ts';
-import { compareText, moduleFor, segmentLabel, summarize, type Edge } from './engine-sync.ts';
+import { compareText, moduleFor, redacted, segmentLabel, summarize, type Edge } from './engine-sync.ts';
 import { hasEnvSecret, pipelineOrder } from './environments.ts';
 import type { ProjectRef } from './project-meta.ts';
 import { log } from './repo.ts';
@@ -90,7 +90,7 @@ async function summaryExtra(ref: ProjectRef, snap: Snapshot, key: string, store:
 
 export async function exploreItem(ref: ProjectRef, snap: Snapshot, key: string, store: SecretStore): Promise<ExploreItem> {
   if (!snap.artifacts.has(key) || key === 'task-refs') throw notFound('No such item in this snapshot.');
-  const data = snap.artifacts.get(key);
+  const data = redacted(key, snap.artifacts.get(key));
   const type = moduleFor(key)?.type ?? 'unknown';
   const rel = snap.relationships();
   const history = (await log(ref.dir, { path: `snapshots/${snap.env}/${key}.json`, limit: 50 }))

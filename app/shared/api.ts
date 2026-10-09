@@ -86,6 +86,8 @@ export interface EnvironmentInfo {
   // Last detected (Test connection, snapshot, plan, live compare); null
   // until then (absent from an older server).
   platform?: PlatformInfo | null;
+  // Why the address cannot be used (plain http:// to another machine); absent when it can.
+  problem?: string;
 }
 
 export interface ProjectDetail extends ProjectSummary {

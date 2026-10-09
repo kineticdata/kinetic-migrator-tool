@@ -58,7 +58,7 @@ letters and digits turned into `_` (`prod-eu` → `PROD_EU`).
 | Variable | Used for |
 |----------|----------|
 | `KINETIC_<ENV>_USERNAME`, `KINETIC_<ENV>_PASSWORD` | Signing in to the space (Core, Task and Integrator) |
-| `KINETIC_<ENV>_SECRET_<CONNECTION>__<FIELD>` | A secret auth field of a connection created in `<ENV>`, for example `KINETIC_PROD_SECRET_TICKETING__PASSWORD` or `__CLIENT_SECRET` |
+| `KINETIC_<ENV>_SECRET_<CONNECTION>__<FIELD>` | A secret auth field of a connection created in `<ENV>`, for example `KINETIC_PROD_SECRET_TICKETING__PASSWORD` or `__CLIENT_SECRET`; also a secret kept in the connection's settings outside its auth, such as a database connection's password (`KINETIC_PROD_SECRET_WAREHOUSE_DB__PASSWORD`) |
 | `KINETIC_<ENV>_HANDLER_<DEFINITION_ID>__<PROPERTY>` | A secret property of a handler installed (or re-installed) in `<ENV>`, for example `KINETIC_PROD_HANDLER_MAIL_SEND_V1__PASSWORD` |
 
 Note the double underscore before the field or property. `<CONNECTION>`,
@@ -99,6 +99,12 @@ does not ignore `.env.*` or `compares/`. Add one file per environment in
 ```json
 { "url": "https://test.example.com" }
 ```
+
+The `url` must start with `https://`. Plain `http://` is accepted only for a
+space on this computer (`localhost`, `127.0.0.1`, `[::1]`); any other
+`http://` address is refused before anything is sent: "environments/test.json:
+This address uses http://, which would send your password unencrypted.
+Change it to https://."
 
 ## export
 

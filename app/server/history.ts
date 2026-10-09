@@ -48,6 +48,7 @@ export function eventsFor(ref: ProjectRef, entry: LogEntry): HistoryEvent[] {
     id: entry.oid, commit: entry.oid, type, title, at: entry.at, author: entry.author.name,
     env: trailers.Environment ?? null, runId, changesetId: trailers.Changeset ?? null, status: run?.status ?? null, drifted,
     ...(notes.length && (type === 'snapshot' || type === 'backup') ? { notes } : {}),
+    ...(run?.warnings?.length && (type === 'applied' || type === 'restore') ? { warnings: run.warnings } : {}),
   };
   const out = [base];
   if (type === 'snapshot' && drifted.length) {

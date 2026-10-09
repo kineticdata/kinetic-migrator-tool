@@ -24,6 +24,8 @@ import * as httpModule from '../../lib/sync/http.mjs';
 // @ts-expect-error -- untyped engine module
 import * as handlersModule from '../../lib/sync/artifacts/handlers.mjs';
 // @ts-expect-error -- untyped engine module
+import * as connectionsModule from '../../lib/sync/artifacts/connections.mjs';
+// @ts-expect-error -- untyped engine module
 import * as envModule from '../../lib/sync/env.mjs';
 // @ts-expect-error -- untyped engine module
 import * as overridesModule from '../../lib/sync/overrides.mjs';
@@ -97,6 +99,8 @@ export interface EngineModule {
   scope: string | null;
   applyable?: boolean;
   owns(key: string): boolean;
+  // Content without credentials (connections), for anything shown or diffed.
+  redact?(data: unknown): unknown;
 }
 
 export interface Edge { key: string; kind: string; reason: string }
@@ -157,6 +161,12 @@ export const isReservedDeviceName: (name: string) => boolean = storeModule.isRes
 export const removeTree: (dir: string) => void = storeModule.removeTree;
 export const MODULES: EngineModule[] = indexModule.MODULES;
 export const moduleFor: (key: string) => EngineModule | undefined = indexModule.moduleFor;
+// An item's content as it may be shown: its module's redact (credentials a
+// snapshot taken before they were stripped may still hold), else as is.
+export function redacted(key: string, data: unknown): unknown {
+  const mod = moduleFor(key);
+  return mod?.redact && data && typeof data === 'object' ? mod.redact(data) : data;
+}
 export const buildRelationships: (artifacts: Array<{ key: string; data: unknown }>) => Relationships = relationshipsModule.buildRelationships;
 export const suggest: (opts: { selected: Set<string>; relationships: Relationships; changedKeys: Set<string>; targetOf?: (key: string) => any }) => Suggestion[] = relationshipsModule.suggest;
 export const summarize: (key: string, data: unknown, type: string, extra?: Record<string, unknown>) => Summary = summariesModule.summarize;
@@ -173,11 +183,18 @@ export const driftedFrom: (scope: string | null, data: unknown, recorded: string
 export const isSecretName: (name: string) => boolean = secretsModule.isSecretName;
 export const AUTH_SECRET_FIELDS: Readonly<Record<string, readonly string[]>> = secretsModule.AUTH_SECRET_FIELDS;
 export const isSecretProperty: (p: unknown) => boolean = secretsModule.isSecretProperty;
+// The secret fields a new connection needs: auth ones and credentials kept
+// elsewhere in its config (a SQL connection's password), see connections.mjs.
+export const engineConnectionSecretFields: (data: unknown) => string[] = connectionsModule.connectionSecretFields;
 // A platform failure in plain words, with the platform's own message and
 // error list when its body has them (see lib/sync/http.mjs).
 export const describePlatformError: (e: { status?: number; method?: string; body?: unknown }) => string = httpModule.describePlatformError;
 // Why the Integrator could not be signed in to, in plain words (built from
 // the status, platform version and host only).
+// Why credentials must not be sent to an environment address (plain http to
+// another machine), or null when they may (see lib/sync/http.mjs).
+export const insecureUrlReason: (url: string) => string | null = httpModule.insecureUrlReason;
+export const INSECURE_URL_MESSAGE: string = httpModule.INSECURE_URL_MESSAGE;
 export const integratorAuthText: (e: { status?: number | null; version?: string | null; host?: string | null }) => string = httpModule.integratorAuthText;
 // A refused or failed Integrator sign-in (never degrades), in plain words.
 export const integratorSignInText: (e: { status?: number | null; redirected?: boolean; sso?: boolean; refused?: boolean; noSession?: boolean; attempts?: number; host?: string | null }) => string = httpModule.integratorSignInText;

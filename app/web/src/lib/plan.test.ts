@@ -66,7 +66,7 @@ test('warnings read plainly; a missing attribute is taken care of by filling its
     environmentValues: [ev('kapps/hr/kapp#attributes.Web Server Url', { label: 'Web Server Url', origin: 'attribute', to: null, required: true })],
     warnings: [
       'kapps/hr/kapp: environment-bound attribute "Web Server Url" is empty in the target and no override sets it',
-      'Override for "kapps/old/kapp" matches nothing in the export (check the key against the export/ file paths)',
+      'Override for "kapps/old/kapp" matches nothing in the source snapshot (check the key against the file paths under snapshots/dev/)',
       'Something new',
     ],
   });
@@ -91,9 +91,9 @@ test('kept space settings: the "not copied" note is covered by Environment value
 });
 
 test('plan errors come with a plain fix', () => {
-  expect(errorFix('Routine Notify Manager is used by exported workflows but does not exist in the target', 'dev', 'test').fix)
+  expect(errorFix('Routine Notify Manager is used by workflows being promoted but does not exist in the target', 'dev', 'test').fix)
     .toMatch(/Add the routine to the changeset, or create it in Test first/);
-  expect(errorFix('Handler smtp_send_v1 is used by exported workflows but is not installed in the target', 'dev', 'test').fix)
+  expect(errorFix('Handler smtp_send_v1 is used by workflows being promoted but is not installed in the target', 'dev', 'test').fix)
     .toMatch(/install it in Test/);
   expect(errorFix('kapps/hr/forms/a/form: not in the source snapshot', 'dev', 'test').fix).toMatch(/new snapshot of Dev/);
   expect(errorFix('kapps/hr/forms/a/form: id 12 already exists in the target as kapps/hr/forms/b/form; it was probably renamed — reconcile by hand before promoting', 'dev', 'test').fix)
@@ -190,9 +190,11 @@ test('links to the backup and to a restore from it', () => {
 test('the outcome of a finished apply, with or without a result', () => {
   const list = checklistFrom([{ type: 'item', key: 'a', status: 'done' }, { type: 'item', key: 'b', status: 'running' }]);
   const result = { status: 'cancelled' as const, done: 1, error: 'The apply was cancelled.', backupCommit: 'c-b' };
-  expect(applyOutcome({ status: 'succeeded', result, error: null }, list)).toEqual(result);
-  expect(applyOutcome({ status: 'failed', error: 'Lost contact with the job.' }, list)).toEqual({ status: 'failed', done: 1, error: 'Lost contact with the job.', backupCommit: null });
-  expect(applyOutcome({ status: 'cancelled', error: null }, list)).toEqual({ status: 'cancelled', done: 1, error: 'The apply was cancelled.', backupCommit: null });
+  expect(applyOutcome({ status: 'succeeded', result, error: null }, list)).toEqual({ ...result, warnings: [] });
+  const warned = { status: 'applied' as const, done: 2, error: null, backupCommit: 'c-b', warnings: ['The changes were applied, but the snapshot of Test afterwards failed: x. Take a snapshot before comparing again.'] };
+  expect(applyOutcome({ status: 'succeeded', result: warned, error: null }, list)).toEqual(warned);
+  expect(applyOutcome({ status: 'failed', error: 'Lost contact with the job.' }, list)).toEqual({ status: 'failed', done: 1, error: 'Lost contact with the job.', backupCommit: null, warnings: [] });
+  expect(applyOutcome({ status: 'cancelled', error: null }, list)).toEqual({ status: 'cancelled', done: 1, error: 'The apply was cancelled.', backupCommit: null, warnings: [] });
 });
 
 test('a finished run leaves nothing running, and Resume carries only finished rows', () => {

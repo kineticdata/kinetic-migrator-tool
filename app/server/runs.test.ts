@@ -297,10 +297,55 @@ test('a failed post-apply snapshot is a warning: the apply still reports its rea
   assert.equal(job.result.status, 'applied', job.result.error);
   assert.equal(job.result.snapshotCommit, null);
   assert.match(job.events, /"step":"snapshot","status":"failed"/);
-  assert.match(job.events, /could not take a new snapshot of Test/);
-  assert.match((await log(h.dir, { limit: 1 }))[0].message, /^Applied '1 item from Dev' to Test/);
+  // The result, the run record and History carry the warning (not a plain "Applied").
+  assert.equal(job.result.warnings.length, 1);
+  assert.match(job.result.warnings[0], /^The changes were applied, but the snapshot of Test afterwards failed: .+\. Take a snapshot before comparing again\.$/);
+  assert.ok(job.events.includes(job.result.warnings[0].slice(0, 60)));
+  const [noted, applied] = await log(h.dir, { limit: 2 });
+  assert.equal(noted.message.split('\n')[0], 'Recorded that the snapshot of Test after the apply failed');
+  assert.match(applied.message, /^Applied '1 item from Dev' to Test/);
+  const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${job.result.runId}.json`), 'utf8'));
+  assert.deepEqual(run.warnings, job.result.warnings);
+  assert.equal(run.status, 'applied');
+  const history = (await h.call('GET', `${P}/history?type=applied&env=test`)).json as Array<{ commit: string; warnings?: string[] }>;
+  assert.equal(history[0].commit, applied.oid);
+  assert.deepEqual(history[0].warnings, job.result.warnings);
+  const detail = (await h.call('GET', `${P}/history/${applied.oid}`)).json;
+  assert.deepEqual(detail.run.warnings, job.result.warnings);
   assert.ok(h.logged.some((l) => l.includes('snapshot after apply')));
   assert.ok(!readdirSync(path.join(h.dir, 'plans')).some((n) => n.startsWith('snap-')), 'no half export left behind');
+  assertNoSecret(h, [job.events]);
+});
+
+test('a partial apply whose snapshot afterwards fails keeps the warning too', async (t) => {
+  const h = await harness(t);
+  // The team is written, then the connection import fails, and from then on Test cannot be read.
+  let broken = false;
+  const original = h.spaces.test;
+  h.spaces.test = () => {
+    const routes = original();
+    const space = routes['GET core/space'];
+    return {
+      ...routes,
+      'GET core/space': () => {
+        if (broken) throw Object.assign(new Error('GET https://test.example.com/x failed with 503'), { status: 503 });
+        return structuredClone(space);
+      },
+      'POST integrator/import/connections': () => { broken = true; throw Object.assign(new Error('POST https://test.example.com/x failed with 400'), { status: 400 }); },
+    };
+  };
+  await h.job('POST', `${P}/snapshots`, { env: 'dev' });
+  const p = await plan(h, { to: 'test', from: 'dev', selected: ['teams/Ops', 'connections/Ticketing/connection'] });
+  const job = await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: p.needsAttention.map((n: { id: string }) => n.id), confirm: 'test' });
+  assert.equal(job.result.status, 'partial', job.result.error);
+  assert.match(job.events, /"step":"snapshot","status":"failed"/);
+  assert.equal(job.result.warnings.length, 1);
+  assert.match(job.result.warnings[0], /^The changes were applied, but the snapshot of Test afterwards failed: /);
+  const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${job.result.runId}.json`), 'utf8'));
+  assert.deepEqual(run.warnings, job.result.warnings);
+  const history = (await h.call('GET', `${P}/history?type=applied&env=test`)).json as Array<{ status: string; warnings?: string[] }>;
+  assert.equal(history[0].status, 'partial');
+  assert.deepEqual(history[0].warnings, job.result.warnings);
   assertNoSecret(h, [job.events]);
 });
 
