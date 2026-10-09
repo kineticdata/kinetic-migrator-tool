@@ -14,10 +14,11 @@
   connection's settings outside its auth, such as a SQL connection's
   `password`) are stripped from snapshots like auth secrets. Only their names
   are recorded; creating the connection in a target asks for them
-  write-only, and they are never shown, compared or diffed. Content from a
-  snapshot taken before this release is redacted when shown or compared;
-  take a new snapshot so the files no longer hold the password (git history
-  still does).
+  write-only, and they are never shown, compared or diffed. A snapshot taken
+  before this release is stripped the same way whenever it is read, so
+  plans, compares, applies and restores from it never send or show the
+  stored password and match a new snapshot. Its files and git history still
+  hold it: take a new snapshot, and treat the old commits as sensitive.
 - **A failed snapshot after an apply** is now part of the run: the Plan page
   shows "Applied to <env>, with a warning" and the reason, and History labels
   the run "Applied, snapshot failed".

@@ -395,9 +395,12 @@ That key, and any other secret-named key anywhere in a connection's
 the names, as config paths, under `strippedSecrets` (for example
 `["password"]`); a new connection's variable uses the camel-cased path as its
 field, for example `KINETIC_PROD_SECRET_WAREHOUSE_DB__PASSWORD`, and the value
-is sent back at the same path. Connection content is redacted the same way
-whenever it is compared, diffed or shown, so a snapshot taken before this
-rule never shows a password; take a new snapshot to drop it from the files.
+is sent back at the same path. Every snapshot, backup or pinned tree is
+stripped the same way when it is read, so one taken before this rule plans,
+compares, applies and restores exactly like a new one and its stored
+password is never sent or shown; take a new snapshot to drop it from the
+files (the git history keeps it). `strippedSecrets` is never shown as a
+difference.
 
 If a new connection needs a secret and none is supplied, it is created with
 an empty one and the run prints a warning. Set the secret in the console

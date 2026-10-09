@@ -3,7 +3,7 @@
 // fail leave the last one in place; stale work folders go at start.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { PlanResult } from '../shared/sync-api.ts';
@@ -167,5 +167,47 @@ test('a SQL connection: its password never reaches a snapshot, Explore or Compar
   const cmp = (await h.job('POST', `${P}/compare`, { from: 'dev', to: 'test', mode: 'raw' })).result;
   const row = (await h.call('GET', `${P}/compare/${cmp.compareId}/item?key=${encodeURIComponent(SQL)}`)).json;
   assert.ok(!JSON.stringify(row).includes(PLANTED_CONN));
+  assertNoSecret(h, [job.events]);
+});
+
+test('an old snapshot that still holds a SQL password: plans ask for it, never send it, and compare it with a new snapshot as the same', async (t) => {
+  const { commitAll } = await import('./repo.ts');
+  const h = await harness(t);
+  const SQL = 'connections/Warehouse DB/connection';
+  const sql = (password: unknown) => ({
+    id: 'c-sql', name: 'Warehouse DB', type: 'postgres',
+    config: { configType: 'postgres', host: 'db.example.com', port: 5432, username: 'reporter', password, database: 'warehouse', poolSize: 5 },
+  });
+  const withSql = (base: () => Record<string, unknown>, password: unknown) => () => ({
+    ...base(),
+    'GET integrator/connections': [{ id: 'c-sql', name: 'Warehouse DB' }],
+    'GET integrator/export/connections/c-sql': { connection: { ...sql(password), operations: [] } },
+  });
+  h.spaces.dev = withSql(devRoutes, null);
+  assert.equal((await h.job('POST', `${P}/snapshots`, { env: 'dev' })).status, 'succeeded');
+  // Rewrite Dev's snapshot as an older release wrote it: the password inside.
+  const file = path.join(h.dir, 'snapshots', 'dev', 'connections', 'Warehouse DB', 'connection.json');
+  writeFileSync(file, JSON.stringify(sql(PLANTED_CONN), null, 2));
+  await commitAll(h.dir, 'Snapshot of Dev (older release)', { name: 'Tester', email: 'tester@example.com' });
+
+  const p = await plan(h, { to: 'test', from: 'dev', selected: [SQL] });
+  assert.deepEqual(p.secretsNeeded.map((s) => [s.id, s.has]), [['secret/WAREHOUSE_DB__PASSWORD', false]]);
+  const item = p.items.find((i) => i.key === SQL)!;
+  assert.equal(item.action, 'create');
+  const job = await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: p.needsAttention.map((n) => n.id), confirm: 'test' });
+  assert.equal(job.result.status, 'applied', job.result.error);
+  const created = h.calls.find((c) => c.env === 'test' && c.path === '/import/connections')!;
+  assert.ok(!JSON.stringify(created.body).includes(PLANTED_CONN), 'the stored password was never sent');
+  assert.equal('password' in (created.body as any).config, false);
+
+  // Test snapshotted by the current release (password masked as null): no difference.
+  h.spaces.test = withSql(testRoutes, null);
+  assert.equal((await h.job('POST', `${P}/snapshots`, { env: 'test' })).status, 'succeeded');
+  const cmp = (await h.job('POST', `${P}/compare`, { from: 'dev', to: 'test', mode: 'raw', useSnapshots: true })).result;
+  const row = (await h.call('GET', `${P}/compare/${cmp.compareId}/item?key=${encodeURIComponent(SQL)}`)).json;
+  assert.equal(row.status, 'same', JSON.stringify(row.diff));
+  assert.deepEqual(row.diff, []);
+  const explore = (await h.call('GET', `${P}/explore/dev/item?key=${encodeURIComponent(SQL)}`)).json;
+  assert.ok(!JSON.stringify(explore).includes(PLANTED_CONN));
   assertNoSecret(h, [job.events]);
 });
