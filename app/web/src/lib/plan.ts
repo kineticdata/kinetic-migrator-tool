@@ -49,7 +49,7 @@ function plainWarning(w: string, plan: PlanResult): { message: string; key: stri
   if (w.startsWith('Drift check for the space skipped: ')) {
     return { key: 'space', message: `The space's kept settings changed since it was last promoted to ${To}, so changes made to it in ${To} since then cannot be detected this time; this plan does not report the space as drifted. Applying records the current settings, and later plans check again.` };
   }
-  m = /^Override for "(.+)" matches nothing in the export/.exec(w);
+  m = /^Override for "(.+)" matches nothing in the (export|source snapshot)/.exec(w);
   if (m) return { key: m[1], message: `A saved environment value for ${nameOfKey(m[1])} matches nothing being promoted, so it is ignored.` };
   m = /^(.+?): secret property "(.+)" is not set; set it in the target console$/.exec(w);
   if (m) return { key: m[1], message: `The secret ${m[2]} of ${nameOfKey(m[1])} is not set; set it in ${To}’s console.` };
@@ -91,7 +91,7 @@ export function errorFix(message: string, from: string, to: string): { message: 
     [/^Handler .+ is used by exported workflows but is not installed in the target/, `Add the handler to the changeset, or install it in ${To} first, then plan again.`],
     [/: not in the source snapshot$/, `Take a new snapshot of ${From}, or take this item out of the changeset.`],
     [/(same name but id|probably renamed)/, `Reconcile it by hand in ${To} (rename or remove one of the two), take a new snapshot, then plan again.`],
-    [/^Unrecognized file in export/, `Take a new snapshot of ${From}.`],
+    [/^Unrecognized file in (export|the source snapshot)/, `Take a new snapshot of ${From}.`],
     [/can never be removed|cannot be removed|are never removed as an item/, 'Take it out of the removals, then plan again.'],
     [/: is in the source too; only items that are only in the target can be removed$/, `It is in ${From} too, so it would be promoted, not removed: take it out of the removals, then plan again.`],
   ];

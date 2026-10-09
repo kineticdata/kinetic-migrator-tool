@@ -66,7 +66,7 @@ test('warnings read plainly; a missing attribute is taken care of by filling its
     environmentValues: [ev('kapps/hr/kapp#attributes.Web Server Url', { label: 'Web Server Url', origin: 'attribute', to: null, required: true })],
     warnings: [
       'kapps/hr/kapp: environment-bound attribute "Web Server Url" is empty in the target and no override sets it',
-      'Override for "kapps/old/kapp" matches nothing in the export (check the key against the export/ file paths)',
+      'Override for "kapps/old/kapp" matches nothing in the source snapshot (check the key against the file paths under snapshots/dev/)',
       'Something new',
     ],
   });

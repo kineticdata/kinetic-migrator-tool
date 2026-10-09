@@ -425,7 +425,7 @@ test('kept drift is not listed; preflight warnings must be ticked; a filled valu
     environmentValues: [{ id: ATTR, key: KAPP, path: 'attributes.Web Server Url', label: 'Web Server Url', from: ['https://dev.example.com'], to: null, origin: 'attribute', required: false }],
     warnings: [
       `${KAPP}: environment-bound attribute "Web Server Url" is empty in the target and no override sets it`,
-      'Override for "kapps/old/kapp" matches nothing in the export (check the key against the export/ file paths)',
+      'Override for "kapps/old/kapp" matches nothing in the source snapshot (check the key against the file paths under snapshots/dev/)',
     ],
   }));
   const user = userEvent.setup();
