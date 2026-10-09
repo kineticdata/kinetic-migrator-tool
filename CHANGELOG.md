@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Environment addresses must use `https://`.** Plain `http://` is accepted
+  only for this computer (`localhost`, `127.0.0.1`, `[::1]`, any port). A
+  project saved with an `http://` address to another machine still opens;
+  its environment card, Test connection, snapshots, plans and applies say the
+  address would send the password unencrypted, and nothing signs in to it.
+  The command line refuses such an environment too.
+- **Database connection passwords** (and any other secret-named key in a
+  connection's settings outside its auth, such as a SQL connection's
+  `password`) are stripped from snapshots like auth secrets. Only their names
+  are recorded; creating the connection in a target asks for them
+  write-only, and they are never shown, compared or diffed. Content from a
+  snapshot taken before this release is redacted when shown or compared;
+  take a new snapshot so the files no longer hold the password (git history
+  still does).
+- **A failed snapshot after an apply** is now part of the run: the Plan page
+  shows "Applied to <env>, with a warning" and the reason, and History labels
+  the run "Applied, snapshot failed".
+- **Team "may use" warnings** match whole team names in security policy rules
+  and attribute values, so `Ops` no longer matches `DevOps` or `IT::Ops`.
+- Messages that pointed at the legacy `export/` folder now name the
+  snapshot (`snapshots/<env>/`).
+
 ## 0.1.0 — 2026-10-08
 
 The first release of Kinetic Migrator (command: `kinetic-migrate`).
@@ -79,8 +105,6 @@ The first release of Kinetic Migrator (command: `kinetic-migrate`).
 
 ### Known limitations
 
-- **`http://` space URLs are accepted.** Credentials then travel
-  unencrypted. Use `https://` addresses.
 - **Not migrated:** users, team memberships, submissions other than listed
   reference data, webhooks, translations, built-in handlers, built-in
   (Integrated) workflow categories and Task policy rules (including those of
@@ -91,9 +115,6 @@ The first release of Kinetic Migrator (command: `kinetic-migrate`).
   secret is asked for by name only for the `basic`, `raw_bearer_token` and
   `client_credentials` auth types; for other types, secret-named fields are
   asked for, and otherwise it is created with an empty value and a warning.
-- **Database connection passwords** stored outside the connection's auth
-  settings are not known to be stripped from snapshots. Check a snapshot of
-  such a connection before committing or pushing it.
 - **Credential headers** typed as literal values are not exported; on a new
   operation they must be added by hand in the target.
 - **Spaces that sign in only with single sign-on** cannot be used.
@@ -110,10 +131,8 @@ The first release of Kinetic Migrator (command: `kinetic-migrate`).
   back only reference data. A removed team's memberships, a removed
   connection's credentials and a removed handler's secret values are not
   restored.
-- **Team "may use" warnings** match team names as text, so a team named
-  `Ops` also matches `DevOps`. They are warnings only.
-- **If the snapshot after an apply fails**, the plan page still shows the run
-  as applied; the warning is in the job's events. Take a snapshot before
-  comparing.
+- **Team "may use" warnings** find a team only where its name is written out
+  whole; a rule that builds the name from parts is not found. They are
+  warnings only.
 - **Keyless reference data** (no match fields) never updates or deletes
   records: an edited record is created as a new one.
