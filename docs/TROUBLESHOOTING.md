@@ -389,20 +389,35 @@ open the project folder in the clone. A `.git` file that points nowhere is
 usually a deleted worktree or a moved submodule: run `git worktree prune`
 (or repair the submodule) and open the project again.
 
-### "Kinetic Migrator keeps this project's history in …, which is inside your repository."
+### "Kinetic Migrator keeps this project's history in …, which is inside the project folder or your repository's .git folder."
 
-The app's data folder (see [Concepts](CONCEPTS.md#managed-and-external-projects))
-lies inside the repository the project is in, where its private history
-must not go. **Fix:** set `KINETIC_MIGRATOR_DATA_DIR` to a folder outside
-that repository and start the app again.
+`KINETIC_MIGRATOR_DATA_DIR` (see [Concepts](CONCEPTS.md#managed-and-external-projects))
+points into the project folder or into the `.git` folder of the repository
+the project is in, where the private history must not go. A data folder
+elsewhere in that repository's working files (for example a home folder
+kept in git) is fine. **Fix:** set `KINETIC_MIGRATOR_DATA_DIR` to another
+folder and start the app again.
 
 ### New projects are "in your repository" unexpectedly
 
 The workspace folder is inside a git repository, for example a home folder
-kept in git. Projects created there are external: the app never commits to
-that repository. **Fix:** use a workspace outside it
-(`kinetic-migrate ui --workspace <folder>`) to get projects with their own
-repositories.
+kept in git. Projects created there are external and work normally, but the
+app never commits to that repository: you commit the project files there
+yourself, or not at all. **Fix:** to get projects with their own
+repositories, use a workspace outside it
+(`kinetic-migrate ui --workspace <folder>`).
+
+### History or credentials are gone after moving the project folder
+
+For a project inside your own repository, the private history and the
+credentials belong to the folder's location on this computer. A moved or
+renamed folder starts a new history. **Fix:** move it back to see the old
+history, or set the credentials again and take a new snapshot.
+
+### "This project's repository is on branch …; Kinetic Migrator records its history on main."
+
+A repository Kinetic Migrator created for the project was checked out on
+another branch after it was opened. **Fix:** `git -C <folder> checkout main`.
 
 ### History looks different on a teammate's computer
 

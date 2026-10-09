@@ -14,7 +14,8 @@ const OPERATION: Record<NonNullable<ExternalRepository['operation']>, string> = 
 
 export function externalSummary(x: ExternalRepository): string {
   const where = x.branch ? `on branch ${x.branch}` : 'on a detached commit';
-  const changed = x.changedFiles === null ? '' : ` — ${plural(x.changedFiles, 'file')} changed since your last commit`;
+  const changed = x.changedFiles !== null ? ` — ${plural(x.changedFiles, 'file')} changed since your last commit${x.checking ? ' (checking again…)' : ''}`
+    : x.checking ? ' — checking for files changed since your last commit…' : '';
   return `This project is in your repository ${x.name} ${where}; Kinetic Migrator doesn't commit there${changed}.`;
 }
 

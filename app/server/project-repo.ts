@@ -14,9 +14,14 @@
 //
 // By construction: every isomorphic-git call made for a ProjectRepo gets a
 // file system that refuses writes outside that repo's gitdir (gitFs), the
-// gitdir of an external project is checked to lie outside the user's
-// repository, and the user's repository is only ever read, through a file
-// system that refuses every write (READ_ONLY_FS).
+// gitdir of an external project is checked to lie outside the project folder
+// and the user's git folder, and the user's repository is only ever read,
+// through a file system that refuses every write (READ_ONLY_FS).
+//
+// Fail safe: a repository is managed only when the app created it (the
+// marker it writes right after its own `git init`) or it carries the app's
+// signature from before the marker existed. Anything else, including an
+// unreadable or unborn HEAD, is the user's.
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -65,8 +70,6 @@ export const inLayout = (filepath: string): boolean => (
 // In a managed project's .git: "Kinetic Migrator created and manages this
 // repository". In a private history folder: the record (work tree, author).
 export const MARKER_FILE = 'kinetic-migrator.json';
-const META_FILE = 'kinetic-migrate.json';
-const SECRETS_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // ---- The app's data folder ---------------------------------------------------
 
@@ -133,14 +136,16 @@ export const READ_ONLY_FS = makeFs(() => false);
 
 const gitFsCache = new Map<string, PromiseFsClient>();
 // For a ProjectRepo: writes only inside its gitdir (isomorphic-git never
-// writes the work tree here: nothing is ever checked out).
+// writes the work tree here: nothing is ever checked out), and for an
+// external project never in the project folder or the user's git folders.
 export function gitFs(repo: ProjectRepo): PromiseFsClient {
-  let f = gitFsCache.get(repo.gitdir);
+  const user = repo.user;
+  const key = [repo.gitdir, repo.dir, user?.gitdir ?? '', user?.commondir ?? ''].join('\0');
+  let f = gitFsCache.get(key);
   if (!f) {
-    const gitdir = repo.gitdir;
-    const user = repo.user;
-    f = makeFs((abs) => isInside(abs, gitdir) && !(user && (isInside(abs, user.root) || isInside(abs, user.gitdir) || isInside(abs, user.commondir))));
-    gitFsCache.set(repo.gitdir, f);
+    const { gitdir, dir } = repo;
+    f = makeFs((abs) => isInside(abs, gitdir) && !(user && (isInside(abs, dir) || isInside(abs, user.gitdir) || isInside(abs, user.commondir))));
+    gitFsCache.set(key, f);
   }
   return f;
 }
@@ -261,18 +266,70 @@ export async function userChangedFiles(u: UserRepo): Promise<number> {
   return changed;
 }
 
-// ---- The private history of an external project ------------------------------
+// The changed-files count, cached: it hashes the whole project folder, so it
+// is worked out in the background and served from the cache while the
+// user's HEAD and index, the project folder and its top-level entries look
+// the same (by mtime and size) and it is younger than STATUS_TTL. App
+// writes invalidate it. Until a count is ready, `checking` is true.
+const STATUS_TTL = 15_000;
+interface StatusEntry { value: number | null; stamp: string; at: number; running: Promise<void> | null }
+const statusCache = new Map<string, StatusEntry>();
+const statusKey = (u: UserRepo) => `${u.root}\0${u.subfolder}`;
 
-function readSecretsId(dir: string): string | null {
+function statusStamp(u: UserRepo): string {
+  const dir = u.subfolder ? path.join(u.root, ...u.subfolder.split('/')) : u.root;
+  const parts: string[] = [];
+  const add = (p: string) => {
+    try {
+      const st = fs.statSync(p);
+      parts.push(`${p}:${st.mtimeMs}:${st.size}`);
+    } catch {
+      parts.push(`${p}:-`);
+    }
+  };
+  add(path.join(u.gitdir, 'HEAD'));
+  add(path.join(u.gitdir, 'index'));
+  add(dir);
   try {
-    const meta = JSON.parse((readText(path.join(dir, META_FILE)) ?? '').replace(/^﻿/, ''));
-    return typeof meta?.secretsId === 'string' && SECRETS_ID.test(meta.secretsId) ? meta.secretsId : null;
+    for (const name of fs.readdirSync(dir).sort()) add(path.join(dir, name));
   } catch {
-    return null;
+    // An unreadable folder: the TTL still applies.
   }
+  return parts.join('|');
 }
 
-const pathHash = (dir: string) => createHash('sha256').update(fold(dir)).digest('hex').slice(0, 12);
+export function invalidateStatus(u: UserRepo): void {
+  const e = statusCache.get(statusKey(u));
+  if (e) e.stamp = '';
+}
+
+export function changedFilesStatus(u: UserRepo, now: number = Date.now()): { changedFiles: number | null; checking: boolean } {
+  const key = statusKey(u);
+  const e = statusCache.get(key);
+  const stamp = statusStamp(u);
+  if (e && !e.running && e.stamp === stamp && now - e.at < STATUS_TTL) return { changedFiles: e.value, checking: false };
+  if (!e?.running) {
+    const entry: StatusEntry = e ?? { value: null, stamp: '', at: 0, running: null };
+    entry.running = userChangedFiles(u)
+      .then((n) => { entry.value = n; }, () => { entry.value = null; })
+      .then(() => { entry.stamp = stamp; entry.at = Date.now(); entry.running = null; });
+    statusCache.set(key, entry);
+  }
+  return { changedFiles: e?.value ?? null, checking: true };
+}
+
+// Resolves when a count being worked out is ready (tests).
+export const statusSettled = async (u: UserRepo): Promise<void> => { await statusCache.get(statusKey(u))?.running; };
+
+// ---- The private history of an external project ------------------------------
+
+// An external project's id: derived from the project folder's real path,
+// never from its files (which change with the branch). It keys the private
+// history and the keychain. Moving the folder starts a new private history.
+export function externalId(dir: string): string {
+  const h = createHash('sha256').update(fold(real(dir))).digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
 
 interface HistoryRecord {
   worktree?: string;
@@ -288,40 +345,24 @@ function readRecord(gitdir: string): HistoryRecord {
   }
 }
 
-// Keyed by the project's id (kinetic-migrate.json). A second folder with the
-// same id (another checkout or worktree of the same repository) gets its own
-// history, started as a copy of the first so pinned commits still resolve; a
-// moved folder keeps its history.
-function privateGitdir(dir: string, id: string | null): string {
-  const base = historyRoot();
-  if (!id) return path.join(base, `pending-${pathHash(dir)}`);
-  const primary = path.join(base, id);
-  const fork = path.join(base, `${id}-${pathHash(dir)}`);
-  if (fs.existsSync(fork)) return fork;
-  const recorded = readRecord(primary).worktree;
-  if (!recorded || fold(recorded) === fold(dir)) return primary;
-  return readSecretsId(recorded) === id ? fork : primary;
-}
+const privateGitdir = (dir: string) => path.join(historyRoot(), externalId(dir));
 
-function assertOutside(gitdir: string, u: UserRepo): void {
+// The private history must not be in the project folder (it would track
+// itself) or in the user's git folders. Elsewhere in the user's work tree
+// (a home folder kept in git) is fine: nothing there is written through git.
+function assertOutside(gitdir: string, dir: string, u: UserRepo): void {
   const g = real(gitdir);
-  if ([u.root, u.gitdir, u.commondir].some((p) => isInside(g, real(p)))) {
-    throw new ApiError(409, 'history_inside_repository', `Kinetic Migrator keeps this project's history in ${appDataDir()}, which is inside your repository. Set KINETIC_MIGRATOR_DATA_DIR to a folder outside it and start the app again.`);
+  if ([dir, u.gitdir, u.commondir].some((p) => isInside(g, real(p)))) {
+    throw new ApiError(409, 'history_inside_repository', `Kinetic Migrator keeps this project's history in ${appDataDir()}, which is inside the project folder or your repository's .git folder. Set KINETIC_MIGRATOR_DATA_DIR to a folder outside them and start the app again.`);
   }
 }
 
-// Creates the private history (copying the first checkout's when this is a
-// second one) and records which folder it belongs to.
+// Creates the private history and records which folder it belongs to.
 export async function ensurePrivateHistory(repo: ProjectRepo): Promise<void> {
   if (repo.mode !== 'external') throw new Error('Only an external project has a private history.');
-  assertOutside(repo.gitdir, repo.user!);
-  const base = path.dirname(repo.gitdir);
-  fs.mkdirSync(base, { recursive: true });
-  if (!fs.existsSync(path.join(repo.gitdir, 'config'))) {
-    const primary = path.join(base, path.basename(repo.gitdir).replace(/-[0-9a-f]{12}$/, ''));
-    if (primary !== repo.gitdir && fs.existsSync(path.join(primary, 'config'))) fs.cpSync(primary, repo.gitdir, { recursive: true });
-    await git.init({ fs: gitFs(repo), dir: repo.dir, gitdir: repo.gitdir, defaultBranch: 'main' });
-  }
+  assertOutside(repo.gitdir, repo.dir, repo.user!);
+  fs.mkdirSync(path.dirname(repo.gitdir), { recursive: true });
+  if (!fs.existsSync(path.join(repo.gitdir, 'config'))) await git.init({ fs: gitFs(repo), dir: repo.dir, gitdir: repo.gitdir, defaultBranch: 'main' });
   const record = readRecord(repo.gitdir);
   if (record.worktree !== repo.dir) writeRecord(repo, { ...record, worktree: repo.dir });
 }
@@ -348,26 +389,37 @@ export async function setPrivateAuthor(repo: ProjectRepo, author: { name: string
 
 const managed = (dir: string): ProjectRepo => Object.freeze({ mode: 'managed', dir, gitdir: path.join(dir, '.git') });
 
-// A repository at the project folder is the app's when its .git carries the
-// marker, or (projects managed before the marker existed) when the folder has
-// kinetic-migrate.json and the last commit holds nothing outside the layout.
-async function isAppManaged(dir: string, u: UserRepo): Promise<boolean> {
-  if (fs.existsSync(path.join(u.gitdir, MARKER_FILE))) return true;
-  if (!fs.existsSync(path.join(dir, META_FILE))) return false;
+// Repositories from before the marker carry the app's signature: the root
+// commit is the app's first ("Created project …" or "Started managing this
+// project") and every tracked file is a project-layout path. Decided once
+// per HEAD; never written down.
+const legacyCache = new Map<string, boolean>();
+async function looksAppCreated(u: UserRepo): Promise<boolean> {
   const head = await userHead(u);
-  if (head) {
-    try {
-      const { tree } = await git.readTree({ fs: READ_ONLY_FS, gitdir: u.commondir, oid: head });
-      if (!tree.every((e) => LAYOUT_FILES.includes(e.path) || (e.type === 'tree' && LAYOUT_DIRS.includes(e.path)))) return false;
-    } catch {
-      return false;
+  if (!head) return false;
+  const key = `${u.commondir}\0${head}`;
+  const known = legacyCache.get(key);
+  if (known !== undefined) return known;
+  let verdict = false;
+  try {
+    const commits = await git.log({ fs: READ_ONLY_FS, gitdir: u.commondir, ref: head });
+    const title = commits[commits.length - 1]?.commit.message.split('\n')[0] ?? '';
+    if (/^Created project .+/.test(title) || title === 'Started managing this project') {
+      verdict = (await git.listFiles({ fs: READ_ONLY_FS, gitdir: u.commondir, ref: head })).every(inLayout);
     }
+  } catch {
+    verdict = false;
   }
-  markManaged(managed(dir));
-  return true;
+  legacyCache.set(key, verdict);
+  return verdict;
 }
 
-// Records that the app created (or has always managed) this repository.
+async function isAppManaged(u: UserRepo): Promise<boolean> {
+  return fs.existsSync(path.join(u.gitdir, MARKER_FILE)) || looksAppCreated(u);
+}
+
+// Marks a repository the app has just created with its own `git init`.
+// Never called for a repository that already existed.
 export function markManaged(repo: ProjectRepo): void {
   if (repo.mode !== 'managed' || !isDirectory(repo.gitdir)) return;
   const file = path.join(repo.gitdir, MARKER_FILE);
@@ -378,9 +430,9 @@ export async function projectRepo(ref: { dir: string }): Promise<ProjectRepo> {
   const dir = path.resolve(ref.dir);
   const user = findEnclosingRepository(dir);
   if (!user) return managed(dir);
-  if (user.kind === 'repository' && user.gitdir === user.dotGit && fold(user.root) === fold(dir) && await isAppManaged(dir, user)) return managed(dir);
-  const gitdir = privateGitdir(dir, readSecretsId(dir));
-  assertOutside(gitdir, user);
+  if (user.kind === 'repository' && user.gitdir === user.dotGit && fold(user.root) === fold(dir) && await isAppManaged(user)) return managed(dir);
+  const gitdir = privateGitdir(dir);
+  assertOutside(gitdir, dir, user);
   return Object.freeze({ mode: 'external', dir, gitdir, user: Object.freeze(user) });
 }
 

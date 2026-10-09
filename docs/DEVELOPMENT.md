@@ -74,11 +74,18 @@ Server code never assumes `<dir>/.git`. `projectRepo(ref)`
 
 The promise that the user's repository is never written through git is kept
 by construction: `g(repo)` hands isomorphic-git `gitFs(repo)`, a file system
-that refuses writes outside `repo.gitdir` (and anywhere in the user's
-repository), and the user's repository is only read through `READ_ONLY_FS`,
-which refuses every write (isomorphic-git's `statusMatrix` would otherwise
-refresh the user's index). `projectRepo` also refuses a private history
-located inside the user's repository. `app/server/external-repo.test.ts`
+that refuses writes outside `repo.gitdir` (and, for an external project,
+anywhere in the project folder or the user's git folders), and the user's
+repository is only read through `READ_ONLY_FS`, which refuses every write
+(isomorphic-git's `statusMatrix` and `WORKDIR()` would otherwise refresh the
+user's index). `projectRepo` also refuses a private history located inside
+the project folder or the user's git folders. Mode detection fails safe:
+managed only with the marker (written by `ensureRepo` right after its own
+`git.init`) or the legacy signature (`looksAppCreated`: the root commit is
+the app's and every tracked file is in the layout); an unborn or unreadable
+HEAD is external. An external project's id (`externalId`) is a hash of the
+folder's real path; it keys the private history and the keychain, so reads
+never write `kinetic-migrate.json`. `app/server/external-repo.test.ts`
 fingerprints a monorepo fixture byte for byte before and after a full
 journey.
 
@@ -86,9 +93,15 @@ Writes go through `withProjectLock` and `commitChange` (`project-meta.ts`).
 For an external project the lock first refuses while a merge, rebase,
 cherry-pick or revert is in progress (`409 repository_busy`) and records
 outside changes as "Files changed outside Kinetic Migrator";
-`syncHistory(ref)` does the same cheaply before reads of the latest
-snapshot commit and History. `commitChange` creates the private history
-(and the project id) on first use. The commit author of an external project
+`syncHistory(ref)` does the same before reads of the latest snapshot commit
+and History, at most once per request or job (`request-scope.ts`, an
+AsyncLocalStorage scope opened by the request handler and each job), and
+under the project lock only when it is free. The changed-files count for
+the banner (`changedFilesStatus`) is computed in the background and cached
+by a stamp of the user's HEAD and index and the project folder's top-level
+entries, with a 15-second TTL; app writes invalidate it, and the API says
+`checking: true` until a count is ready. `commitChange` creates the private
+history on first use, and commits to a managed repository only on `main`. The commit author of an external project
 is kept in the private history's `kinetic-migrator.json`, not in the shared
 `kinetic-migrate.json`. Remotes and pushing throw for an external repo.
 

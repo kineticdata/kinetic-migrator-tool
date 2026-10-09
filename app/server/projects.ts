@@ -191,14 +191,14 @@ export async function openProject(workspace: string, body: unknown): Promise<Pro
 // Upgrades every managed project in the workspace to the current file-name
 // layout (see upgradeLayoutLocked); failures are logged and never stop the
 // server. Unmanaged projects are upgraded when they become managed. An
-// external project gets its files upgraded (recorded in its private
-// history) unless git is busy in the user's repository.
+// external project's files are never rewritten at startup: it is upgraded
+// when it is next opened.
 export async function upgradeWorkspace(workspace: string, onError: (id: string, err: unknown) => void = () => {}): Promise<void> {
   for (const p of listProjects(workspace)) {
     try {
       const ref = findProject(workspace, p.id);
       const repo = await projectRepo(ref);
-      if (!hasHistory(repo) || (repo.user && userOperation(repo.user))) continue;
+      if (repo.mode === 'external' || !hasHistory(repo)) continue;
       await withProjectLock(ref, () => upgradeLayoutLocked(ref));
     } catch (err) {
       onError(p.id, err);

@@ -15,7 +15,7 @@ import git from 'isomorphic-git';
 import type { HistoryEvent } from '../shared/sync-api.ts';
 import type { RepositorySettings } from '../shared/repository-api.ts';
 import {
-  READ_ONLY_FS, appDataDir, findEnclosingRepository, gitFs, isInside, projectRepo, userChangedFiles,
+  READ_ONLY_FS, appDataDir, findEnclosingRepository, gitFs, isInside, projectRepo, statusSettled, userChangedFiles,
 } from './project-repo.ts';
 import { log } from './repo.ts';
 import { PLANTED, assertNoSecret, devRoutes, fakeFactory, testRoutes, type Call } from './sync-fixtures.ts';
@@ -59,6 +59,10 @@ async function monorepo(t: T, opts: { dirty?: boolean } = {}): Promise<{ root: s
     write(root, 'README.md', '# Monorepo (unstaged edit)\n');
     write(root, 'notes.txt', 'untracked\n');
   }
+  // A tracked project file touched but unchanged: a status that refreshed
+  // the user's index would rewrite .git/index (caught by the fingerprint).
+  const later = new Date(Date.now() + 5000);
+  fs.utimesSync(path.join(root, PROJECT, 'kinetic-sync.config.json'), later, later);
   return { root, project: path.join(root, PROJECT) };
 }
 
@@ -173,8 +177,12 @@ test('a project in a monorepo subfolder on a feature branch: everything works an
   // The project's files changed on disk, and the user sees them as changes.
   assert.ok(existsSync(path.join(project, 'snapshots', 'dev')));
   assert.ok(existsSync(path.join(project, 'changesets', `${cs.json.id}.json`)));
+  const first = (await call('GET', `${P}/repository`)).json as RepositorySettings;
+  assert.equal(first.external!.checking, true, 'counted in the background');
+  await statusSettled(repo.user!);
   const settings = (await call('GET', `${P}/repository`)).json as RepositorySettings;
   assert.equal(settings.mode, 'external');
+  assert.equal(settings.external!.checking, false);
   assert.equal(settings.external!.branch, 'feature/x');
   assert.equal(settings.external!.subfolder, PROJECT);
   assert.equal(settings.external!.root, root);
@@ -241,6 +249,7 @@ test('while git is merging in the user repository the project is read-only', asy
   assert.equal(existsSync(path.join(project, 'environments', 'test.json')), false);
   assert.equal((await call('GET', P)).status, 200, 'reading still works');
   assert.equal(((await call('GET', `${P}/repository`)).json as RepositorySettings).external!.operation, 'merge');
+  await statusSettled(findEnclosingRepository(project)!);
   // Opening again while busy works, read-only.
   assert.equal((await call('POST', '/api/projects/open', { path: project })).status, 200);
   assertUnchanged(before, root);
@@ -298,6 +307,7 @@ test('a linked worktree (a .git file) is detected and read without writing to th
   assert.equal(opened.status, 200, opened.body);
   const settings = (await call('GET', `/api/projects/${opened.json.id}/repository`)).json as RepositorySettings;
   assert.deepEqual([settings.mode, settings.external!.kind, settings.external!.branch], ['external', 'worktree', 'other']);
+  await statusSettled(found);
   assertUnchanged(before, root);
 });
 

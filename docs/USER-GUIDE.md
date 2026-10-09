@@ -126,10 +126,16 @@ In that case Kinetic Migrator **leaves the changes for you**:
   repository. You review, commit and open pull requests with your usual
   tools.
 - The only file it may add is a `.gitignore` *inside the project folder*,
-  written when it is missing or lacks the lines that keep credentials
-  (`.env*`) and the app's local folders (`plans/`, `backups/`,
-  `compares/`) out of your repository. It does not add a `.gitattributes`
-  there: your repository's line-ending rules apply.
+  written when you open or create the project and it is missing or lacks
+  the lines that keep credentials (`.env*`) and the app's local folders
+  (`plans/`, `backups/`, `compares/`) out of your repository. When the
+  project folder is the root of your repository it leaves that `.gitignore`
+  alone (add those lines yourself). It does not add a `.gitattributes`:
+  your repository's line-ending rules apply. Looking at a project never
+  writes a file.
+- The project's credentials and private history belong to the folder's
+  location on this computer, so they are the same on every branch. Moving
+  or renaming the folder starts afresh.
 - History, backups, **Restore** and saved changesets still work: the app
   keeps its own **private history** of the project on this computer,
   outside your repository (see
@@ -137,7 +143,9 @@ In that case Kinetic Migrator **leaves the changes for you**:
   Its commits have the same titles as in the table above.
 - Overview and History show a note such as "This project is in your
   repository monorepo on branch feature/x; Kinetic Migrator doesn't commit
-  there — 12 files changed since your last commit."
+  there — 12 files changed since your last commit." The count is worked out
+  in the background (it says "checking" meanwhile) and refreshed within
+  seconds after a change.
 - If you switch branches, pull, or edit the files yourself (or with the
   command line), the app records the new state in its private history as
   "Files changed outside Kinetic Migrator" before its next change. What

@@ -320,17 +320,24 @@ git installation is needed). Where it lives depends on the folder:
 | **External** | The folder is inside a repository you already have: a monorepo, any subfolder, any branch, a linked worktree or a submodule | A **private history** in the app's data folder | You, in your repository; the app only writes the project's files |
 
 The mode is decided when a project is opened or created, by looking upwards
-from the project folder for a `.git` folder or file. A repository at the
-project folder itself counts as the app's when its `.git` holds the
-`kinetic-migrator.json` marker the app writes, or (projects from before the
-marker) when the folder has `kinetic-migrate.json` and its last commit holds
-nothing outside the project layout. Anything else is yours, so the project
-is external. Projects are never moved between modes.
+from the project folder for a `.git` folder or file, and it fails safe. A
+repository at the project folder itself counts as the app's only when its
+`.git` holds the `kinetic-migrator.json` marker, which the app writes right
+after it creates a repository itself, or (projects from before the marker)
+when its first commit is the app's ("Created project …" or "Started managing
+this project") and every tracked file is a project-layout path. Anything
+else is yours, so the project is external: a repository you made yourself
+(for example `git init` in a project made with the command line), one with
+no commits yet, or one whose HEAD cannot be read. Opening a project never
+changes its mode, and the app never writes the marker into a repository it
+did not create.
 
 **The private history** of an external project is a git repository whose
 work tree is the project folder and whose git folder is in the app's data
-folder, under `history/<project id>` (the id is the `secretsId` in
-`kinetic-migrate.json`):
+folder, under `history/<project id>`. The id is worked out from the project
+folder's real path (symlinks resolved), never from the project's files,
+which change with the branch; it also keys the project's credentials in the
+keychain. Reading a project never writes any file in it:
 
 | OS | Data folder |
 |----|-------------|
@@ -339,11 +346,16 @@ folder, under `history/<project id>` (the id is the `secretsId` in
 | Linux | `$XDG_DATA_HOME/kinetic-migrator`, else `~/.local/share/kinetic-migrator` |
 
 `KINETIC_MIGRATOR_DATA_DIR` overrides it. It tracks only the project layout
-(the paths marked "Committed" below). A second checkout or worktree of the
-same repository on the same computer gets its own private history, started
-as a copy of the first; a moved folder keeps its history. Deleting the data
-folder loses History, backups and the commits saved changesets are pinned
-to, never the project's files.
+(the paths marked "Committed" below). Each checkout or worktree of a
+repository on this computer has its own private history and credentials.
+**Moving or renaming the project folder starts a new private history**
+(and asks for credentials again): the old one stays in the data folder but
+is no longer shown. Private histories are never cleaned up automatically;
+delete a folder under `history/` by hand to reclaim the space (or the whole
+data folder when no project needs its History). Deleting one loses History,
+backups and the commits saved changesets are pinned to, never the
+project's files. The same applies when `KINETIC_MIGRATOR_DATA_DIR` points
+somewhere new.
 
 Changes made underneath (a branch switch, a pull, your own edits, the
 command line) are recorded in the private history as "Files changed outside

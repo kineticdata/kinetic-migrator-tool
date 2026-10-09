@@ -8,6 +8,7 @@ import type { JobEvent, JobEventData, JobInfo, JobStatus } from '../shared/api.t
 import { ApiError, mapError, notFound } from './errors.ts';
 import type { Router } from './router.ts';
 import { defaultLogger, type Logger } from './log.ts';
+import { inRequestScope } from './request-scope.ts';
 
 export type Emit = (event: JobEventData) => void;
 export type JobRun<R = unknown> = (emit: Emit, signal: AbortSignal) => Promise<R>;
@@ -72,7 +73,8 @@ export class JobRegistry {
 
     const done = (async () => {
       try {
-        const result = await run(emit, controller.signal);
+        // Each job is its own scope for once-per-request work.
+        const result = await inRequestScope(() => run(emit, controller.signal));
         if (controller.signal.aborted && !resultOnCancel) return finish('cancelled');
         job.result = result;
         return finish('succeeded');

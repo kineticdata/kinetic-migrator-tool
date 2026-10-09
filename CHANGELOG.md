@@ -21,8 +21,15 @@
   project is read-only. Bare repositories and broken `.git` files are
   refused with plain messages.
 - The refusal to open a repository on a branch other than `main` now applies
-  only to repositories Kinetic Migrator created; those are marked with
-  `.git/kinetic-migrator.json`. Existing managed projects stay managed.
+  only to repositories Kinetic Migrator created (marked with
+  `.git/kinetic-migrator.json` when the app creates them, or recognised by
+  the app's own first commit). Any other repository, including one you made
+  yourself at the project folder, is external. Existing managed projects stay
+  managed, and a managed repository is committed to only on `main`.
+- An external project's private history and credentials are keyed by the
+  project folder's real path, so they are the same on every branch; moving
+  the folder starts a new history. Looking at a project never writes a file.
+- The changed-files count is worked out in the background and cached.
 
 ### Fixed
 

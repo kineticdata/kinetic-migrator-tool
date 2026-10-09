@@ -108,7 +108,7 @@ test('a project inside the user’s repository shows that repository read-only, 
     mode: 'external',
     external: {
       root: '/work/monorepo', name: 'monorepo', kind: 'worktree', branch: 'feature/x', subfolder: 'apps/config/kinetic',
-      changedFiles: 2, operation: null, historyPath: '/data/history/abc',
+      changedFiles: 2, checking: false, operation: null, historyPath: '/data/history/abc',
     },
   });
   const user = userEvent.setup();

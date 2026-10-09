@@ -14,7 +14,7 @@ import type { JobRegistry } from './jobs.ts';
 import {
   DEFAULT_AUTHOR, authorOf, commitChange, isPlainObject, readMeta, secretsId, withProjectLock, withSecretsLock, writeMeta, type ProjectRef,
 } from './project-meta.ts';
-import { projectRepo, setPrivateAuthor, userBranch, userChangedFiles, userOperation, userRepoName, type ProjectRepo } from './project-repo.ts';
+import { changedFilesStatus, projectRepo, setPrivateAuthor, userBranch, userOperation, userRepoName, type ProjectRepo } from './project-repo.ts';
 import { findProject } from './projects.ts';
 import { getRemote, headOid, isSafeRemoteUrl, push as repoPush, setRemote } from './repo.ts';
 import type { Router } from './router.ts';
@@ -45,11 +45,11 @@ const lastPushFile = (ref: ProjectRef) => path.join(ref.dir, '.git', LAST_PUSH);
 const EXTERNAL_MESSAGE = 'This project is in your own repository: push it with your usual git tools. Kinetic Migrator never changes that repository’s remotes or pushes it.';
 const externalRefusal = () => new ApiError(400, 'external_repository', EXTERNAL_MESSAGE);
 
-export async function externalInfo(repo: ProjectRepo): Promise<ExternalRepository> {
+export function externalInfo(repo: ProjectRepo): ExternalRepository {
   const u = repo.user!;
   return {
     root: u.root, name: userRepoName(u), kind: u.kind, branch: userBranch(u), subfolder: u.subfolder,
-    changedFiles: await userChangedFiles(u).catch(() => null), operation: userOperation(u), historyPath: repo.gitdir,
+    ...changedFilesStatus(u), operation: userOperation(u), historyPath: repo.gitdir,
   };
 }
 
@@ -97,7 +97,7 @@ function displayUrl(url: string | null): string | null {
 export async function repositorySettings(ref: ProjectRef, store: SecretStore): Promise<RepositorySettings> {
   const repo = await projectRepo(ref);
   if (repo.mode === 'external') {
-    return { mode: 'external', author: authorOf(ref, repo), remote: { url: null, token: { has: false } }, lastPush: null, external: await externalInfo(repo) };
+    return { mode: 'external', author: authorOf(ref, repo), remote: { url: null, token: { has: false } }, lastPush: null, external: externalInfo(repo) };
   }
   const meta = readMeta(ref.dir);
   const url = await getRemote(repo).catch(() => null);

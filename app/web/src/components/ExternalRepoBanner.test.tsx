@@ -18,7 +18,7 @@ const external = (over: Partial<NonNullable<RepositorySettings['external']>> = {
   lastPush: null,
   external: {
     root: '/work/monorepo', name: 'monorepo', kind: 'repository', branch: 'feature/x', subfolder: 'apps/config/kinetic',
-    changedFiles: 3, operation: null, historyPath: '/data/history/abc', ...over,
+    changedFiles: 3, checking: false, operation: null, historyPath: '/data/history/abc', ...over,
   },
 });
 
@@ -36,6 +36,7 @@ test('the summary names the repository, branch and changed files', () => {
   );
   expect(externalSummary(external({ branch: null, changedFiles: 1 }).external!)).toMatch(/on a detached commit; .* 1 file changed/);
   expect(externalSummary(external({ changedFiles: null }).external!)).not.toMatch(/changed since/);
+  expect(externalSummary(external({ changedFiles: null, checking: true }).external!)).toMatch(/checking for files changed since your last commit…\.$/);
 });
 
 test('History shows the banner, with a busy repository called out', async () => {

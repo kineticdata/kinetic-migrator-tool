@@ -21,9 +21,12 @@ export const useHistoryDetail = (p: string, commit: string | null) => useQuery({
   queryFn: () => api.get<HistoryDetail>(projectPath(p, 'history', commit ?? '')),
 });
 
+// While the server is still counting an external project's changed files,
+// ask again every second.
 export const useRepository = (p: string) => useQuery({
   queryKey: historyKeys.repository(p),
   queryFn: () => api.get<RepositorySettings>(projectPath(p, 'repository')),
+  refetchInterval: (q) => (q.state.data?.external?.checking ? 1000 : false),
 });
 
 export const putRepository = (p: string, body: PutRepositoryRequest) => api.put<RepositorySettings>(projectPath(p, 'repository'), body);

@@ -5,14 +5,15 @@
 // external projects), and the project's random secrets id (the keychain
 // account prefix, which also keys an external project's private history).
 import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ApiError } from './errors.ts';
 import { GITATTRIBUTES, stableStringify } from './engine.ts';
-import { commitAll, ensureRepo, headOid, layoutDirty, readTreeAt, type Author } from './repo.ts';
+import { commitAll, currentBranch, ensureRepo, headOid, layoutDirty, readTreeAt, type Author } from './repo.ts';
+import { firstInScope } from './request-scope.ts';
 import { LAYOUT_VERSION, upgradeProjectLayout } from './engine-sync.ts';
 import { isLocked, withLock } from './locks.ts';
-import { privateAuthor, projectRepo, userBranch, userOperation, userRepoName, type ProjectRepo, type UserRepo } from './project-repo.ts';
+import { externalId, invalidateStatus, privateAuthor, projectRepo, userBranch, userOperation, userRepoName, type ProjectRepo, type UserRepo } from './project-repo.ts';
 
 export interface ProjectRef {
   id: string;
@@ -59,14 +60,22 @@ export function ensureGitattributes(dir: string): void {
   if (!existsSync(file)) writeFileSync(file, GITATTRIBUTES);
 }
 
+// Adds the missing lines (in the file's own line endings). A symlinked
+// .gitignore is left alone: it may lead out of the project folder.
 export function ensureGitignore(dir: string): void {
   const file = path.join(dir, '.gitignore');
+  try {
+    if (lstatSync(file).isSymbolicLink()) return;
+  } catch {
+    // Absent: written below.
+  }
   const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
   const have = new Set(text.split(/\r?\n/).map((l) => l.trim()));
   const missing = GITIGNORE_LINES.filter((l) => !have.has(l));
   if (!missing.length) return;
-  const sep = text && !text.endsWith('\n') ? '\n' : '';
-  writeFileSync(file, `${text}${sep}${missing.join('\n')}\n`);
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const sep = text && !text.endsWith('\n') ? eol : '';
+  writeFileSync(file, `${text}${sep}${missing.join(eol)}${eol}`);
 }
 
 // "dev" → "Dev", for plain commit messages.
@@ -79,23 +88,29 @@ export function authorOf(ref: ProjectRef, repo: ProjectRepo): Author {
   return (repo.mode === 'external' ? privateAuthor(repo) : readMeta(ref.dir).author) ?? DEFAULT_AUTHOR;
 }
 
-// The repository commits go to. An external project gets its id and private
-// history on first use.
+// The repository commits go to. An external project's private history is
+// created on first use (in the data folder: no project file is written). A
+// managed repository is committed to only on main.
 export async function writableRepo(ref: ProjectRef): Promise<ProjectRepo> {
-  let repo = await projectRepo(ref);
-  if (repo.mode !== 'external') return repo;
-  const meta = readMeta(ref.dir);
-  if (!validSecretsId(meta.secretsId)) {
-    writeMeta(ref.dir, { ...meta, secretsId: newSecretsId() });
-    repo = await projectRepo(ref);
+  const repo = await projectRepo(ref);
+  if (repo.mode === 'external') {
+    await ensureRepo(repo);
+    return repo;
   }
-  await ensureRepo(repo);
+  const branch = await currentBranch(repo);
+  if (branch !== undefined && branch !== 'main') {
+    throw new ApiError(409, 'wrong_branch', `This project's repository is on ${branch === null ? 'a detached commit' : `branch ${branch}`}; Kinetic Migrator records its history on main. Check out main and try again.`);
+  }
   return repo;
 }
 
 export async function commitChange(ref: ProjectRef, message: string, opts: { always?: boolean } = {}): Promise<string | null> {
   const repo = await writableRepo(ref);
-  return commitAll(repo, message, authorOf(ref, repo), opts);
+  try {
+    return await commitAll(repo, message, authorOf(ref, repo), opts);
+  } finally {
+    if (repo.user) invalidateStatus(repo.user);
+  }
 }
 
 // ---- External projects: the user's repository underneath -------------------
@@ -127,11 +142,13 @@ async function recordOutsideChanges(ref: ProjectRef, repo: ProjectRepo): Promise
 // Before reading pinned or latest commits: catch the private history up with
 // the files on disk (cheap when nothing changed). Skipped while the project
 // is being written (that write records its own state) or git is busy.
+// Once per request or job; taken under the project lock (only when free, so
+// a read never waits behind an apply) so it never interleaves with a write.
 export async function syncHistory(ref: ProjectRef): Promise<void> {
-  if (isLocked(ref.dir)) return;
+  if (!firstInScope(`sync\0${ref.dir}`)) return;
   const repo = await projectRepo(ref);
-  if (repo.mode !== 'external' || userOperation(repo.user!)) return;
-  await recordOutsideChanges(ref, repo);
+  if (repo.mode !== 'external' || userOperation(repo.user!) || isLocked(ref.dir)) return;
+  await withLock(ref.dir, () => recordOutsideChanges(ref, repo));
 }
 
 export function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -143,11 +160,14 @@ export function isPlainObject(v: unknown): v is Record<string, unknown> {
 // repository and records changes made outside the app.
 export const withProjectLock = <T>(ref: ProjectRef, fn: () => Promise<T>): Promise<T> => withLock(ref.dir, async () => {
   const repo = await projectRepo(ref);
-  if (repo.mode === 'external') {
-    assertNotBusy(repo.user!);
-    await recordOutsideChanges(ref, repo);
+  if (repo.mode !== 'external') return fn();
+  assertNotBusy(repo.user!);
+  await recordOutsideChanges(ref, repo);
+  try {
+    return await fn();
+  } finally {
+    invalidateStatus(repo.user!);
   }
-  return fn();
 });
 // The project's secrets in the store (read-modify-write of the name index).
 export const withSecretsLock = <T>(ref: ProjectRef, fn: () => Promise<T>): Promise<T> => withLock(`${ref.dir}\0secrets`, fn);
@@ -162,12 +182,19 @@ export const newSecretsId = (): string => randomUUID();
 // the private history, and the user's own .gitattributes rules are left to
 // them (only the .gitignore lines that keep credentials and local folders out
 // of their repository are added). Call inside withProjectLock.
+//
+// The mode never changes here: it does not depend on the files written.
+// External projects get no secrets id in kinetic-migrate.json (theirs is
+// derived from the folder's path), and no .gitignore edit when the project
+// folder is the root of the user's repository (that is their root .gitignore).
 export async function manageProject(ref: ProjectRef, message: string): Promise<void> {
-  ensureGitignore(ref.dir);
-  const meta = readMeta(ref.dir);
-  if (!validSecretsId(meta.secretsId)) writeMeta(ref.dir, { ...meta, secretsId: newSecretsId() });
   const repo = await projectRepo(ref);
-  if (repo.mode === 'managed') ensureGitattributes(ref.dir);
+  if (repo.mode === 'managed') {
+    ensureGitignore(ref.dir);
+    ensureGitattributes(ref.dir);
+    const meta = readMeta(ref.dir);
+    if (!validSecretsId(meta.secretsId)) writeMeta(ref.dir, { ...meta, secretsId: newSecretsId() });
+  } else if (repo.user!.subfolder !== '') ensureGitignore(ref.dir);
   await ensureRepo(repo);
   await commitChange(ref, message);
   await upgradeLayoutLocked(ref);
@@ -205,7 +232,11 @@ export async function upgradeLayoutLocked(ref: ProjectRef): Promise<string | nul
 
 // The project's secrets id; projects without one (for example CLI-created
 // ones in the workspace) become managed and get one now.
+// An external project's id comes from its folder's real path (kinetic-migrate.json
+// changes with the branch), and reading it never writes anything.
 export async function secretsId(ref: ProjectRef): Promise<string> {
+  const repo = await projectRepo(ref);
+  if (repo.mode === 'external') return externalId(ref.dir);
   const id = readMeta(ref.dir).secretsId;
   if (validSecretsId(id)) return id;
   return withProjectLock(ref, async () => {

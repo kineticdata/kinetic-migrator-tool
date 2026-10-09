@@ -41,7 +41,9 @@ export const hasHistory = (repo: ProjectRepo): boolean => fs.existsSync(path.joi
 
 export async function ensureRepo(repo: ProjectRepo): Promise<void> {
   if (repo.mode === 'external') return ensurePrivateHistory(repo);
-  if (!fs.existsSync(repo.gitdir)) await git.init({ ...g(repo), defaultBranch: BRANCH });
+  if (fs.existsSync(repo.gitdir)) return;
+  await git.init({ ...g(repo), defaultBranch: BRANCH });
+  // Only a repository the app has just created is marked as its own.
   markManaged(repo);
 }
 

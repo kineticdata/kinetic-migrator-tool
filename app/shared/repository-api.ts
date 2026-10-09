@@ -29,8 +29,10 @@ export interface ExternalRepository {
   // The project folder relative to root ('/'-separated, '' at the root).
   subfolder: string;
   // Files in the project folder that differ from the user's last commit
-  // (null when it could not be worked out).
+  // (null when it could not be worked out, or before the first count).
   changedFiles: number | null;
+  // True while the count is being worked out in the background: ask again.
+  checking: boolean;
   // A git operation in progress there: the project is read-only until it ends.
   operation: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | null;
   historyPath: string;
