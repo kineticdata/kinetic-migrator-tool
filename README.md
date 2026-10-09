@@ -7,6 +7,127 @@ each environment, shows what differs, lets you pick exactly what to promote
 taken first. It runs on your computer as a local web app, with a command
 line for scripted use. The command is `kinetic-migrate`.
 
+## Get started
+
+These steps take about five minutes. They are the same on macOS, Windows and
+Linux; on Windows use PowerShell, Command Prompt or Windows Terminal.
+
+### 1. Check the prerequisites
+
+- **Node.js 22 or 24** (the current LTS releases). Get it from
+  [nodejs.org](https://nodejs.org/) (choose the LTS download). Check with:
+
+  ```
+  node -v
+  ```
+
+  It should print `v22.12.0` or later, or `v24…`. Building needs Node
+  20.19 or newer (22.12 or newer on Node 22), and Node 20 is past its end of
+  life, so use 22 or 24.
+- **git**, to download the code and update it later. Check with `git --version`.
+  On Windows, install [Git for Windows](https://git-scm.com/download/win);
+  macOS offers to install it the first time you run `git`.
+
+### 2. Download, build and start
+
+```
+git clone https://github.com/kineticdata/kinetic-migrator-tool.git
+cd kinetic-migrator-tool
+npm install
+npm run build
+npm start
+```
+
+`npm install` downloads the build tools (a few minutes the first time) and
+`npm run build` builds the app into `dist/`. `npm start` starts Kinetic
+Migrator and opens it in your browser at a local address such as
+`http://localhost:53124/?key=…`. The terminal shows:
+
+```
+Kinetic Migrator is running at http://localhost:53124/?key=…
+Workspace: /Users/you/KineticMigrate. Press Ctrl+C to stop.
+Log file: /Users/you/KineticMigrate/.kinetic-migrate/logs/kinetic-migrate-2026-10-09.log
+```
+
+Leave the terminal open while you use the app; press **Ctrl+C** in it to
+stop. The app only listens on your own computer. If the browser does not
+open, or you close the tab, open the printed address again. The `key` in it
+signs your browser in and changes each time the app starts.
+
+### 3. Try it without a Kinetic space first
+
+```
+npm run start:fake
+```
+
+Demo mode serves two synthetic spaces from memory and contacts no server.
+Name the first environment `dev` (a Dev space on Kinetic Platform 6.1.7);
+any other name, such as `test`, is a copy of a Test space on 7.0.0-rc3. Any
+`https://` URL and any username and password are accepted. Projects you make
+in demo mode are saved in your workspace like any other; delete the demo
+project's folder from the workspace when you are done.
+
+### 4. Connect your spaces
+
+You need the `https://` address of each space and the username and password
+of a **space admin** account (single sign-on only accounts cannot be used).
+
+1. On the Projects page choose **Create your first project**, name it and
+   choose **Next**.
+2. Enter the first environment, usually the source: name `dev`, its Space
+   URL (for example `https://dev.example.com`), username and password. Turn
+   on **Protected** so Kinetic Migrator only ever reads from it. Choose
+   **Test connection**; when it says **Connected**, choose **Next**.
+3. Choose **Take snapshot**, then **Open overview**.
+4. Open **Settings**, choose **Add environment**, enter `test` with its URL
+   and credentials, **Test connection**, then **Save**.
+5. On **Overview**, choose **Take snapshot** on the Test lane.
+6. Choose **Compare with Test** on the Dev lane to see what differs.
+
+From there, the **[walkthrough](docs/WALKTHROUGH.md)** takes you through
+your first promotion from Dev to Test, screen by screen.
+
+### Windows notes
+
+- The commands above are identical in PowerShell and Command Prompt.
+- Passwords and tokens are kept in **Windows Credential Manager** (macOS:
+  Keychain). The first time one is saved, Windows compiles a small helper,
+  which can take several seconds.
+- Keep the workspace out of OneDrive and other synced folders. See
+  [Windows notes](docs/TROUBLESHOOTING.md#windows-notes) for more.
+
+### Updating
+
+Stop the app (Ctrl+C), then in the `kinetic-migrator-tool` folder:
+
+```
+git pull
+npm install
+npm run build
+npm start
+```
+
+Your projects are kept outside this folder, so updating never touches them.
+
+### Where things are kept
+
+- **Projects:** the workspace folder `KineticMigrate` in your home folder
+  (`~/KineticMigrate` on macOS and Linux, `%USERPROFILE%\KineticMigrate` on
+  Windows). Each project is a git repository of snapshots, changesets and
+  backups. Use `npm start -- --workspace <folder>` to use another folder.
+- **Logs:** a daily log file in `.kinetic-migrate/logs/` inside the
+  workspace. Its path is printed at start and shown on the Projects page.
+  Secrets are never written to it.
+- **Secrets:** your system keychain, never the project folder.
+
+### Getting help
+
+Check [Troubleshooting](docs/TROUBLESHOOTING.md) first. To report a problem
+or ask a question, open an issue at
+[github.com/kineticdata/kinetic-migrator-tool/issues](https://github.com/kineticdata/kinetic-migrator-tool/issues)
+with the steps, the exact message and the relevant log lines. Never include
+passwords, tokens or customer data.
+
 ## Who it is for
 
 - **Kinetic admins and partners** who move kapps, forms, workflows and
@@ -47,8 +168,10 @@ line for scripted use. The command is `kinetic-migrate`.
 
 ## Requirements
 
-- **Node.js 20.6 or newer** (from `package.json` `engines`). Node 22 or 24
-  is recommended: Node 20 reached its end of life in April 2026.
+- **Node.js 22 or 24** recommended. The built app runs on Node 20.6 or newer
+  (`package.json` `engines`); building it (`npm run build`) needs Node 20.19
+  or newer, or 22.12 or newer, for Vite. Node 20 reached its end of life in
+  April 2026.
 - **macOS** 12 or newer, **Windows** 10 or 11, or **Linux**. CI runs on
   macOS, Windows and Ubuntu.
 - **Kinetic Platform 6.x or 7.x.** The version of each environment is
@@ -61,18 +184,17 @@ line for scripted use. The command is `kinetic-migrate`.
 
 ## Install
 
-From a copy of the source:
+[Get started](#get-started) covers the usual install from a clone. To put the
+`kinetic-migrate` command on your PATH as well:
 
 ```
-npm install
-npm run build
-npm link        # optional: puts the kinetic-migrate command on your PATH
+npm link
 ```
 
 `npm run build` bundles the server and the web app into `dist/`. The built
 app has no runtime dependencies. Without `npm link`, run
-`node kinetic-migrate.mjs` from the source folder wherever these docs say
-`kinetic-migrate`.
+`node kinetic-migrate.mjs` from the source folder (or `npm start`, which runs
+`node kinetic-migrate.mjs ui`) wherever these docs say `kinetic-migrate`.
 
 To install on another machine, build first, then pack and install the
 tarball there:
@@ -110,36 +232,11 @@ Platform 6.1.7, and any other name is a copy of a Test space on 7.0.0-rc3.
 Any URL and password are accepted, and applies change only the in-memory
 space.
 
-## Quickstart: your first promotion
+## Your first promotion
 
-This takes about five minutes with two real spaces, or with `--fake`.
-
-1. **Create a project.** On the Projects page choose **Create your first
-   project** (or **New project**). Give it a name and choose **Next**.
-2. **Add the first environment.** Enter a name such as `dev`, the Space URL
-   (for example `https://dev.example.com`), a username and a password.
-   Choose **Test connection**. When it says **Connected**, choose **Next**.
-3. **Take a snapshot.** Choose **Take snapshot**. Optionally enter your name
-   and email for History, then choose **Open overview**.
-4. **Add the second environment.** Open **Settings**, choose **Add
-   environment**, enter `test` and its URL and credentials, **Test
-   connection**, then **Save**.
-5. **Snapshot it.** On **Overview**, choose **Take snapshot** on the Test
-   lane.
-6. **Compare.** Choose **Compare with Test** on the Dev lane. The tree shows
-   what is new or changed in Dev. Select an item to see its changes.
-7. **Build a changeset.** Tick the items to promote. Check the
-   **Suggested** list in the tray and choose **Add** (or **Add all**) for the
-   dependencies you need. Optionally choose **Save as changeset…**.
-8. **Plan.** Choose **Review plan**. Read the counts and the item list, and
-   tick each entry under **Needs attention**. Choose **Next: Environment
-   values**, fill in any value or secret it asks for, then **Next: Confirm**.
-9. **Apply.** Type the target's name (`test`) and choose **Apply to Test**.
-   A backup of Test is taken, then each change is shown as it is made.
-10. **Check History.** Choose **View in History** to see the backup and the
-    promotion. From there you can restore the backup if you need to.
-
-The [User guide](docs/USER-GUIDE.md) covers every screen in detail.
+The [walkthrough](docs/WALKTHROUGH.md) goes from an empty Projects page to a
+promotion from Dev to Test and a restore preview, with a screenshot of every
+step. The [User guide](docs/USER-GUIDE.md) covers every screen in detail.
 
 ## Safety model
 
@@ -163,6 +260,7 @@ The [User guide](docs/USER-GUIDE.md) covers every screen in detail.
 
 | Guide | What it covers |
 |-------|----------------|
+| [Walkthrough](docs/WALKTHROUGH.md) | Your first promotion from Dev to Test, with screenshots |
 | [User guide](docs/USER-GUIDE.md) | Every screen and flow of the web app |
 | [Concepts](docs/CONCEPTS.md) | Snapshots, changesets, plans, drift, environment values, secrets, what is promoted |
 | [Command line](docs/CLI.md) | Every command and flag, with examples |
@@ -184,3 +282,8 @@ Secrets are never written to it.
 See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). In short: `npm run dev` for
 the web app with hot reload, `npm test` and `npm run test:app` for the
 tests.
+
+## License
+
+[MIT](LICENSE). Copyright (c) 2026 Kinetic Data. Source and issues:
+[github.com/kineticdata/kinetic-migrator-tool](https://github.com/kineticdata/kinetic-migrator-tool).
