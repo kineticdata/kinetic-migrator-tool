@@ -224,7 +224,8 @@ export class PowerShellHelper {
         child?.kill();
         reject(onTimeout());
       }, timeoutMs);
-      (timer as unknown as { unref?: () => void }).unref?.();
+      // Kept referenced: a pending request holds the process until it is
+      // answered or times out (the idle helper itself is unref'd).
       this.waiter = {
         resolve: (line) => { clearTimeout(timer); resolve(line); },
         reject: (err) => { clearTimeout(timer); reject(err); },

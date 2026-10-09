@@ -67,7 +67,7 @@ export function buildRouter(ctx: Omit<ServerContext, 'router'>): Router {
   router.get('/api/session', async () => {
     // A keychain still being probed gets a few seconds to report.
     const ready = (ctx.secrets as { ready?: () => Promise<void> }).ready;
-    if (ready) await Promise.race([ready.call(ctx.secrets), new Promise((r) => { setTimeout(r, 3000).unref(); })]);
+    if (ready) await Promise.race([ready.call(ctx.secrets), new Promise((r) => { setTimeout(r, 3000); })]);
     // Still probing after that: say so rather than "no keychain".
     const checking = Boolean((ctx.secrets as { checking?: boolean }).checking);
     const logFile = ctx.logger?.file?.() ?? null;
