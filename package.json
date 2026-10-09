@@ -2,7 +2,17 @@
   "name": "kinetic-migrate",
   "version": "0.1.0",
   "private": true,
-  "description": "Explore, compare and promote Kinetic Platform configuration between environments.",
+  "description": "Kinetic Migrator: a local web app and command line that explores, compares and promotes Kinetic Platform configuration between environments.",
+  "license": "MIT",
+  "author": "James Davies <james.davies@kineticdata.com>",
+  "homepage": "https://github.com/kineticdata/kinetic-migrator-tool#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kineticdata/kinetic-migrator-tool.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kineticdata/kinetic-migrator-tool/issues"
+  },
   "type": "module",
   "bin": {
     "kinetic-migrate": "./kinetic-migrate.mjs"
@@ -14,11 +24,14 @@
     "dist/",
     "README.md",
     "CHANGELOG.md",
+    "LICENSE",
     "docs/USER-GUIDE.md",
     "docs/CONCEPTS.md",
     "docs/CLI.md",
     "docs/PROMOTING.md",
-    "docs/TROUBLESHOOTING.md"
+    "docs/TROUBLESHOOTING.md",
+    "docs/WALKTHROUGH.md",
+    "docs/images/walkthrough/"
   ],
   "engines": {
     "node": ">=20.6"
@@ -33,7 +46,8 @@
     "start": "node kinetic-migrate.mjs ui",
     "start:fake": "node kinetic-migrate.mjs ui --fake",
     "smoke": "node scripts/smoke.mjs",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "docs:screenshots": "npm run build && playwright test --config e2e/walkthrough/playwright.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",

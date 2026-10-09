@@ -128,9 +128,17 @@ To run the built app: `npm run build`, then `npm start` (or
 | `npm run build` | Web app to `dist/web` (Vite), server to `dist/server.mjs` (esbuild) |
 | `npm run smoke` | Starts the built app in fake mode with a workspace whose path has spaces and checks it answers |
 | `npm run test:e2e` | Builds, then runs the Playwright journey in fake mode: create a project, add Dev and Test, snapshot both, compare, accept a suggestion, plan, apply, history, a removal, dark theme |
+| `npm run docs:screenshots` | Builds, then retakes the walkthrough screenshots in `docs/images/walkthrough/` |
 
 The first e2e run needs a browser: `npx playwright install chromium`.
 Screenshots of each step go to `e2e-artifacts/screenshots/` (git-ignored).
+
+`npm run docs:screenshots` builds, then drives the same fake-mode app through
+the [walkthrough](WALKTHROUGH.md) journey
+(`e2e/walkthrough/walkthrough.shots.ts`, its own Playwright config, so
+`npm run test:e2e` stays fast) and rewrites the committed screenshots in
+`docs/images/walkthrough/` (1440x900). Run it after a UI change, look at
+every picture, and update `docs/WALKTHROUGH.md` if a label or step changed.
 
 `scripts/run-tests.mjs` lists test files itself, because npm runs scripts
 with cmd.exe on Windows (no glob expansion) and Node 20's `--test` takes no

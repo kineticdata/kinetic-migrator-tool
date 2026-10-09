@@ -5,6 +5,9 @@ it with `kinetic-migrate ui` (see the [README](../README.md#start-the-web-app)).
 For the ideas behind the screens (snapshots, changesets, plans, drift), read
 [Concepts](CONCEPTS.md).
 
+New to Kinetic Migrator? Start with the [walkthrough](WALKTHROUGH.md): your
+first promotion from Dev to Test, with a screenshot of every step.
+
 Examples use three environments, Dev, Test and Prod, at
 `https://dev.example.com`, `https://test.example.com` and
 `https://prod.example.com`.
