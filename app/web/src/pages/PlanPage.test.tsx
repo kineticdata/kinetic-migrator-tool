@@ -679,7 +679,7 @@ test('a promotion across major platform versions is allowed, with the warning in
 });
 
 test('applied, but the snapshot afterwards failed: the warning is shown instead of a plain Applied', async () => {
-  const warning = 'The changes were applied, but the snapshot of Test afterwards failed: the server returned an error (503). Take a snapshot before comparing again.';
+  const warning = 'The snapshot of Test taken after the apply failed: the server returned an error (503). Take a snapshot before comparing again.';
   setup(simple(), { applyJobs: [{ id: 'a1', result: { runId: 'r1', status: 'applied', commit: 'c-run', backupCommit: 'c-backup', snapshotCommit: null, done: 3, error: null, warnings: [warning] } }] });
   const user = userEvent.setup();
   renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
@@ -694,7 +694,7 @@ test('applied, but the snapshot afterwards failed: the warning is shown instead 
 });
 
 test('a partly applied run whose snapshot afterwards failed shows the warning with the failure', async () => {
-  const warning = 'The changes were applied, but the snapshot of Test afterwards failed: the server returned an error (503). Take a snapshot before comparing again.';
+  const warning = 'The snapshot of Test taken after the apply failed: the server returned an error (503). Take a snapshot before comparing again.';
   setup(simple(), { applyJobs: [{ id: 'a1', result: { runId: 'r1', status: 'partial', commit: 'c-run', backupCommit: 'c-backup', snapshotCommit: null, done: 1, error: 'kapps/hr/forms/leave/form: Form rejected', warnings: [warning] } }] });
   const user = userEvent.setup();
   renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });

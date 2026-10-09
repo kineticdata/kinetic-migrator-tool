@@ -299,7 +299,7 @@ test('a failed post-apply snapshot is a warning: the apply still reports its rea
   assert.match(job.events, /"step":"snapshot","status":"failed"/);
   // The result, the run record and History carry the warning (not a plain "Applied").
   assert.equal(job.result.warnings.length, 1);
-  assert.match(job.result.warnings[0], /^The changes were applied, but the snapshot of Test afterwards failed: .+\. Take a snapshot before comparing again\.$/);
+  assert.match(job.result.warnings[0], /^The snapshot of Test taken after the apply failed: .+\. Take a snapshot before comparing again\.$/);
   assert.ok(job.events.includes(job.result.warnings[0].slice(0, 60)));
   const [noted, applied] = await log(h.dir, { limit: 2 });
   assert.equal(noted.message.split('\n')[0], 'Recorded that the snapshot of Test after the apply failed');
@@ -340,7 +340,7 @@ test('a partial apply whose snapshot afterwards fails keeps the warning too', as
   assert.equal(job.result.status, 'partial', job.result.error);
   assert.match(job.events, /"step":"snapshot","status":"failed"/);
   assert.equal(job.result.warnings.length, 1);
-  assert.match(job.result.warnings[0], /^The changes were applied, but the snapshot of Test afterwards failed: /);
+  assert.match(job.result.warnings[0], /^The snapshot of Test taken after the apply failed: /);
   const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${job.result.runId}.json`), 'utf8'));
   assert.deepEqual(run.warnings, job.result.warnings);
   const history = (await h.call('GET', `${P}/history?type=applied&env=test`)).json as Array<{ status: string; warnings?: string[] }>;

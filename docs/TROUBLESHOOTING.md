@@ -264,7 +264,7 @@ shows only "The Kinetic Platform returned an error (<status>)." **Fix:**
 depends on the message. For "<name> may not be empty" on a handler, see
 [Handlers](#handlers).
 
-### "The changes were applied, but the snapshot of Test afterwards failed: …. Take a snapshot before comparing again."
+### "The snapshot of Test taken after the apply failed: …. Take a snapshot before comparing again."
 
 **Cause:** the snapshot taken after the apply failed; the reason follows
 "failed:". The apply itself is complete. The Plan page shows "Applied to

@@ -162,7 +162,7 @@ test('an empty history shows a calm empty state', async () => {
 });
 
 test('an apply whose snapshot afterwards failed is not a plain Applied: the timeline and the detail say so', async () => {
-  const warning = 'The changes were applied, but the snapshot of Test afterwards failed: the server returned an error (503). Take a snapshot before comparing again.';
+  const warning = 'The snapshot of Test taken after the apply failed: the server returned an error (503). Take a snapshot before comparing again.';
   const event = historyEvent({ id: 'c-warn', commit: 'c-warn', type: 'applied', title: "Applied 'Q4 forms' to Test", env: 'test', at: '2026-10-08T10:00:00Z', runId: 'r2', status: 'applied', warnings: [warning] });
   const run: RunRecord = { ...RUN, id: 'r2', status: 'applied', items: [{ key: 'teams/Ops', status: 'done' }], done: 1, error: null, warnings: [warning] };
   mockApi({

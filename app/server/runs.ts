@@ -731,7 +731,7 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
       const reason = failure.code === 'internal_error'
         ? 'an unexpected error (the details are in the server log)'
         : scrub(failure.message).replace(/[.\s]+$/, '');
-      warnings.push(`The changes were applied, but the snapshot of ${To} afterwards failed: ${reason}. Take a snapshot before comparing again.`);
+      warnings.push(`The snapshot of ${To} taken after the apply failed: ${reason}. Take a snapshot before comparing again.`);
       emit({ type: 'warning', message: warnings[warnings.length - 1] });
       // Recording it must not turn an applied run into a failed job.
       try {

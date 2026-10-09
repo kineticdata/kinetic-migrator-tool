@@ -530,7 +530,7 @@ Behind the scenes, in this order:
 | Heading | Meaning |
 |---------|---------|
 | Applied to Test | Every change was made. Choose **View in History** or **Back to Compare**. |
-| Applied to Test, with a warning | Every change was made, but the snapshot taken afterwards failed: "The changes were applied, but the snapshot of Test afterwards failed: …. Take a snapshot before comparing again." History shows the run as "Applied, snapshot failed". |
+| Applied to Test, with a warning | Every change was made, but the snapshot taken afterwards failed: "The snapshot of Test taken after the apply failed: …. Take a snapshot before comparing again." History shows the run as "Applied, snapshot failed". |
 | Partly applied to Test | Some items were skipped or need attention (for example a handler installed without a required setting). |
 | Failed to apply to Test | An item failed; the run stopped there. |
 | Cancelled applying to Test | You cancelled. |
