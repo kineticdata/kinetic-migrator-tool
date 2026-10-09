@@ -130,7 +130,7 @@ test('create a project, compare dev with test, promote a form and its dependenci
     const tray = page.getByRole('complementary');
     const suggested = tray.getByRole('region', { name: 'Suggested' });
     await expect(suggested.getByText('Ticketing', { exact: true })).toBeVisible();
-    // Mail Send's Task category, so the handler shows in the workflow builder.
+    // Mail Send's workflow category, so the handler shows in the workflow builder.
     await expect(suggested.getByText('Notifications', { exact: true })).toBeVisible();
     await snap(page, 'compare-suggestion');
     await suggested.getByRole('button', { name: 'Add all' }).click();
