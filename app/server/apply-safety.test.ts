@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { PlanResult } from '../shared/sync-api.ts';
 import { log, readTreeAt } from './repo.ts';
-import { PLANTED, PLANTED_RUN, assertNoSecret, devRoutes, harness, testRoutes, type Harness } from './sync-fixtures.ts';
+import { PLANTED, PLANTED_CONN, PLANTED_RUN, assertNoSecret, devRoutes, harness, testRoutes, type Harness } from './sync-fixtures.ts';
 
 const P = '/api/projects/sync-test';
 const FORM = 'kapps/services/forms/it-request/form';
@@ -124,4 +124,48 @@ test('stale plan source folders and snapshot exports are removed when the server
   const second = await startServer({ workspace, secrets: new MemoryStore() });
   t.after(() => second.close());
   assert.deepEqual(readdirSync(path.join(first.dir, 'plans')).sort(), ['keep-me']);
+});
+
+test('a SQL connection: its password never reaches a snapshot, Explore or Compare, and creating it asks for the password write-only', async (t) => {
+  const h = await harness(t);
+  const SQL = 'connections/Warehouse DB/connection';
+  const withSql = () => {
+    const routes = devRoutes();
+    return {
+      ...routes,
+      'GET integrator/connections': [{ id: 'c-1', name: 'Ticketing' }, { id: 'c-sql', name: 'Warehouse DB' }],
+      'GET integrator/export/connections/c-sql': {
+        connection: {
+          id: 'c-sql', name: 'Warehouse DB', type: 'postgres',
+          config: { configType: 'postgres', host: 'db.example.com', port: 5432, username: 'reporter', password: PLANTED_CONN, database: 'warehouse', poolSize: 5 },
+          operations: [],
+        },
+      },
+    };
+  };
+  h.spaces.dev = withSql;
+  assert.equal((await h.job('POST', `${P}/snapshots`, { env: 'dev' })).status, 'succeeded');
+  const file = readFileSync(path.join(h.dir, 'snapshots', 'dev', 'connections', 'Warehouse DB', 'connection.json'), 'utf8');
+  assert.ok(!file.includes(PLANTED_CONN), 'the snapshot holds no password');
+  assert.deepEqual(JSON.parse(file).strippedSecrets, ['password']);
+
+  const item = (await h.call('GET', `${P}/explore/dev/item?key=${encodeURIComponent(SQL)}`)).json;
+  const auth = item.summary.sections.find((s: any) => s.heading === 'Authentication');
+  assert.deepEqual(auth.rows, [{ label: 'password', value: 'not set' }]);
+
+  const p = await plan(h, { to: 'test', from: 'dev', selected: [SQL] });
+  assert.deepEqual(p.secretsNeeded.map((s) => [s.id, s.label, s.has]), [['secret/WAREHOUSE_DB__PASSWORD', 'Warehouse DB › password', false]]);
+  const job = await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [], secrets: { 'secret/WAREHOUSE_DB__PASSWORD': PLANTED_RUN }, confirm: 'test' });
+  assert.equal(job.result.status, 'applied', job.result.error);
+  const created = h.calls.find((c) => c.env === 'test' && c.path === '/import/connections')!;
+  assert.equal((created.body as any).config.password, PLANTED_RUN, 'the password went to config.password');
+  assert.equal('auth' in (created.body as any).config, false);
+  assert.equal('strippedSecrets' in (created.body as any), false);
+  assert.ok(!job.events.includes(PLANTED_RUN));
+
+  // A changed password in the source is no difference.
+  const cmp = (await h.job('POST', `${P}/compare`, { from: 'dev', to: 'test', mode: 'raw' })).result;
+  const row = (await h.call('GET', `${P}/compare/${cmp.compareId}/item?key=${encodeURIComponent(SQL)}`)).json;
+  assert.ok(!JSON.stringify(row).includes(PLANTED_CONN));
+  assertNoSecret(h, [job.events]);
 });
