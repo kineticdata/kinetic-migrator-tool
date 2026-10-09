@@ -55,6 +55,11 @@ digits, `-` and `_`. A file may only contain `url` and `readOnly` (a boolean):
 { "url": "https://dev.example.com", "readOnly": true }
 ```
 
+The `url` must start with `https://`; plain `http://` is accepted only for
+`localhost`, `127.0.0.1` and `[::1]` (any port). Credentials are never sent
+over plain `http://` to another machine: loading such an environment fails,
+and so does opening a client for it.
+
 Mark the space you export from as `readOnly: true`. Apply refuses to write to
 it, and every export and plan reads with a client that cannot send anything
 but GET requests.
@@ -383,9 +388,23 @@ KINETIC_PROD_SECRET_MY_API__PASSWORD=...
 KINETIC_PROD_SECRET_MY_API__CLIENT_SECRET=...
 ```
 
-If a new connection's auth type needs a secret and none is supplied, it is
-created with an empty one and the run prints a warning. Set the secret in the
-console afterwards.
+A database (SQL) connection keeps its password in its settings, outside
+`config.auth` (`config.password` for `postgres`, `mssql` and similar types).
+That key, and any other secret-named key anywhere in a connection's
+`config`, is stripped at export like an auth secret. The export records only
+the names, as config paths, under `strippedSecrets` (for example
+`["password"]`); a new connection's variable uses the camel-cased path as its
+field, for example `KINETIC_PROD_SECRET_WAREHOUSE_DB__PASSWORD`, and the value
+is sent back at the same path. Every snapshot, backup or pinned tree is
+stripped the same way when it is read, so one taken before this rule plans,
+compares, applies and restores exactly like a new one and its stored
+password is never sent or shown; take a new snapshot to drop it from the
+files (the git history keeps it). `strippedSecrets` is never shown as a
+difference.
+
+If a new connection needs a secret and none is supplied, it is created with
+an empty one and the run prints a warning. Set the secret in the console
+afterwards.
 
 Credentials typed straight into a header are not exported either. A header
 whose name is, or ends in, `Authorization`, `Api-Key`, `Token`, `Secret` or

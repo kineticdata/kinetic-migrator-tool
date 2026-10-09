@@ -12,7 +12,7 @@ import { canonicalSpaceFields, createClient, dataConfigError, envBoundAttributes
 import { isReservedDeviceName } from './engine-sync.ts';
 import {
   checkEnvName, credentialsStatus, deleteEnvironment, environmentExists, pipelineOrder, putEnvironment, putOverrides,
-  readEnvironmentFile, readOverrides, setCredentials, testConnection, validateNewEnvironment, writeEnvironment,
+  environmentUrlProblem, readEnvironmentFile, readOverrides, setCredentials, testConnection, validateNewEnvironment, writeEnvironment,
 } from './environments.ts';
 import {
   commitChange, ensureGitignore, isPlainObject, manageProject, newSecretsId, readJsonFile, readMeta, syncHistory, upgradeLayoutLocked, withProjectLock, writeMeta,
@@ -213,6 +213,7 @@ export async function readProject(ref: ProjectRef, store: SecretStore): Promise<
   for (const name of pipelineOrder(ref.dir)) {
     const def = readEnvironmentFile(ref.dir, name);
     const last = (await log(repo, { path: `snapshots/${name}`, limit: 1 }))[0];
+    const problem = environmentUrlProblem(def.url);
     environments.push({
       name,
       url: def.url,
@@ -220,6 +221,7 @@ export async function readProject(ref: ProjectRef, store: SecretStore): Promise<
       credentials: await credentialsStatus(store, ref, name),
       lastSnapshot: last ? { commit: last.oid, at: last.at, message: last.message } : null,
       platform: readPlatform(ref.dir, name),
+      ...(problem ? { problem } : {}),
     });
   }
   return { ...summary(ref), environments };

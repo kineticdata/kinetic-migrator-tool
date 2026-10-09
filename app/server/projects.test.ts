@@ -368,3 +368,55 @@ test('opening refuses folders that are not projects and managed repositories on 
   assert.match(readFileSync(path.join(cli, '.gitattributes'), 'utf8'), /^\*\.zip binary$/m);
   assert.equal(existsSync(path.join(cli, 'credentials.yaml')), true, 'left alone on disk');
 });
+
+test('environment addresses must be https:// (plain http only for this computer); an existing http:// one still loads but never signs in', async (t) => {
+  const store = new MemoryStore();
+  const sent: string[] = [];
+  const fetchImpl = fakeFetch({ integratorOk: true });
+  const server = await startTestServer({ secrets: store, clientFactory: factory(async (url, init) => { sent.push(String(url)); return fetchImpl(url, init); }) });
+  t.after(() => server.cleanup());
+  const call = async (method: string, pathname: string, body?: unknown) => {
+    const res = await server.api(pathname, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+    return { ...res, json: res.body ? JSON.parse(res.body) : undefined };
+  };
+  const ws = JSON.parse((await call('GET', '/api/session')).body).workspace as string;
+  const refused = await call('POST', '/api/projects', { name: 'web', environment: { name: 'dev', url: 'http://your-space.kinops.io' } });
+  assert.equal(refused.status, 400);
+  assert.match(refused.json.error.message, /^Start the address with https:\/\//);
+  assert.equal((await call('POST', '/api/projects', { name: 'web' })).status, 201);
+  const http = await call('PUT', '/api/projects/web/environments/dev', { url: 'http://your-space.kinops.io' });
+  assert.equal(http.status, 400);
+  assert.match(http.json.error.message, /^Start the address with https:\/\//);
+  for (const url of ['http://localhost:8080', 'http://127.0.0.1:9000', 'http://[::1]:7000', 'https://your-space.kinops.io']) {
+    assert.equal((await call('PUT', '/api/projects/web/environments/dev', { url })).status, 200, url);
+  }
+
+  // A project written before https was required.
+  const dir = path.join(ws, 'web');
+  writeFileSync(path.join(dir, 'environments', 'dev.json'), JSON.stringify({ url: 'http://your-space.kinops.io', readOnly: false }));
+  await call('PUT', '/api/projects/web/environments/dev/credentials', { username: 'admin', password: PLANTED });
+  const detail = (await call('GET', '/api/projects/web')).json as ProjectDetail;
+  const MESSAGE = 'This address uses http://, which would send your password unencrypted. Change it to https://.';
+  assert.equal(detail.environments[0].problem, MESSAGE);
+  // Unchanged, it can still be reordered or protected; a different http address cannot be saved.
+  assert.equal((await call('PUT', '/api/projects/web/environments/dev', { url: 'http://your-space.kinops.io', readOnly: true })).status, 200);
+  assert.equal((await call('PUT', '/api/projects/web/environments/dev', { url: 'http://other.kinops.io' })).status, 400);
+  assert.equal((await call('PUT', '/api/projects/web/environments/dev', { url: 'http://your-space.kinops.io', readOnly: false })).status, 200);
+
+  const tested = await call('POST', '/api/projects/web/environments/dev/test');
+  assert.equal(tested.status, 400);
+  assert.equal(tested.json.error.code, 'insecure_url');
+  assert.equal(tested.json.error.message, `Dev: ${MESSAGE}`);
+  const snap = await call('POST', '/api/projects/web/snapshots', { env: 'dev' });
+  if (snap.status === 202) {
+    await server.jobs.wait(snap.json.jobId);
+    const info = (await call('GET', `/api/jobs/${snap.json.jobId}`)).json;
+    assert.equal(info.status, 'failed');
+    assert.match(JSON.stringify(info.error), /would send your password unencrypted/);
+  } else {
+    assert.equal(snap.status, 400);
+    assert.match(snap.json.error.message, /would send your password unencrypted/);
+  }
+  assert.deepEqual(sent, [], 'nothing was sent to the http address');
+  await assert.rejects(resolveEnv({ id: 'web', dir } as any, 'dev', store), /would send your password unencrypted/);
+});

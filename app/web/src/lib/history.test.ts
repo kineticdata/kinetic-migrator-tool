@@ -101,3 +101,14 @@ test('acknowledgements and environment values read as words', () => {
   expect(isDefaultAuthor('kinetic-migrate')).toBe(true);
   expect(isDefaultAuthor('Pat Example')).toBe(false);
 });
+
+test('a run whose snapshot afterwards failed says so whatever its outcome', () => {
+  const w = ['The snapshot of Test taken after the apply failed: x. Take a snapshot before comparing again.'];
+  const ev = (type: 'applied' | 'restore', status: 'applied' | 'partial' | 'failed' | 'cancelled') => historyEvent({ type, status, warnings: w });
+  expect(eventInfo(ev('applied', 'applied'))).toEqual({ label: 'Applied, snapshot failed', tone: 'drift', symbol: '!' });
+  expect(eventInfo(ev('applied', 'partial'))).toEqual({ label: 'Partly applied, snapshot failed', tone: 'drift', symbol: '◐' });
+  expect(eventInfo(ev('applied', 'failed'))).toEqual({ label: 'Failed, snapshot failed', tone: 'danger', symbol: '×' });
+  expect(eventInfo(ev('applied', 'cancelled')).label).toBe('Stopped, snapshot failed');
+  expect(eventInfo(ev('restore', 'partial')).label).toBe('Partly restored, snapshot failed');
+  expect(eventInfo(historyEvent({ type: 'applied', status: 'applied' })).label).toBe('Applied');
+});

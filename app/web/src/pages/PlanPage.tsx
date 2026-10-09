@@ -586,6 +586,8 @@ function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, k
   const running = !outcome;
   const success = outcome?.status === 'applied';
   const failed = Boolean(outcome && !success);
+  // Applied, but the snapshot afterwards failed: said instead of a plain "Applied".
+  const warnings = outcome?.warnings ?? [];
   const backup = outcome?.backupCommit ?? null;
   const [again, setAgain] = useState<Record<string, string>>({});
   // Secrets given for the last run only, and those a handler's settings still
@@ -598,7 +600,7 @@ function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, k
   const resumeSecrets = plan.secretsNeeded.filter((s) => oneRun.includes(s.id) || (!s.has && unset(s.id)));
 
   const heading = !outcome ? `Applying to ${To}…` : {
-    applied: `Applied to ${To}`, partial: `Partly applied to ${To}`, failed: `Failed to apply to ${To}`, cancelled: `Cancelled applying to ${To}`,
+    applied: warnings.length ? `Applied to ${To}, with a warning` : `Applied to ${To}`, partial: `Partly applied to ${To}`, failed: `Failed to apply to ${To}`, cancelled: `Cancelled applying to ${To}`,
   }[outcome.status];
   // A partial run with no failed row finished, but skipped what changed since review.
   const stoppedEarly = outcome?.status !== 'partial' || Object.values(checklist.items).some((i) => i.status === 'failed');
@@ -616,17 +618,27 @@ function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, k
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 id="step-title" className="flex items-center gap-2 text-[15px] font-semibold text-fg">
-          {success && <CheckCircle2 size={18} aria-hidden className="text-added" />}
+          {success && !warnings.length && <CheckCircle2 size={18} aria-hidden className="text-added" />}
+          {success && warnings.length > 0 && <AlertTriangle size={18} aria-hidden className="text-drift" />}
           {heading}
         </h2>
         {running && <Button size="sm" variant="ghost" onClick={job.cancel}>Cancel</Button>}
       </div>
 
       {success && outcome && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-added/30 bg-added-soft px-4 py-3">
-          <p className="text-sm text-fg">
-            {plural(outcome.done, 'change')} applied to {To}. A backup was taken first and the run is recorded in History.
-          </p>
+        <div className={cn('flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3', warnings.length ? 'border-drift/40 bg-drift-soft' : 'border-added/30 bg-added-soft')}>
+          {warnings.length
+            ? (
+              <div role="alert" className="min-w-0 space-y-1 text-sm text-fg">
+                {warnings.map((w) => <p key={w}>{w}</p>)}
+                <p className="text-[13px] text-muted">A backup was taken first and the run is recorded in History.</p>
+              </div>
+            )
+            : (
+              <p className="text-sm text-fg">
+                {plural(outcome.done, 'change')} applied to {To}. A backup was taken first and the run is recorded in History.
+              </p>
+            )}
           <div className="flex items-center gap-2">
             <LinkButton size="sm" to={`/p/${projectId}/compare`} icon={<Undo2 size={14} aria-hidden />}>Back to Compare</LinkButton>
             <LinkButton size="sm" variant="primary" to={`/p/${projectId}/history`} icon={<History size={14} aria-hidden />}>View in History</LinkButton>
@@ -640,6 +652,12 @@ function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, k
             <AlertOctagon size={16} aria-hidden className="mt-0.5 shrink-0" />
             <span>{summary}{outcome.error && outcome.error !== 'The apply was cancelled.' ? ` ${outcome.error}` : ''}</span>
           </p>
+          {warnings.map((w) => (
+            <p key={w} className="mt-1 flex items-start gap-2 text-sm text-fg">
+              <AlertTriangle size={16} aria-hidden className="mt-0.5 shrink-0 text-drift" />
+              <span>{w}</span>
+            </p>
+          ))}
           <p className="mt-1 pl-6 text-[13px] text-fg">
             Nothing was rolled back. Resume plans again against {To} and continues with what is left; or restore {To} from the backup.
           </p>

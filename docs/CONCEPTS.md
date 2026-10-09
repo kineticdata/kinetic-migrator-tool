@@ -198,7 +198,12 @@ name looks secret (it contains `password`, `passphrase`, `secret`, `token`,
 - **Never exported.** Snapshots, backups and the git history never hold a
   secret value. Credential headers typed as literal values in a connection
   or operation are dropped too; templated ones such as `Bearer {{Token}}`
-  are kept.
+  are kept. A connection's secret-named settings outside its authentication,
+  such as a database connection's `password`, are dropped as well; the
+  snapshot records only their names (`strippedSecrets`), so a new connection
+  in the target asks for them, and they are never compared.
+- **Never sent in clear.** Credentials go only to `https://` addresses, or to
+  plain `http://` on this computer (`localhost`, `127.0.0.1`, `[::1]`).
 - **Write-only.** In the app, a secret field shows whether a value is set,
   never the value. Secrets are sent with a plain request and cleared from the
   page as it goes out.

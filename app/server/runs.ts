@@ -713,6 +713,7 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
   // Explore and the Overview see the target as the apply left it (not the
   // pre-apply backup). Not cancellable, and never changes the outcome.
   let snapshotCommit: string | null = null;
+  const warnings: string[] = [];
   if (wrote) {
     step('snapshot', 'running');
     try {
@@ -726,11 +727,24 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
     } catch (err) {
       ctx.logger?.error('snapshot after apply', scrubError(err, known));
       step('snapshot', 'failed');
-      emit({ type: 'warning', message: `The apply finished, but Kinetic Migrator could not take a new snapshot of ${To}. Take one before comparing.` });
+      // Kept with the run, so the Plan page and History say so instead of a plain "Applied".
+      const failure = toApiError(err);
+      const reason = failure.code === 'internal_error'
+        ? 'an unexpected error (the details are in the server log)'
+        : scrub(failure.message).replace(/[.\s]+$/, '');
+      warnings.push(`The snapshot of ${To} taken after the apply failed: ${reason}. Take a snapshot before comparing again.`);
+      emit({ type: 'warning', message: warnings[warnings.length - 1] });
+      // Recording it must not turn an applied run into a failed job.
+      try {
+        writeFileSync(path.join(ref.dir, RUNS_DIR, `${runId}.json`), stableStringify(scrub({ ...safe, warnings })));
+        await commitChange(ref, commitMessage(`Recorded that the snapshot of ${To} after the apply failed`, { Environment: r.to }));
+      } catch (recordErr) {
+        ctx.logger?.error('recording the failed snapshot after apply', scrubError(recordErr, known));
+      }
     }
   }
   // A cancelled apply still reports what it did (the job keeps this result).
-  return scrub({ runId, status, commit, backupCommit, snapshotCommit, done, error });
+  return scrub({ runId, status, commit, backupCommit, snapshotCommit, done, error, ...(warnings.length ? { warnings } : {}) });
 }
 
 // The commit title of a run (History reads it back, see history.ts typeOf).

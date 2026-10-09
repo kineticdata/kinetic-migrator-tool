@@ -82,6 +82,7 @@ export function EnvironmentsSettings() {
                       {e.lastSnapshot && <span className="text-xs text-subtle">Snapshot {timeAgo(e.lastSnapshot.at)}</span>}
                     </div>
                     <p className="truncate font-mono text-xs text-subtle">{e.url}</p>
+                    {e.problem && <p role="alert" className="mt-1 text-xs font-medium text-danger">{e.problem}</p>}
                     {platform && <p className="text-xs text-muted">{platform}</p>}
                     <p className={e.credentials.password ? 'mt-1 text-xs text-muted' : 'mt-1 text-xs text-drift'}>{credentialsText(e)}</p>
                     {t && t !== 'running' && <div className="mt-1.5">{t instanceof Error ? <InlineError error={t} /> : <TestOutcome result={t} />}</div>}
