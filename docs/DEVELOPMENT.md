@@ -81,9 +81,13 @@ repository is only read through `READ_ONLY_FS`, which refuses every write
 user's index). `projectRepo` also refuses a private history located inside
 the project folder or the user's git folders. Mode detection fails safe:
 managed only with the marker (written by `ensureRepo` right after its own
-`git.init`) or the legacy signature (`looksAppCreated`: the root commit is
-the app's and every tracked file is in the layout); an unborn or unreadable
-HEAD is external. An external project's id (`externalId`) is a hash of the
+`git.init`, or once when the legacy signature matches) or the legacy
+signature (`looksAppCreated`: a single root commit by `APP_AUTHOR`, titled
+exactly "Created project <name from that tree's kinetic-migrate.json>" or
+"Started managing this project", and every tracked file in the layout); an
+unborn or unreadable HEAD, or unreadable objects, are external.
+`withProjectLock` checks a managed repository is on `main` before running
+any write. An external project's id (`externalId`) is a hash of the
 folder's real path; it keys the private history and the keychain, so reads
 never write `kinetic-migrate.json`. `app/server/external-repo.test.ts`
 fingerprints a monorepo fixture byte for byte before and after a full

@@ -117,24 +117,99 @@ test('C1: a repository with no commits yet is external, and stays empty', async 
   assert.deepEqual(fingerprint(root), before);
 });
 
-test('C1: an unreadable HEAD is external, even for a repository that otherwise looks like the app’s', async (t) => {
+const APP = { name: 'kinetic-migrate', email: 'kinetic-migrate@localhost' };
+
+// A repository as an older Kinetic Migrator left it: one commit by the app.
+async function legacyRepo(t: T, message = 'Started managing this project', commitAuthor = APP): Promise<string> {
   const dir = temp(t, 'km-legacy-');
   write(dir, 'kinetic-sync.config.json', '{}');
-  write(dir, 'kinetic-migrate.json', '{}');
+  write(dir, 'kinetic-migrate.json', JSON.stringify({ name: 'Demo' }));
   await git.init({ fs, dir, defaultBranch: 'main' });
   await git.add({ fs, dir, filepath: '.' });
-  await git.commit({ fs, dir, message: 'Started managing this project', author: { name: 'kinetic-migrate', email: 'kinetic-migrate@localhost' } });
-  assert.equal((await projectRepo({ dir })).mode, 'managed', 'the legacy signature matches');
-  writeFileSync(path.join(dir, '.git', 'refs', 'heads', 'main'), 'not-an-object-id\n');
-  assert.equal((await projectRepo({ dir })).mode, 'external');
+  await git.commit({ fs, dir, message, author: commitAuthor });
+  return dir;
+}
+
+test('C1: an unreadable HEAD or unreadable objects are external, even for a repository that otherwise looks like the app’s', async (t) => {
+  const badRef = await legacyRepo(t);
+  writeFileSync(path.join(badRef, '.git', 'refs', 'heads', 'main'), 'not-an-object-id\n');
+  assert.equal((await projectRepo({ dir: badRef })).mode, 'external');
+  // HEAD resolves, but to a commit whose objects are not there.
+  const missing = await legacyRepo(t);
+  writeFileSync(path.join(missing, '.git', 'refs', 'heads', 'main'), `${'0123456789abcdef'.repeat(3).slice(0, 40)}\n`);
+  assert.equal((await projectRepo({ dir: missing })).mode, 'external');
+  // The objects of the real commit removed: the history cannot be read.
+  const gone = await legacyRepo(t);
+  rmSync(path.join(gone, '.git', 'objects'), { recursive: true, force: true });
+  mkdirSync(path.join(gone, '.git', 'objects'));
+  assert.equal((await projectRepo({ dir: gone })).mode, 'external');
+  assert.equal(existsSync(path.join(gone, '.git', 'kinetic-migrator.json')), false);
   // A legacy-looking repository with one of the user's own files in it is theirs.
   const mine = temp(t, 'km-legacy-mine-');
   write(mine, 'kinetic-sync.config.json', '{}');
   write(mine, 'README.md', 'mine');
   await git.init({ fs, dir: mine, defaultBranch: 'main' });
   await git.add({ fs, dir: mine, filepath: '.' });
-  await git.commit({ fs, dir: mine, message: 'Started managing this project', author });
+  await git.commit({ fs, dir: mine, message: 'Started managing this project', author: APP });
   assert.equal((await projectRepo({ dir: mine })).mode, 'external');
+});
+
+test('I-new-1: the legacy signature is exact: title, author, single root', async (t) => {
+  assert.equal((await projectRepo({ dir: await legacyRepo(t, 'Created project Demo') })).mode, 'managed');
+  assert.equal((await projectRepo({ dir: await legacyRepo(t, 'Created project structure') })).mode, 'external', 'name must match kinetic-migrate.json');
+  assert.equal((await projectRepo({ dir: await legacyRepo(t, 'Started managing this project', author) })).mode, 'external', 'author must be the app’s');
+  assert.equal((await projectRepo({ dir: await legacyRepo(t, 'Started managing this project, by hand') })).mode, 'external');
+});
+
+test('I-new-1: a user commit "Created project structure" with an origin remote stays theirs; the repository is byte-identical', async (t) => {
+  const root = temp(t, 'km-spoof-');
+  await runInit({ projectDir: root, log: () => {} });
+  await git.init({ fs, dir: root, defaultBranch: 'main' });
+  await git.add({ fs, dir: root, filepath: '.' });
+  await git.commit({ fs, dir: root, message: 'Created project structure', author });
+  await git.addRemote({ fs, dir: root, remote: 'origin', url: 'https://github.com/me/mine.git' });
+  const before = fingerprint(root);
+  assert.equal((await projectRepo({ dir: root })).mode, 'external');
+  const { call } = await server(t);
+  const opened = await call('POST', '/api/projects/open', { path: root });
+  assert.equal(opened.status, 200, opened.body);
+  await call('GET', `/api/projects/${opened.json.id}`);
+  assert.deepEqual(fingerprint(root), before, 'opening and reading leave the user repository byte-identical');
+  // A write changes project files only: never the user's .git.
+  const gitBefore = [...before].filter(([k]) => k.startsWith('.git/'));
+  assert.equal((await call('PUT', `/api/projects/${opened.json.id}/environments/test`, { url: 'https://test.example.com' })).status, 200);
+  assert.deepEqual([...fingerprint(root)].filter(([k]) => k.startsWith('.git/')), gitBefore);
+  assert.deepEqual((await git.log({ fs, dir: root })).map((c) => c.commit.message.trim()), ['Created project structure']);
+});
+
+test('N2: a repository matching the legacy signature gets the marker once and stays managed after a user file', async (t) => {
+  const dir = await legacyRepo(t, 'Created project Demo');
+  assert.equal((await projectRepo({ dir })).mode, 'managed');
+  assert.ok(existsSync(path.join(dir, '.git', 'kinetic-migrator.json')));
+  write(dir, 'README.md', 'notes');
+  await git.add({ fs, dir, filepath: 'README.md' });
+  await git.commit({ fs, dir, message: 'Add a readme', author });
+  assert.equal((await projectRepo({ dir })).mode, 'managed');
+});
+
+test('N1: a managed repository on another branch gets no file written before the refusal', async (t) => {
+  const dir = temp(t, 'km-nonmain-');
+  write(dir, 'kinetic-sync.config.json', '{}');
+  write(dir, 'environments/dev.json', '{"url":"https://dev.example.com"}');
+  const { call, job } = await server(t);
+  const opened = await call('POST', '/api/projects/open', { path: dir });
+  assert.equal(opened.status, 200, opened.body);
+  const P = `/api/projects/${opened.json.id}`;
+  await call('PUT', `${P}/environments/dev/credentials`, { username: 'a', password: 'b' });
+  await git.branch({ fs, dir, ref: 'feature/x', checkout: true });
+  const local = () => new Map([...fingerprint(dir, '.git')].filter(([k]) => !k.startsWith('plans/')));
+  const before = local();
+  const put = await call('PUT', `${P}/environments/test`, { url: 'https://test.example.com' });
+  assert.equal(put.status, 409);
+  assert.equal(put.json.error.code, 'wrong_branch');
+  const snap = await job('POST', `${P}/snapshots`, { env: 'dev' });
+  assert.equal(snap.status, 'failed');
+  assert.deepEqual(local(), before, 'nothing written to the project folder');
 });
 
 test('C1: a project the app manages, from before the marker existed, is still managed', async (t) => {
@@ -144,7 +219,7 @@ test('C1: a project the app manages, from before the marker existed, is still ma
   assert.equal((await call('POST', '/api/projects/open', { path: dir })).status, 200);
   rmSync(path.join(dir, '.git', 'kinetic-migrator.json'));
   assert.equal((await projectRepo({ dir })).mode, 'managed');
-  assert.equal(existsSync(path.join(dir, '.git', 'kinetic-migrator.json')), false, 'the marker is not written after the fact');
+  assert.ok(existsSync(path.join(dir, '.git', 'kinetic-migrator.json')), 'the app’s own repository gets its marker back');
 });
 
 test('I1: a branch without kinetic-migrate.json keeps History and credentials, and reads write nothing', async (t) => {
@@ -257,4 +332,29 @@ test('I3: GET /repository stays fast with 5,000 files once the count is cached',
     assert.ok((s.external!.changedFiles ?? 0) >= 5000, String(s.external!.changedFiles));
     assert.ok(ms < 300, `GET /repository took ${ms} ms`);
   }
+});
+
+test('N4: the outside-changes check runs once per request or job', async (t) => {
+  const { syncHistory } = await import('./project-meta.ts');
+  const { inRequestScope } = await import('./request-scope.ts');
+  const root = temp(t, 'km-once-');
+  await git.init({ fs, dir: root, defaultBranch: 'main' });
+  write(root, 'README.md', 'x');
+  write(root, 'p/kinetic-sync.config.json', '{}');
+  await git.add({ fs, dir: root, filepath: '.' });
+  await git.commit({ fs, dir: root, message: 'init', author });
+  const ref = { id: 'p', dir: path.join(root, 'p') };
+  await commitChange(ref, 'Started managing this project');
+  const repo = await projectRepo(ref);
+  const count = async () => (await log(repo, { limit: 50 })).length;
+  await inRequestScope(async () => {
+    write(ref.dir, 'environments/a.json', '{}');
+    await syncHistory(ref);
+    assert.equal(await count(), 2, 'first call records');
+    write(ref.dir, 'environments/b.json', '{}');
+    await syncHistory(ref);
+    assert.equal(await count(), 2, 'second call in the same request is skipped');
+  });
+  await inRequestScope(() => syncHistory(ref));
+  assert.equal(await count(), 3, 'a new request records again');
 });

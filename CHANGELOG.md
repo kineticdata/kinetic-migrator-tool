@@ -23,7 +23,7 @@
 - The refusal to open a repository on a branch other than `main` now applies
   only to repositories Kinetic Migrator created (marked with
   `.git/kinetic-migrator.json` when the app creates them, or recognised by
-  the app's own first commit). Any other repository, including one you made
+  the app's own first commit, exact title and author). Any other repository, including one you made
   yourself at the project folder, is external. Existing managed projects stay
   managed, and a managed repository is committed to only on `main`.
 - An external project's private history and credentials are keyed by the

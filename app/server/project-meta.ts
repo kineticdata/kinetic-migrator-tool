@@ -13,7 +13,7 @@ import { commitAll, currentBranch, ensureRepo, headOid, layoutDirty, readTreeAt,
 import { firstInScope } from './request-scope.ts';
 import { LAYOUT_VERSION, upgradeProjectLayout } from './engine-sync.ts';
 import { isLocked, withLock } from './locks.ts';
-import { externalId, invalidateStatus, privateAuthor, projectRepo, userBranch, userOperation, userRepoName, type ProjectRepo, type UserRepo } from './project-repo.ts';
+import { APP_AUTHOR, externalId, invalidateStatus, privateAuthor, projectRepo, userBranch, userOperation, userRepoName, type ProjectRepo, type UserRepo } from './project-repo.ts';
 
 export interface ProjectRef {
   id: string;
@@ -30,7 +30,7 @@ export interface ProjectMeta {
 }
 
 export const META_FILE = 'kinetic-migrate.json';
-export const DEFAULT_AUTHOR: Author = { name: 'kinetic-migrate', email: 'kinetic-migrate@localhost' };
+export const DEFAULT_AUTHOR: Author = { ...APP_AUTHOR };
 // Credentials, pre-apply backups, plan records and comparison reports stay local.
 export const GITIGNORE_LINES = ['.env*', 'backups/', 'plans/', 'compares/'];
 
@@ -97,11 +97,17 @@ export async function writableRepo(ref: ProjectRef): Promise<ProjectRepo> {
     await ensureRepo(repo);
     return repo;
   }
+  await assertOnMain(repo);
+  return repo;
+}
+
+// A managed repository is committed to only on main: checked before any
+// file is written (withProjectLock) and again before committing.
+async function assertOnMain(repo: ProjectRepo): Promise<void> {
   const branch = await currentBranch(repo);
   if (branch !== undefined && branch !== 'main') {
     throw new ApiError(409, 'wrong_branch', `This project's repository is on ${branch === null ? 'a detached commit' : `branch ${branch}`}; Kinetic Migrator records its history on main. Check out main and try again.`);
   }
-  return repo;
 }
 
 export async function commitChange(ref: ProjectRef, message: string, opts: { always?: boolean } = {}): Promise<string | null> {
@@ -160,7 +166,10 @@ export function isPlainObject(v: unknown): v is Record<string, unknown> {
 // repository and records changes made outside the app.
 export const withProjectLock = <T>(ref: ProjectRef, fn: () => Promise<T>): Promise<T> => withLock(ref.dir, async () => {
   const repo = await projectRepo(ref);
-  if (repo.mode !== 'external') return fn();
+  if (repo.mode !== 'external') {
+    await assertOnMain(repo);
+    return fn();
+  }
   assertNotBusy(repo.user!);
   await recordOutsideChanges(ref, repo);
   try {

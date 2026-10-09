@@ -70,6 +70,9 @@ export const inLayout = (filepath: string): boolean => (
 // In a managed project's .git: "Kinetic Migrator created and manages this
 // repository". In a private history folder: the record (work tree, author).
 export const MARKER_FILE = 'kinetic-migrator.json';
+const META_FILE = 'kinetic-migrate.json';
+// The author the app commits as until someone sets one.
+export const APP_AUTHOR = Object.freeze({ name: 'kinetic-migrate', email: 'kinetic-migrate@localhost' });
 
 // ---- The app's data folder ---------------------------------------------------
 
@@ -389,10 +392,11 @@ export async function setPrivateAuthor(repo: ProjectRepo, author: { name: string
 
 const managed = (dir: string): ProjectRepo => Object.freeze({ mode: 'managed', dir, gitdir: path.join(dir, '.git') });
 
-// Repositories from before the marker carry the app's signature: the root
-// commit is the app's first ("Created project …" or "Started managing this
-// project") and every tracked file is a project-layout path. Decided once
-// per HEAD; never written down.
+// Repositories from before the marker carry the app's exact signature: one
+// root commit, by the app's own author, titled exactly "Created project
+// <name>" (the name in that commit's kinetic-migrate.json) or "Started
+// managing this project", and every tracked file a project-layout path.
+// Anything unreadable is not a match.
 const legacyCache = new Map<string, boolean>();
 async function looksAppCreated(u: UserRepo): Promise<boolean> {
   const head = await userHead(u);
@@ -402,10 +406,19 @@ async function looksAppCreated(u: UserRepo): Promise<boolean> {
   if (known !== undefined) return known;
   let verdict = false;
   try {
-    const commits = await git.log({ fs: READ_ONLY_FS, gitdir: u.commondir, ref: head });
-    const title = commits[commits.length - 1]?.commit.message.split('\n')[0] ?? '';
-    if (/^Created project .+/.test(title) || title === 'Started managing this project') {
-      verdict = (await git.listFiles({ fs: READ_ONLY_FS, gitdir: u.commondir, ref: head })).every(inLayout);
+    const ro = { fs: READ_ONLY_FS, gitdir: u.commondir };
+    const roots = (await git.log({ ...ro, ref: head })).filter((c) => c.commit.parent.length === 0);
+    if (roots.length === 1) {
+      const [{ oid, commit }] = roots;
+      const title = commit.message.split('\n')[0];
+      const byApp = commit.author.name === APP_AUTHOR.name && commit.author.email === APP_AUTHOR.email;
+      let titled = title === 'Started managing this project';
+      if (!titled && title.startsWith('Created project ')) {
+        const { blob } = await git.readBlob({ ...ro, oid, filepath: META_FILE });
+        const name = JSON.parse(Buffer.from(blob).toString('utf8').replace(/^\uFEFF/, ''))?.name;
+        titled = typeof name === 'string' && title === `Created project ${name}`;
+      }
+      verdict = byApp && titled && (await git.listFiles({ ...ro, ref: head })).every(inLayout);
     }
   } catch {
     verdict = false;
@@ -414,12 +427,17 @@ async function looksAppCreated(u: UserRepo): Promise<boolean> {
   return verdict;
 }
 
-async function isAppManaged(u: UserRepo): Promise<boolean> {
-  return fs.existsSync(path.join(u.gitdir, MARKER_FILE)) || looksAppCreated(u);
+// A repository matching the legacy signature is the app's own: it gets the
+// marker once, so a file the user adds later never turns it into theirs.
+async function isAppManaged(dir: string, u: UserRepo): Promise<boolean> {
+  if (fs.existsSync(path.join(u.gitdir, MARKER_FILE))) return true;
+  if (!(await looksAppCreated(u))) return false;
+  markManaged(managed(dir));
+  return true;
 }
 
-// Marks a repository the app has just created with its own `git init`.
-// Never called for a repository that already existed.
+// Marks a repository as the app's: right after its own `git init`, or once
+// for one matching the strict legacy signature. Never any other repository.
 export function markManaged(repo: ProjectRepo): void {
   if (repo.mode !== 'managed' || !isDirectory(repo.gitdir)) return;
   const file = path.join(repo.gitdir, MARKER_FILE);
@@ -430,7 +448,7 @@ export async function projectRepo(ref: { dir: string }): Promise<ProjectRepo> {
   const dir = path.resolve(ref.dir);
   const user = findEnclosingRepository(dir);
   if (!user) return managed(dir);
-  if (user.kind === 'repository' && user.gitdir === user.dotGit && fold(user.root) === fold(dir) && await isAppManaged(user)) return managed(dir);
+  if (user.kind === 'repository' && user.gitdir === user.dotGit && fold(user.root) === fold(dir) && await isAppManaged(dir, user)) return managed(dir);
   const gitdir = privateGitdir(dir);
   assertOutside(gitdir, dir, user);
   return Object.freeze({ mode: 'external', dir, gitdir, user: Object.freeze(user) });

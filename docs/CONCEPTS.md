@@ -324,13 +324,18 @@ from the project folder for a `.git` folder or file, and it fails safe. A
 repository at the project folder itself counts as the app's only when its
 `.git` holds the `kinetic-migrator.json` marker, which the app writes right
 after it creates a repository itself, or (projects from before the marker)
-when its first commit is the app's ("Created project …" or "Started managing
-this project") and every tracked file is a project-layout path. Anything
+when it has the app's exact signature: a single first commit, made by the
+app's own author (`kinetic-migrate <kinetic-migrate@localhost>`), titled
+exactly "Created project <name>" (the name in that commit's
+`kinetic-migrate.json`) or "Started managing this project", and every
+tracked file a project-layout path. Such a repository gets the marker then,
+so a file you add to it later does not change its mode. Anything
 else is yours, so the project is external: a repository you made yourself
 (for example `git init` in a project made with the command line), one with
 no commits yet, or one whose HEAD cannot be read. Opening a project never
-changes its mode, and the app never writes the marker into a repository it
-did not create.
+changes its mode, and the app never writes the marker into any other
+repository. A managed repository is committed to only on `main`: on another
+branch, changes are refused before any file is written.
 
 **The private history** of an external project is a git repository whose
 work tree is the project folder and whose git folder is in the app's data
