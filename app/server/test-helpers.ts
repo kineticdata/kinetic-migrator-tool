@@ -19,10 +19,12 @@ export interface RequestOptions {
   body?: string;
 }
 
+// A new connection per request: a kept-alive socket the server already closed
+// (after a long pause on a slow runner) would fail with ECONNRESET.
 export function request(port: number, pathname: string, opts: RequestOptions = {}): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { host: '127.0.0.1', port, path: pathname, method: opts.method ?? 'GET', headers: { host: `localhost:${port}`, ...opts.headers } },
+      { host: '127.0.0.1', port, path: pathname, method: opts.method ?? 'GET', agent: false, headers: { host: `localhost:${port}`, ...opts.headers } },
       (res) => {
         let body = '';
         res.setEncoding('utf8');
