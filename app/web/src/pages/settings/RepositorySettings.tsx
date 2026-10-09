@@ -2,10 +2,15 @@
 // name and email), an optional remote repository (address plus a write-only
 // token kept in the keychain), Push, and how the last push went. The token is
 // sent with a plain request and cleared from the field straight after.
+// A project inside the user's own repository (external mode) shows that
+// repository read-only instead of the remote: Kinetic Migrator never commits,
+// pushes or changes remotes there, and the author names its private history.
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import { CheckCircle2, CloudUpload, AlertTriangle } from 'lucide-react';
-import type { LastPush, RepositorySettings as Settings } from '../../../../shared/repository-api';
+import type { ExternalRepository, LastPush, RepositorySettings as Settings } from '../../../../shared/repository-api';
+import { ExternalRepoBanner } from '../../components/ExternalRepoBanner';
 import { historyKeys, putRepository, startPush, useRepository } from '../../api/history';
 import { qk } from '../../api/queries';
 import { useJob } from '../../api/useJob';
@@ -51,9 +56,11 @@ function AuthorCard({ projectId, settings, onSaved }: { projectId: string; setti
     <Card>
       <CardHeader
         title="Author"
-        description={unset
-          ? 'No name is set yet, so History shows your snapshots, changesets and promotions as “You”. Add your name so others can tell who did what.'
-          : 'Snapshots, changesets and promotions are recorded in History under this name.'}
+        description={settings.mode === 'external'
+          ? 'Who Kinetic Migrator’s private history of this project, on this computer, records snapshots, changesets and promotions as. Your own commits to your repository use your git settings.'
+          : unset
+            ? 'No name is set yet, so History shows your snapshots, changesets and promotions as “You”. Add your name so others can tell who did what.'
+            : 'Snapshots, changesets and promotions are recorded in History under this name.'}
       />
       <div className="grid gap-4 px-5 py-4 sm:grid-cols-2">
         <Field label="Name">{(p) => <Input {...p} value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" />}</Field>
@@ -162,6 +169,42 @@ function RemoteCard({ projectId, settings, onSaved }: { projectId: string; setti
   );
 }
 
+function Row({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid gap-1 sm:grid-cols-[12rem_1fr]">
+      <dt className="text-sm text-muted">{label}</dt>
+      <dd className="min-w-0 break-all text-sm text-fg">{children}</dd>
+    </div>
+  );
+}
+
+const KIND: Record<ExternalRepository['kind'], string> = { repository: 'Repository', worktree: 'Linked worktree', submodule: 'Submodule' };
+
+function YourRepositoryCard({ projectId, external }: { projectId: string; external: ExternalRepository }) {
+  return (
+    <Card>
+      <CardHeader
+        title="Your repository"
+        description="This project is a folder inside a git repository you already have. Kinetic Migrator writes the project’s files and leaves committing, pull requests and pushing to you: it never commits, stages, pushes or changes remotes there."
+      />
+      <div className="space-y-4 px-5 py-4">
+        <ExternalRepoBanner projectId={projectId} className="" />
+        <dl className="space-y-2">
+          <Row label="Repository">{external.root}</Row>
+          <Row label="Kind">{KIND[external.kind]}</Row>
+          <Row label="Branch">{external.branch ?? 'Detached commit'}</Row>
+          <Row label="Project folder">{external.subfolder || 'The repository root'}</Row>
+          <Row label="Kinetic Migrator’s history">{external.historyPath}</Row>
+        </dl>
+        <p className="text-sm text-muted">
+          History, backups, Restore and saved changesets use a private history that Kinetic Migrator keeps on this computer, outside your repository.
+          There is no remote or token to set here: push your repository with your usual git tools.
+        </p>
+      </div>
+    </Card>
+  );
+}
+
 export function RepositorySettings() {
   const { project } = useProjectContext();
   const qc = useQueryClient();
@@ -175,8 +218,9 @@ export function RepositorySettings() {
   if (repo.isError) return <ErrorState title="Could not load the repository settings" error={repo.error} onRetry={() => repo.refetch()} />;
   return (
     <div className="space-y-6">
+      {repo.data.mode === 'external' && repo.data.external && <YourRepositoryCard projectId={project.id} external={repo.data.external} />}
       <AuthorCard projectId={project.id} settings={repo.data} onSaved={onSaved} />
-      <RemoteCard projectId={project.id} settings={repo.data} onSaved={onSaved} />
+      {repo.data.mode !== 'external' && <RemoteCard projectId={project.id} settings={repo.data} onSaved={onSaved} />}
     </div>
   );
 }
