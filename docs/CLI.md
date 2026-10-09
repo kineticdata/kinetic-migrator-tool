@@ -251,7 +251,7 @@ launch link. Press Ctrl+C to stop.
 | `--workspace <dir>` | Where projects are kept. Default: `KineticMigrate` in your home folder. The app warns when it is in a OneDrive, Dropbox, iCloud Drive or Google Drive folder. |
 | `--port <n>` | Port 0 to 65535. Default: a free port chosen at start. |
 | `--no-open` | Print the address without opening a browser. |
-| `--fake` | Serve synthetic Dev and Test spaces from memory (the same as `KINETIC_MIGRATE_FAKE=1`). |
+| `--fake` | Serve synthetic Dev and Test spaces from memory (the same as `KINETIC_MIGRATE_FAKE=1`). Unless `--workspace` is given, demo projects go to `kinetic-migrator-demo` in the system temporary folder, never to `~/KineticMigrate`. |
 
 `ui` needs the built app (`npm run build`). In a source checkout without a
 build it prints how to build or run the development servers, and exits 1.

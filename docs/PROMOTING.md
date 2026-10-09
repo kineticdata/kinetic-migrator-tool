@@ -14,7 +14,7 @@ and applies only those changes. It never deletes anything unless you ask (by
 type with `--prune`, or item by item with `--remove` and the app's Remove
 action), and it never writes to an environment marked `readOnly`.
 
-You need Node.js 20.6 or newer. Nothing else is installed.
+You need Node.js 20.19 or newer. Nothing else is installed.
 
 ## What is promoted
 

@@ -63,9 +63,10 @@ npm run start:fake
 Demo mode serves two synthetic spaces from memory and contacts no server.
 Name the first environment `dev` (a Dev space on Kinetic Platform 6.1.7);
 any other name, such as `test`, is a copy of a Test space on 7.0.0-rc3. Any
-`https://` URL and any username and password are accepted. Projects you make
-in demo mode are saved in your workspace like any other; delete the demo
-project's folder from the workspace when you are done.
+`https://` URL and any username and password are accepted. Demo projects go
+to a separate throwaway folder (`kinetic-migrator-demo` in your system's
+temporary folder), never to your real workspace, so you can experiment
+freely.
 
 ### 4. Connect your spaces
 
@@ -168,9 +169,8 @@ passwords, tokens or customer data.
 
 ## Requirements
 
-- **Node.js 22 or 24** recommended. The built app runs on Node 20.6 or newer
-  (`package.json` `engines`); building it (`npm run build`) needs Node 20.19
-  or newer, or 22.12 or newer, for Vite. Node 20 reached its end of life in
+- **Node.js 22 or 24** recommended; at least **20.19** (`package.json`
+  `engines`), which the build step needs. Node 20 reached its end of life in
   April 2026.
 - **macOS** 12 or newer, **Windows** 10 or 11, or **Linux**. CI runs on
   macOS, Windows and Ubuntu.
