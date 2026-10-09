@@ -1,6 +1,8 @@
 // Projects: folders in the workspace (or opened from elsewhere) that hold a
-// kinetic-sync project and are managed as git repositories. Also the API
-// routes for projects, environments, credentials, config and overrides.
+// kinetic-sync project, with their history in a git repository: their own
+// (managed) or, for a folder inside the user's repository, a private one
+// (external; see project-repo.ts). Also the API routes for projects,
+// environments, credentials, config and overrides.
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ProjectConfig, ProjectDetail, ProjectSummary } from '../shared/api.ts';
@@ -13,10 +15,11 @@ import {
   environmentUrlProblem, readEnvironmentFile, readOverrides, setCredentials, testConnection, validateNewEnvironment, writeEnvironment,
 } from './environments.ts';
 import {
-  commitChange, ensureGitignore, isPlainObject, manageProject, newSecretsId, readJsonFile, readMeta, upgradeLayoutLocked, withProjectLock, writeMeta,
+  commitChange, ensureGitignore, isPlainObject, manageProject, newSecretsId, readJsonFile, readMeta, syncHistory, upgradeLayoutLocked, withProjectLock, writeMeta,
   type ProjectRef,
 } from './project-meta.ts';
-import { currentBranch, ensureRepo, log } from './repo.ts';
+import { projectRepo, userOperation } from './project-repo.ts';
+import { currentBranch, ensureRepo, hasHistory, log } from './repo.ts';
 import type { Router } from './router.ts';
 import type { SecretStore } from './secrets.ts';
 
@@ -118,6 +121,10 @@ export async function createProject(workspace: string, body: unknown): Promise<P
   }
   const dir = path.join(workspace, id);
   if (existsSync(dir) || readOpened(workspace)[id]) throw new ApiError(409, 'exists', `A project folder named "${id}" already exists.`);
+  // A workspace inside the user's own repository makes external projects
+  // (refused here when that repository is unusable, or by the lock while git
+  // is busy in it).
+  await projectRepo({ dir });
   mkdirSync(dir, { recursive: true });
   const ref = { id, dir };
   try {
@@ -128,10 +135,13 @@ export async function createProject(workspace: string, body: unknown): Promise<P
       if (first) writeEnvironment(dir, first.name, { url: first.url, readOnly: first.readOnly });
       writeMeta(dir, { name, order: first ? [first.name] : [], secretsId: newSecretsId() });
       ensureGitignore(dir);
-      await ensureRepo(dir);
+      const repo = await projectRepo(ref);
+      if (repo.mode === 'managed') await ensureRepo(repo);
       await commitChange(ref, `Created project ${name}`);
     });
   } catch (err) {
+    const repo = await projectRepo(ref).catch(() => null);
+    if (repo?.mode === 'external') rmSync(repo.gitdir, { recursive: true, force: true });
     rmSync(dir, { recursive: true, force: true });
     throw err;
   }
@@ -146,10 +156,14 @@ export async function openProject(workspace: string, body: unknown): Promise<Pro
   // The native call gives Windows' own spelling (letter case, 8.3 names expanded).
   const dir = realpathSync.native(body.path);
   if (!isProjectDir(dir)) throw badRequest('That folder is not a Kinetic project (no kinetic-sync.config.json or environment files in environments/).');
-  // Commits only ever go to main: never into a repository checked out elsewhere.
-  const branch = await currentBranch(dir);
-  if (branch !== undefined && branch !== 'main') {
-    throw badRequest(`This folder is a git repository on ${branch === null ? 'a detached commit' : `branch ${branch}`}; Kinetic Migrator manages projects on main.`);
+  // A folder inside the user's own repository (any branch) is external: the
+  // app never commits there. A repository the app manages commits only to main.
+  const repo = await projectRepo({ dir });
+  if (repo.mode === 'managed') {
+    const branch = await currentBranch(repo);
+    if (branch !== undefined && branch !== 'main') {
+      throw badRequest(`This folder is a git repository on ${branch === null ? 'a detached commit' : `branch ${branch}`}; Kinetic Migrator manages projects on main.`);
+    }
   }
   const ws = isDir(workspace) ? realpathSync.native(workspace) : path.resolve(workspace);
   let id: string;
@@ -168,18 +182,23 @@ export async function openProject(workspace: string, body: unknown): Promise<Pro
   }
   const ref = { id, dir };
   // CLI-created projects become managed: ignore local-only files, then commit.
+  // While git is busy in the user's repository the project opens read-only.
+  if (repo.user && userOperation(repo.user)) return ref;
   await withProjectLock(ref, () => manageProject(ref, 'Started managing this project'));
   return ref;
 }
 
 // Upgrades every managed project in the workspace to the current file-name
 // layout (see upgradeLayoutLocked); failures are logged and never stop the
-// server. Unmanaged projects are upgraded when they become managed.
+// server. Unmanaged projects are upgraded when they become managed. An
+// external project's files are never rewritten at startup: it is upgraded
+// when it is next opened.
 export async function upgradeWorkspace(workspace: string, onError: (id: string, err: unknown) => void = () => {}): Promise<void> {
   for (const p of listProjects(workspace)) {
     try {
       const ref = findProject(workspace, p.id);
-      if (!existsSync(path.join(ref.dir, '.git'))) continue;
+      const repo = await projectRepo(ref);
+      if (repo.mode === 'external' || !hasHistory(repo)) continue;
       await withProjectLock(ref, () => upgradeLayoutLocked(ref));
     } catch (err) {
       onError(p.id, err);
@@ -189,9 +208,11 @@ export async function upgradeWorkspace(workspace: string, onError: (id: string, 
 
 export async function readProject(ref: ProjectRef, store: SecretStore): Promise<ProjectDetail> {
   const environments = [];
+  await syncHistory(ref);
+  const repo = await projectRepo(ref);
   for (const name of pipelineOrder(ref.dir)) {
     const def = readEnvironmentFile(ref.dir, name);
-    const last = (await log(ref.dir, { path: `snapshots/${name}`, limit: 1 }))[0];
+    const last = (await log(repo, { path: `snapshots/${name}`, limit: 1 }))[0];
     const problem = environmentUrlProblem(def.url);
     environments.push({
       name,

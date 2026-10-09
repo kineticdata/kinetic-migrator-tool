@@ -309,6 +309,70 @@ one after it.
   allowed, with a warning in Compare and Plan, because the platform may store
   the same item differently.
 
+## Managed and external projects
+
+Every project has a history: a git repository (isomorphic-git is bundled; no
+git installation is needed). Where it lives depends on the folder:
+
+| Mode | When | History | Who commits |
+|------|------|---------|-------------|
+| **Managed** | The folder is in no repository, or it is the root of a repository Kinetic Migrator created for it | `<project>/.git`, branch `main` | The app, after every change; optional push from Settings → Repository |
+| **External** | The folder is inside a repository you already have: a monorepo, any subfolder, any branch, a linked worktree or a submodule | A **private history** in the app's data folder | You, in your repository; the app only writes the project's files |
+
+The mode is decided when a project is opened or created, by looking upwards
+from the project folder for a `.git` folder or file, and it fails safe. A
+repository at the project folder itself counts as the app's only when its
+`.git` holds the `kinetic-migrator.json` marker, which the app writes right
+after it creates a repository itself, or (projects from before the marker)
+when it has the app's exact signature: a single first commit, made by the
+app's own author (`kinetic-migrate <kinetic-migrate@localhost>`), titled
+exactly "Created project <name>" (the name in that commit's
+`kinetic-migrate.json`) or "Started managing this project", and every
+tracked file a project-layout path. Such a repository gets the marker then,
+so a file you add to it later does not change its mode. Anything
+else is yours, so the project is external: a repository you made yourself
+(for example `git init` in a project made with the command line), one with
+no commits yet, or one whose HEAD cannot be read. Opening a project never
+changes its mode, and the app never writes the marker into any other
+repository. A managed repository is committed to only on `main`: on another
+branch, changes are refused before any file is written.
+
+**The private history** of an external project is a git repository whose
+work tree is the project folder and whose git folder is in the app's data
+folder, under `history/<project id>`. The id is worked out from the project
+folder's real path (symlinks resolved), never from the project's files,
+which change with the branch; it also keys the project's credentials in the
+keychain. Reading a project never writes any file in it:
+
+| OS | Data folder |
+|----|-------------|
+| macOS | `~/Library/Application Support/Kinetic Migrator` |
+| Windows | `%APPDATA%\Kinetic Migrator` |
+| Linux | `$XDG_DATA_HOME/kinetic-migrator`, else `~/.local/share/kinetic-migrator` |
+
+`KINETIC_MIGRATOR_DATA_DIR` overrides it. It tracks only the project layout
+(the paths marked "Committed" below). Each checkout or worktree of a
+repository on this computer has its own private history and credentials.
+**Moving or renaming the project folder starts a new private history**
+(and asks for credentials again): the old one stays in the data folder but
+is no longer shown. Private histories are never cleaned up automatically;
+delete a folder under `history/` by hand to reclaim the space (or the whole
+data folder when no project needs its History). Deleting one loses History,
+backups and the commits saved changesets are pinned to, never the
+project's files. The same applies when `KINETIC_MIGRATOR_DATA_DIR` points
+somewhere new.
+
+Changes made underneath (a branch switch, a pull, your own edits, the
+command line) are recorded in the private history as "Files changed outside
+Kinetic Migrator" before the app's next change, so each of its commits holds
+only its own change. The app never writes to your repository through git,
+and the file system it hands to git refuses any write outside the private
+history; your repository is read only for its branch, the number of changed
+files and whether a merge, rebase, cherry-pick or revert is in progress (then
+the project is read-only).
+
+The command line never commits, in either mode.
+
 ## What is in a project folder
 
 | Path | What it holds | Committed |
@@ -326,6 +390,11 @@ one after it.
 | `compares/` | Comparison reports (command line) | No |
 | `.env.<env>` | Credentials and secrets for the command line | No |
 
-The `.gitignore` the tool writes keeps the last four out of git. Reference
+"Committed" means committed to the project's history: the managed
+repository, or the private history of an external project (where you decide
+what goes into your own repository).
+
+The `.gitignore` the tool writes in the project folder keeps the last four
+out of git, in your repository too for an external project. Reference
 data can contain real records, so check what you list before pushing a
 project anywhere.

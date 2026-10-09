@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ApplyResult, Changeset, PlanResult, RunRecord } from '../shared/sync-api.ts';
-import { log, readTreeAt } from './repo.ts';
+import { log, readTreeAt, managedRepo } from './repo.ts';
 import { PLANTED, PLANTED_CONN, PLANTED_RUN, assertNoSecret, harness, type Harness } from './sync-fixtures.ts';
 
 const P = '/api/projects/sync-test';
@@ -22,9 +22,9 @@ async function plan(h: Harness, body: unknown): Promise<PlanResult> {
 }
 
 async function repoText(h: Harness): Promise<string> {
-  const head = (await log(h.dir, { limit: 1 }))[0];
-  const tree = await readTreeAt(h.dir, head.oid, '');
-  return JSON.stringify([...tree]) + (await log(h.dir, { limit: 1000 })).map((e) => e.message).join('\n');
+  const head = (await log(managedRepo(h.dir), { limit: 1 }))[0];
+  const tree = await readTreeAt(managedRepo(h.dir), head.oid, '');
+  return JSON.stringify([...tree]) + (await log(managedRepo(h.dir), { limit: 1000 })).map((e) => e.message).join('\n');
 }
 
 test('guided apply writes only the selected keys, backs up first, records the run and never leaks a secret', async (t) => {
@@ -65,7 +65,7 @@ test('guided apply writes only the selected keys, backs up first, records the ru
   assert.equal(noValues.json.error.code, 'values_required');
   assert.equal((await apply({ acknowledgements: [`index:${FORM}`], values, secrets: { 'secret/OTHER': 'x' }, confirm: 'test' })).status, 400);
   assert.deepEqual(h.writes('test'), [], 'nothing written by refused applies');
-  const commitsBefore = (await log(h.dir, { limit: 1000 })).length;
+  const commitsBefore = (await log(managedRepo(h.dir), { limit: 1000 })).length;
 
   // Secrets given for this run stand in for the connection acknowledgement.
   const started = await apply({ acknowledgements: [`index:${FORM}`], values, secrets, confirm: 'test' });
@@ -94,7 +94,7 @@ test('guided apply writes only the selected keys, backs up first, records the ru
 
   // Values saved, backup and run committed, run record written.
   assert.deepEqual(JSON.parse(readFileSync(path.join(h.dir, 'overrides', 'test.json'), 'utf8')).artifacts[FORM], { 'attributes.Owner': ['IT'] });
-  const messages = (await log(h.dir, { limit: 1000 })).slice(0, -commitsBefore).map((e) => e.message.split('\n')[0]);
+  const messages = (await log(managedRepo(h.dir), { limit: 1000 })).slice(0, -commitsBefore).map((e) => e.message.split('\n')[0]);
   assert.deepEqual(messages, ["Applied '3 items from Dev' to Test", "Backup of Test before applying '3 items from Dev'", 'Updated environment values for Test']);
   assert.ok(result.backupCommit);
   const runFile = readdirSync(path.join(h.dir, 'runs'));
@@ -136,7 +136,7 @@ test('remembered secrets go to the store; a readOnly target is refused; a change
   assert.equal(await h.store.has(`${JSON.parse(readFileSync(path.join(h.dir, 'kinetic-migrate.json'), 'utf8')).secretsId}/test/secret/TICKETING__PASSWORD`), true);
   const saved = (await h.call('GET', `${P}/changesets/${cs.id}`)).json as Changeset;
   assert.deepEqual(saved.appliedTo.map((a) => [a.env, a.runId]), [['test', job.result.runId]]);
-  assert.match((await log(h.dir, { limit: 1 }))[0].message, /^Applied 'Team text' to Test\n\nEnvironment: test\nRun: .+\nChangeset: /);
+  assert.match((await log(managedRepo(h.dir), { limit: 1 }))[0].message, /^Applied 'Team text' to Test\n\nEnvironment: test\nRun: .+\nChangeset: /);
   assert.equal((await h.call('POST', `${P}/plans/nope/apply`, { confirm: 'test' })).status, 404);
   assertNoSecret(h, [job.events]);
 });
@@ -153,7 +153,7 @@ test('a failed item stops the apply: partial run record, plain error, then resum
   assert.equal(first.status, 'succeeded', JSON.stringify(first.error));
   assert.equal(first.result.status, 'partial');
   assert.equal(first.result.error, `${FORM}: The Kinetic Platform returned an error (500).`);
-  assert.match((await log(h.dir, { limit: 1 }))[0].message, /^Partly applied/);
+  assert.match((await log(managedRepo(h.dir), { limit: 1 }))[0].message, /^Partly applied/);
   const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${first.result.runId}.json`), 'utf8')) as RunRecord;
   assert.equal(run.status, 'partial');
   assert.equal(run.items.find((i) => i.key === FORM)!.status, 'failed');
@@ -184,7 +184,7 @@ test('a cancelled apply finishes with its real outcome: run record, backup, item
   assert.equal(result.done, 1);
   assert.ok(result.backupCommit);
   assert.ok(result.runId);
-  assert.match((await log(h.dir, { limit: 1 }))[0].message, /^Cancelled applying '4 items from Dev' to Test/);
+  assert.match((await log(managedRepo(h.dir), { limit: 1 }))[0].message, /^Cancelled applying '4 items from Dev' to Test/);
   const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${result.runId}.json`), 'utf8')) as RunRecord;
   assert.equal(run.status, 'cancelled');
   assert.deepEqual(run.items, [{ key: 'teams/Ops', status: 'done' }]);
@@ -220,7 +220,7 @@ test('an item changed in the target after review is reported as skipped with a r
   const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${result.runId}.json`), 'utf8')) as RunRecord;
   assert.equal(run.status, 'partial');
   assert.deepEqual(run.items, [{ key: CONN, status: 'done' }, { key: 'teams/Ops', status: 'skipped', message: reason }]);
-  assert.match((await log(h.dir, { limit: 5 })).map((e) => e.message).join('\n'), /^Partly applied '2 items from Dev' to Test/m);
+  assert.match((await log(managedRepo(h.dir), { limit: 5 })).map((e) => e.message).join('\n'), /^Partly applied '2 items from Dev' to Test/m);
 
   // Keeping the target's version on purpose is not a skip to report.
   const kept = await h.job('POST', `${P}/plans/${p.planId}/apply`, { ...acks, resolutions: { 'teams/Ops': 'keep' } });
@@ -268,14 +268,14 @@ test('after an apply the target is snapshotted again, so a snapshot compare show
 
   // The newest commit is the post-apply snapshot: a snapshot event in History,
   // and the environment's last snapshot.
-  const [newest] = await log(h.dir, { limit: 1 });
+  const [newest] = await log(managedRepo(h.dir), { limit: 1 });
   assert.equal(newest.message.split('\n')[0], "Snapshot of Test after applying '1 item from Dev'");
   const history = (await h.call('GET', `${P}/history?type=snapshot&env=test`)).json as Array<{ commit: string; title: string }>;
   assert.equal(history[0].commit, newest.oid);
   const project = (await h.call('GET', P)).json;
   assert.equal(project.environments.find((e: any) => e.name === 'test').lastSnapshot.commit, newest.oid);
   assert.equal(job.result.snapshotCommit, newest.oid);
-  assert.deepEqual((await readTreeAt(h.dir, newest.oid, 'snapshots/test')).get('teams/Ops'), { name: 'Ops', description: 'Operations (dev)' });
+  assert.deepEqual((await readTreeAt(managedRepo(h.dir), newest.oid, 'snapshots/test')).get('teams/Ops'), { name: 'Ops', description: 'Operations (dev)' });
 
   const after = (await h.job('POST', `${P}/compare`, { from: 'dev', to: 'test', mode: 'preview', useSnapshots: true })).result;
   assert.equal(await itemStatus(after.compareId), 'same');
@@ -301,7 +301,7 @@ test('a failed post-apply snapshot is a warning: the apply still reports its rea
   assert.equal(job.result.warnings.length, 1);
   assert.match(job.result.warnings[0], /^The snapshot of Test taken after the apply failed: .+\. Take a snapshot before comparing again\.$/);
   assert.ok(job.events.includes(job.result.warnings[0].slice(0, 60)));
-  const [noted, applied] = await log(h.dir, { limit: 2 });
+  const [noted, applied] = await log(managedRepo(h.dir), { limit: 2 });
   assert.equal(noted.message.split('\n')[0], 'Recorded that the snapshot of Test after the apply failed');
   assert.match(applied.message, /^Applied '1 item from Dev' to Test/);
   const run = JSON.parse(readFileSync(path.join(h.dir, 'runs', `${job.result.runId}.json`), 'utf8'));

@@ -15,6 +15,7 @@ const TOKEN = 'typed-token-123456';
 
 function setup(initial: Partial<RepositorySettings> = {}) {
   let settings: RepositorySettings = {
+    mode: 'managed',
     author: { name: 'kinetic-migrate', email: 'kinetic-migrate@localhost' },
     remote: { url: null, token: { has: false } },
     lastPush: null,
@@ -100,4 +101,28 @@ test('disconnects the remote', async () => {
   renderWithApp(<AppRoutes />, { route: '/p/acme-demo/settings/repository' });
   await user.click(await screen.findByRole('button', { name: 'Disconnect' }));
   await waitFor(() => expect(m.callsTo('PUT', '/api/projects/acme-demo/repository')[0]?.body).toEqual({ remoteUrl: null }));
+});
+
+test('a project inside the user’s repository shows that repository read-only, with no remote, token or push', async () => {
+  const m = setup({
+    mode: 'external',
+    external: {
+      root: '/work/monorepo', name: 'monorepo', kind: 'worktree', branch: 'feature/x', subfolder: 'apps/config/kinetic',
+      changedFiles: 2, checking: false, operation: null, historyPath: '/data/history/abc',
+    },
+  });
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/settings/repository' });
+  const card = (await screen.findByRole('heading', { name: 'Your repository' })).closest('div.rounded-xl') as HTMLElement;
+  for (const text of ['/work/monorepo', 'Linked worktree', 'feature/x', 'apps/config/kinetic', '/data/history/abc']) expect(within(card).getByText(text)).toBeInTheDocument();
+  expect(within(card).getByText(/never commits, stages, pushes or changes remotes there/)).toBeInTheDocument();
+  expect(within(card).getByRole('note', { name: 'Your repository' })).toHaveTextContent('2 files changed since your last commit');
+  expect(screen.queryByRole('heading', { name: 'Remote repository' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Push' })).toBeNull();
+  expect(screen.queryByLabelText('Token')).toBeNull();
+  expect(screen.getByText(/private history of this project, on this computer/)).toBeInTheDocument();
+  await user.type(screen.getByLabelText('Name'), 'Pat Example');
+  await user.type(screen.getByLabelText('Email'), 'pat@example.com');
+  await user.click(screen.getByRole('button', { name: 'Save author' }));
+  await waitFor(() => expect(m.callsTo('PUT', '/api/projects/acme-demo/repository')[0]?.body).toEqual({ author: { name: 'Pat Example', email: 'pat@example.com' } }));
 });

@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fakeTaskHandlers } from '../../lib/sync/fake-client.mjs';
 import type { PlanResult, RunRecord } from '../shared/sync-api.ts';
 import { toApiError } from './errors.ts';
-import { log, readTreeAt } from './repo.ts';
+import { log, readTreeAt, managedRepo } from './repo.ts';
 import { FALLBACK, PLANTED_RUN, assertNoSecret, devRoutes, harness, testRoutes, type Harness } from './sync-fixtures.ts';
 
 const P = '/api/projects/sync-test';
@@ -83,7 +83,7 @@ test('live scenario: a new handler with empty required settings is installed, as
     message: "Installed; set account_id, certificate_id, client_id, private_key_b64 in Test's Task console (or enter them under Environment values and apply again).",
     attention: true,
   });
-  assert.ok((await log(h.dir, { limit: 3 })).some((e) => /^Partly applied '1 item from Dev' to Test\n/.test(e.message)));
+  assert.ok((await log(managedRepo(h.dir), { limit: 3 })).some((e) => /^Partly applied '1 item from Dev' to Test\n/.test(e.message)));
 
   // Re-plan: the handler still needs its settings written (not "unchanged"),
   // and asks for the secret again.
@@ -112,9 +112,9 @@ test('live scenario: a new handler with empty required settings is installed, as
   // The secret is in no API response, job event, run record or commit.
   assertNoSecret(h, [job.events, done.events]);
   for (const r of runs(h)) assert.ok(!JSON.stringify(r).includes(PLANTED_RUN));
-  const head = (await log(h.dir, { limit: 1 }))[0];
-  const tree = await readTreeAt(h.dir, head.oid, '');
-  const repo = JSON.stringify([...tree]) + (await log(h.dir, { limit: 1000 })).map((e) => e.message).join('\n');
+  const head = (await log(managedRepo(h.dir), { limit: 1 }))[0];
+  const tree = await readTreeAt(managedRepo(h.dir), head.oid, '');
+  const repo = JSON.stringify([...tree]) + (await log(managedRepo(h.dir), { limit: 1000 })).map((e) => e.message).join('\n');
   assert.ok(!repo.includes(PLANTED_RUN), 'no secret in the repository');
 });
 

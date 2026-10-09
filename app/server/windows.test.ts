@@ -13,7 +13,7 @@ import { samePath, slugify } from './projects.ts';
 import { isMainModule } from './main.ts';
 import { readJsonFile } from './project-meta.ts';
 import { validateEnvName } from './engine.ts';
-import { inLayout } from './repo.ts';
+import { inLayout, managedRepo } from './repo.ts';
 
 const ROOT = 'C:\\Users\\José Núñez\\AppData\\Roaming\\npm\\node_modules\\kinetic-migrate\\dist\\web';
 
@@ -113,5 +113,5 @@ test('a pinned tree whose entries differ only by case fails clearly instead of o
     message: 'x', tree: root, parent: [],
     author: { name: 'a', email: 'a@b', timestamp: 0, timezoneOffset: 0 }, committer: { name: 'a', email: 'a@b', timestamp: 0, timezoneOffset: 0 },
   } });
-  await assert.rejects(materializeTree(dir, commit, 'snap', path.join(dir, 'out')), /"Ops\.json" and "ops\.json", which differ only in letter case/);
+  await assert.rejects(materializeTree(managedRepo(dir), commit, 'snap', path.join(dir, 'out')), /"Ops\.json" and "ops\.json", which differ only in letter case/);
 });

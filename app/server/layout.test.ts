@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import path from 'node:path';
 import type { PlanResult } from '../shared/sync-api.ts';
 import { commitChange } from './project-meta.ts';
-import { log, readTreeAt } from './repo.ts';
+import { log, readTreeAt, managedRepo } from './repo.ts';
 import { harness } from './sync-fixtures.ts';
 import { commitMessage } from './trailers.ts';
 // @ts-expect-error -- untyped engine module
@@ -69,7 +69,7 @@ for (const order of ['app', 'cli'] as const) test(`a pre-upgrade project upgrade
   const ref = { id: 'sync-test', dir: h.dir };
   const oldCommit = await commitChange(ref, commitMessage('Snapshot of Dev', { Environment: 'dev' }));
   assert.ok(oldCommit);
-  assert.ok((await readTreeAt(h.dir, oldCommit!, 'snapshots/dev', { raw: true })).has(OLD_TEAM_KEY));
+  assert.ok((await readTreeAt(managedRepo(h.dir), oldCommit!, 'snapshots/dev', { raw: true })).has(OLD_TEAM_KEY));
   mkdirSync(path.join(h.dir, 'changesets'), { recursive: true });
   writeFileSync(path.join(h.dir, 'changesets', 'old-abc123.json'), JSON.stringify({
     id: 'old-abc123', name: 'Old', description: '', from: 'dev', sourceCommit: oldCommit, keys: [OLD_TEAM_KEY, OLD_WF_KEY], createdAt: '2026-01-01T00:00:00.000Z', appliedTo: [],
@@ -83,7 +83,7 @@ for (const order of ['app', 'cli'] as const) test(`a pre-upgrade project upgrade
   }
   const opened = await h.call('POST', '/api/projects/open', { path: h.dir });
   assert.equal(opened.status, 200, opened.body);
-  const [head] = await log(h.dir, { limit: 1 });
+  const [head] = await log(managedRepo(h.dir), { limit: 1 });
   assert.ok(existsSync(path.join(h.dir, 'snapshots', 'dev', 'teams', 'Departments%3A%3AIT.json')));
   assert.ok(!existsSync(path.join(h.dir, 'snapshots', 'dev', 'teams', 'Departments__IT.json')));
   const saved = JSON.parse(readFileSync(path.join(h.dir, 'changesets', 'old-abc123.json'), 'utf8')).keys;
@@ -98,11 +98,11 @@ for (const order of ['app', 'cli'] as const) test(`a pre-upgrade project upgrade
   // Either way the API shows today's keys.
   assert.deepEqual((await h.call('GET', `${P}/changesets/old-abc123`)).json.keys, [TEAM_KEY, WF_KEY]);
   // The old commit reads back under today's keys.
-  const before = await readTreeAt(h.dir, oldCommit!, 'snapshots/dev');
+  const before = await readTreeAt(managedRepo(h.dir), oldCommit!, 'snapshots/dev');
   assert.ok(before.has(TEAM_KEY) && before.has(WF_KEY) && !before.has(OLD_TEAM_KEY));
   // Opening again changes nothing.
   await h.call('POST', '/api/projects/open', { path: h.dir });
-  assert.equal((await log(h.dir, { limit: 1 }))[0].oid, head.oid);
+  assert.equal((await log(managedRepo(h.dir), { limit: 1 }))[0].oid, head.oid);
 
   // The changeset is pinned to the pre-upgrade commit (old file names).
   const job = await h.job('POST', `${P}/plans`, { to: 'test', changesetId: 'old-abc123' });

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ApplyResult, Changeset, CompareResult, HistoryEvent, PlanResult, RunRecord } from '../shared/sync-api.ts';
-import { log } from './repo.ts';
+import { log, managedRepo } from './repo.ts';
 import { runTitle } from './runs.ts';
 import { assertNoSecret, devRoutes, harness, testRoutes, type Harness } from './sync-fixtures.ts';
 // @ts-expect-error -- untyped engine module
@@ -133,7 +133,7 @@ test('a plan lists removals with what they take along and what uses them (a warn
     ['routines/Helper', 'done', 'Removed'],
     [OLD, 'done', 'Removed'],
   ]);
-  const titles = (await log(h.dir, { limit: 3 })).map((e) => e.message.split('\n')[0]);
+  const titles = (await log(managedRepo(h.dir), { limit: 3 })).map((e) => e.message.split('\n')[0]);
   assert.ok(titles.includes('Removed 3 items from Test'), titles.join(' | '));
   const events = (await h.call('GET', `${P}/history`)).json as HistoryEvent[];
   const ev = events.find((e) => e.title === 'Removed 3 items from Test')!;
@@ -178,7 +178,7 @@ test('a removal changed in the target since review is kept and the run is partia
     { key: LEGACY, status: 'skipped', message: 'Already gone from Test.' },
     { key: OLD, status: 'skipped', message: 'Changed in Test since you reviewed it — not removed.' },
   ]);
-  assert.match((await log(h.dir, { limit: 3 })).map((e) => e.message).join('\n'), /^Removed nothing from Test \(2 items skipped\)/m);
+  assert.match((await log(managedRepo(h.dir), { limit: 3 })).map((e) => e.message).join('\n'), /^Removed nothing from Test \(2 items skipped\)/m);
 });
 
 test('a plan can promote and remove together; a never-removable key is refused', async (t) => {
@@ -191,7 +191,7 @@ test('a plan can promote and remove together; a never-removable key is refused',
   const done = (await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result as ApplyResult;
   assert.equal(done.status, 'applied');
   assert.deepEqual(h.writes('test'), ['PUT /teams/ops', 'DELETE /teams/old']);
-  assert.match((await log(h.dir, { limit: 3 })).map((e) => e.message).join('\n'), /^Applied '1 item from Dev, 1 to remove' to Test and removed 1 item/m);
+  assert.match((await log(managedRepo(h.dir), { limit: 3 })).map((e) => e.message).join('\n'), /^Applied '1 item from Dev, 1 to remove' to Test and removed 1 item/m);
 
   const bad = await h.call('POST', `${P}/plans`, { to: 'test', from: 'dev', remove: ['space'] });
   assert.equal(bad.status, 400);
@@ -237,7 +237,7 @@ test('a sub-collection entry only in the target: listed on its item in Compare, 
   const done = (await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [], confirm: 'test' })).result as ApplyResult;
   assert.equal(done.status, 'applied', String(done.error));
   assert.deepEqual(h.writes('test'), ['DELETE /kapps/services/categories/old-hardware']);
-  assert.match((await log(h.dir, { limit: 3 })).map((e) => e.message).join('\n'), /^Removed 1 item from Test/m);
+  assert.match((await log(managedRepo(h.dir), { limit: 3 })).map((e) => e.message).join('\n'), /^Removed 1 item from Test/m);
 
   h.spaces.test = testRoutes;
   const rr = (await h.job('POST', `${P}/restore`, { commit: done.backupCommit })).result as CompareResult;

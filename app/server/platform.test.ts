@@ -12,7 +12,7 @@ import type { CompareResult, PlanResult } from '../shared/sync-api.ts';
 import type { ConnectionTestResult, ProjectDetail } from '../shared/api.ts';
 import type { ClientFactory } from './engine.ts';
 import { logDir, workspaceLogger } from './log.ts';
-import { log } from './repo.ts';
+import { log, managedRepo } from './repo.ts';
 // @ts-expect-error -- untyped engine module
 import { fakePlatform } from '../../lib/sync/fake-platform.mjs';
 // @ts-expect-error -- untyped engine module
@@ -49,7 +49,7 @@ test('a snapshot commit records the platform version in a trailer', async (t) =>
   h.platforms.set('dev', V6);
   const job = await h.job('POST', `${P}/snapshots`, { env: 'dev' });
   assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
-  const head = (await log(h.dir, { limit: 1 }))[0];
+  const head = (await log(managedRepo(h.dir), { limit: 1 }))[0];
   assert.match(head.message, /^Platform: 6\.1\.7$/m);
   assert.equal(((await h.call('GET', P)).json as ProjectDetail).environments.find((e) => e.name === 'dev')?.platform?.version, '6.1.7');
 });

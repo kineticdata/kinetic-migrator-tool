@@ -5,7 +5,8 @@
 //
 //   node scripts/run-tests.mjs [--import <module>]... <folder> <suffix>
 import { spawn } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const imports = [];
@@ -29,5 +30,12 @@ if (!files.length) {
   console.error(`No ${suffix} files under ${folder}`);
   process.exit(1);
 }
-const child = spawn(process.execPath, [...imports, '--test', ...files], { stdio: 'inherit' });
-child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
+// Tests never touch this computer's real Kinetic Migrator data folder (the
+// private histories of projects inside other repositories).
+const dataDir = process.env.KINETIC_MIGRATOR_DATA_DIR ? null : mkdtempSync(path.join(tmpdir(), 'km-data-'));
+const env = dataDir ? { ...process.env, KINETIC_MIGRATOR_DATA_DIR: dataDir } : process.env;
+const child = spawn(process.execPath, [...imports, '--test', ...files], { stdio: 'inherit', env });
+child.on('exit', (code, signal) => {
+  if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+  process.exit(code ?? (signal ? 1 : 0));
+});

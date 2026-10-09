@@ -82,10 +82,15 @@ made by Kinetic Migrator or by the `kinetic-migrate` command line (it must
 contain `kinetic-sync.config.json` or files in `environments/`). From then
 on the app manages it.
 
-A folder that is already a git repository must be on the branch `main`;
-otherwise the app refuses with "This folder is a git repository on branch
-<name>; Kinetic Migrator manages projects on main." Rename the branch with
-`git branch -m main` and open it again.
+A folder that is inside a git repository you already have (a monorepo, a
+subfolder of any repository, any branch, a linked worktree or a submodule)
+opens too: see [Using an existing repository or monorepo](#using-an-existing-repository-or-monorepo).
+
+A repository that Kinetic Migrator created for a project must be on the
+branch `main`; otherwise the app refuses with "This folder is a git
+repository on branch <name>; Kinetic Migrator manages projects on main."
+Switch back with `git checkout main` (or rename the branch with
+`git branch -m main`) and open it again.
 
 ### The managed git repository
 
@@ -107,6 +112,61 @@ Credentials, plan records and comparison reports are never committed (see
 
 To share the history, connect a remote repository in
 [Settings → Repository](#repository) and choose **Push**.
+
+### Using an existing repository or monorepo
+
+You can keep a project in a repository you already have, for example
+`apps/config/kinetic/` in a monorepo, on whatever branch you work on. Open
+the project folder (or create a project in a workspace inside your
+repository): Kinetic Migrator finds the repository around it.
+
+In that case Kinetic Migrator **leaves the changes for you**:
+
+- It writes the project's files (snapshots, changesets, run records,
+  environments) into the project folder and nothing else. It never commits,
+  stages, pushes, or changes your repository's branches, index, config or
+  remotes, and it never edits the `.gitignore` at the root of your
+  repository. You review, commit and open pull requests with your usual
+  tools.
+- The only file it may add is a `.gitignore` *inside the project folder*,
+  written when you open or create the project and it is missing or lacks
+  the lines that keep credentials (`.env*`) and the app's local folders
+  (`plans/`, `backups/`, `compares/`) out of your repository. When the
+  project folder is the root of your repository it leaves that `.gitignore`
+  alone (add those lines yourself). It does not add a `.gitattributes`:
+  your repository's line-ending rules apply. Looking at a project never
+  writes a file.
+- The project's credentials and private history belong to the folder's
+  location on this computer, so they are the same on every branch. Moving
+  or renaming the folder starts afresh.
+- History, backups, **Restore** and saved changesets still work: the app
+  keeps its own **private history** of the project on this computer,
+  outside your repository (see
+  [Managed and external projects](CONCEPTS.md#managed-and-external-projects)).
+  Its commits have the same titles as in the table above.
+- Overview and History show a note such as "This project is in your
+  repository monorepo on branch feature/x; Kinetic Migrator doesn't commit
+  there — 12 files changed since your last commit." The count is worked out
+  in the background (it says "checking" meanwhile) and refreshed within
+  seconds after a change.
+- If you switch branches, pull, or edit the files yourself (or with the
+  command line), the app records the new state in its private history as
+  "Files changed outside Kinetic Migrator" before its next change. What
+  Overview, Explore and Compare show always comes from the files on disk.
+- While a merge, rebase, cherry-pick or revert is in progress in your
+  repository, the project is read-only: you can look and compare, but
+  snapshots, applies and setting changes are refused until you finish or
+  abort it.
+- There is no remote, token or **Push** in
+  [Settings → Repository](#repository) for such a project: push your
+  repository yourself. The **Author** there names the private history only.
+
+Saved changesets and run records refer to commits of the private history on
+this computer. On another computer (a teammate's clone) those commits do not
+exist: take a fresh snapshot and save the changeset again there.
+
+A project already managed by Kinetic Migrator in its own repository stays
+that way; the two modes are not switched.
 
 ## Environments
 
@@ -720,6 +780,11 @@ Creating or updating records runs the target form's submission workflows;
 the plan names them under Needs attention.
 
 ### Repository
+
+For a project inside your own repository this page shows that repository
+read-only instead (its folder, kind, branch, the project's folder within it
+and where the private history is kept) and has no remote, token or Push.
+See [Using an existing repository or monorepo](#using-an-existing-repository-or-monorepo).
 
 **Author**: the **Name** and **Email** that History records your snapshots,
 changesets and promotions under. Until you set them, History shows "You".

@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { CompareResult, CompareTreeNode, PlanResult, SnapshotResult, SuggestionOut } from '../shared/sync-api.ts';
 import type { ConnectionTestResult } from '../shared/api.ts';
-import { log } from './repo.ts';
+import { log, managedRepo } from './repo.ts';
 import { toApiError } from './errors.ts';
 import { eventsFor } from './history.ts';
 import { commitMessage } from './trailers.ts';
@@ -49,7 +49,7 @@ test('a snapshot succeeds without connections and operations, with a warning in 
   assert.deepEqual(r.warnings, [`Connections and operations were left out: ${WHY}`]);
   assert.equal(Object.keys(r.counts).some((k) => k === 'connections' || k === 'operations'), false);
   assert.ok((r.counts.forms ?? 0) > 0);
-  const head = (await log(h.dir, { limit: 1 }))[0];
+  const head = (await log(managedRepo(h.dir), { limit: 1 }))[0];
   assert.match(head.message, /Connections and operations were left out: test\.example\.com runs Kinetic Platform 7\.0\.0-rc3/);
   assert.match(readFileSync(path.join(h.dir, 'snapshots', 'test', '.kinetic-sync-export'), 'utf8'), /^omitted: \{.*"status":404/m);
   // Explore shows the Connections group with why; History shows the note.
@@ -190,7 +190,7 @@ test('a removal of a connection is dropped with a warning (not a blocking error)
   const h = await harness(t);
   h.spaces.test = devRoutes; // Test has the connection; it is to be removed
   await snapshot(h, 'dev');
-  const pinned = (await log(h.dir, { limit: 1 }))[0].oid;
+  const pinned = (await log(managedRepo(h.dir), { limit: 1 }))[0].oid;
   // A newer snapshot of Dev that could not read connections.
   h.spaces.dev = () => ({ ...devRoutes(), 'GET core/teams': { teams: [] } });
   h.integratorDown.add('dev');

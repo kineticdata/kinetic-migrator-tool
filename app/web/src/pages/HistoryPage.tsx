@@ -24,6 +24,7 @@ import {
 } from '../lib/history';
 import { restoreHref, valueText } from '../lib/plan';
 import { useProjectContext } from '../lib/project';
+import { ExternalRepoBanner } from '../components/ExternalRepoBanner';
 
 const DRIFT = ':drift';
 
@@ -245,6 +246,7 @@ export function HistoryPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
+      <ExternalRepoBanner projectId={project.id} />
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold text-fg">History</h1>

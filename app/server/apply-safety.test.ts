@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { PlanResult } from '../shared/sync-api.ts';
-import { log, readTreeAt } from './repo.ts';
+import { log, readTreeAt, managedRepo } from './repo.ts';
 import { PLANTED, PLANTED_CONN, PLANTED_RUN, assertNoSecret, devRoutes, harness, testRoutes, type Harness } from './sync-fixtures.ts';
 
 const P = '/api/projects/sync-test';
@@ -21,7 +21,7 @@ async function plan(h: Harness, body: unknown): Promise<PlanResult> {
   return job.result as PlanResult;
 }
 
-const commits = async (h: Harness) => (await log(h.dir, { limit: 10000 })).length;
+const commits = async (h: Harness) => (await log(managedRepo(h.dir), { limit: 10000 })).length;
 
 test('apply accepts only the planned, non-secret environment values; a rejection writes and commits nothing', async (t) => {
   const h = await harness(t);
@@ -81,7 +81,7 @@ test('an apply that writes nothing commits "Failed to apply"', async (t) => {
   h.spaces.test = () => ({ ...testRoutes(), 'PUT core/teams/ops': () => { throw Object.assign(new Error('PUT failed with 503: busy'), { name: 'HttpError', status: 503 }); } });
   const job = await h.job('POST', `${P}/plans/${p.planId}/apply`, { acknowledgements: [], confirm: 'test' });
   assert.equal(job.result.status, 'failed');
-  assert.match((await log(h.dir, { limit: 1 }))[0].message, /^Failed to apply '1 item from Dev' to Test\n/);
+  assert.match((await log(managedRepo(h.dir), { limit: 1 }))[0].message, /^Failed to apply '1 item from Dev' to Test\n/);
 });
 
 test('failed snapshot and plan jobs: the error is redacted in the log and the last snapshot stays in place', async (t) => {
@@ -95,7 +95,7 @@ test('failed snapshot and plan jobs: the error is redacted in the log and the la
   assert.ok(h.logged.length >= 1);
   for (const line of h.logged) assert.ok(!line.includes(TOKEN) && !line.includes(PLANTED), line);
   // The working tree still matches the last committed snapshot; no export leftovers.
-  const committed = await readTreeAt(h.dir, good.commit, 'snapshots/dev');
+  const committed = await readTreeAt(managedRepo(h.dir), good.commit, 'snapshots/dev');
   assert.ok(committed.size > 0);
   for (const [key, data] of committed) {
     assert.deepEqual(JSON.parse(readFileSync(path.join(h.dir, 'snapshots', 'dev', `${key}.json`), 'utf8')), data);
@@ -188,7 +188,7 @@ test('an old snapshot that still holds a SQL password: plans ask for it, never s
   // Rewrite Dev's snapshot as an older release wrote it: the password inside.
   const file = path.join(h.dir, 'snapshots', 'dev', 'connections', 'Warehouse DB', 'connection.json');
   writeFileSync(file, JSON.stringify(sql(PLANTED_CONN), null, 2));
-  await commitAll(h.dir, 'Snapshot of Dev (older release)', { name: 'Tester', email: 'tester@example.com' });
+  await commitAll(managedRepo(h.dir), 'Snapshot of Dev (older release)', { name: 'Tester', email: 'tester@example.com' });
 
   const p = await plan(h, { to: 'test', from: 'dev', selected: [SQL] });
   assert.deepEqual(p.secretsNeeded.map((s) => [s.id, s.has]), [['secret/WAREHOUSE_DB__PASSWORD', false]]);

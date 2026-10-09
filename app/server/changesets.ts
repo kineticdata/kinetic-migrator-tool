@@ -13,6 +13,7 @@ import { LAYOUT_VERSION, MODULES, isEntryKey, moduleFor, removalRefusal } from '
 import { resolveCommit } from './pinned.ts';
 import { commitChange, isPlainObject, withProjectLock, type ProjectRef } from './project-meta.ts';
 import { slugify } from './projects.ts';
+import { projectRepo } from './project-repo.ts';
 import { readTreeAt } from './repo.ts';
 import type { Router } from './router.ts';
 import { latestSnapshotCommit, loadSnapshot, requireEnvironment, type SyncContext } from './snapshots.ts';
@@ -89,7 +90,7 @@ export async function currentKeys(ref: ProjectRef, cs: Changeset): Promise<strin
   const id = `${ref.dir}\0${cs.sourceCommit}\0${cs.from}`;
   let map = rekeyCache.get(id);
   if (!map) {
-    const tree = await readTreeAt(ref.dir, cs.sourceCommit, `snapshots/${cs.from}`);
+    const tree = await readTreeAt(await projectRepo(ref), cs.sourceCommit, `snapshots/${cs.from}`);
     map = (tree.layout ?? LAYOUT_VERSION) < LAYOUT_VERSION ? tree.rekeyed ?? new Map() : new Map();
     rekeyCache.set(id, map);
     while (rekeyCache.size > 64) rekeyCache.delete(rekeyCache.keys().next().value!);
@@ -104,7 +105,7 @@ async function shown(ref: ProjectRef, cs: Changeset): Promise<Changeset> {
 
 async function keysAt(ref: ProjectRef, env: string, commit: string): Promise<Set<string>> {
   if (commit === (await latestSnapshotCommit(ref, env))) return new Set((await loadSnapshot(ref, env)).artifacts.keys());
-  return new Set((await readTreeAt(ref.dir, commit, `snapshots/${env}`)).keys());
+  return new Set((await readTreeAt(await projectRepo(ref), commit, `snapshots/${env}`)).keys());
 }
 
 async function checkKeys(ref: ProjectRef, env: string, commit: string, keys: string[], remove: string[] = []): Promise<void> {
@@ -139,7 +140,7 @@ export async function createChangeset(ref: ProjectRef, body: unknown): Promise<C
   const removeFrom = remove.length ? removeTarget(ref, body.removeFrom, from) : undefined;
   let sourceCommit: string | null;
   if (body.sourceCommit !== undefined) {
-    sourceCommit = typeof body.sourceCommit === 'string' ? await resolveCommit(ref.dir, body.sourceCommit) : null;
+    sourceCommit = typeof body.sourceCommit === 'string' ? await resolveCommit(await projectRepo(ref), body.sourceCommit) : null;
     if (!sourceCommit) throw badRequest('"sourceCommit" is not a commit of this project.');
   } else {
     sourceCommit = await latestSnapshotCommit(ref, from);

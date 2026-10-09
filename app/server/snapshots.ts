@@ -4,7 +4,6 @@
 // artifacts, tree index and relationships, keyed by the snapshot commit.
 import { randomUUID } from 'node:crypto';
 import fs, { statSync } from 'node:fs';
-import git from 'isomorphic-git';
 import path from 'node:path';
 import type { SnapshotResult } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
@@ -15,8 +14,9 @@ import {
 import { environmentExists, resolveEnv } from './environments.ts';
 import type { Emit } from './jobs.ts';
 import {
-  DEFAULT_AUTHOR, commitChange, displayName, isPlainObject, readMeta, secretsId, withProjectLock, type ProjectRef,
+  commitChange, displayName, isPlainObject, secretsId, syncHistory, withProjectLock, type ProjectRef,
 } from './project-meta.ts';
+import { projectRepo } from './project-repo.ts';
 import { log } from './repo.ts';
 import { capturingFactory, parseVersion, rememberPlatform } from './platforms.ts';
 import { makeScrubber, scrubError } from './scrub.ts';
@@ -29,7 +29,9 @@ export function requireEnvironment(ref: ProjectRef, env: unknown): string {
 }
 
 export async function latestSnapshotCommit(ref: ProjectRef, env: string): Promise<string | null> {
-  return (await log(ref.dir, { path: `snapshots/${env}`, limit: 1 }))[0]?.oid ?? null;
+  // An external project's files may have changed underneath (a branch switch).
+  await syncHistory(ref);
+  return (await log(await projectRepo(ref), { path: `snapshots/${env}`, limit: 1 }))[0]?.oid ?? null;
 }
 
 // Items whose current content differs from the hash recorded at their last
@@ -139,11 +141,7 @@ export async function takeSnapshot(opts: {
   const detected = await capture.platform();
   rememberPlatform(ref.dir, env.name, detected);
   const message = commitMessage(opts.title, { Environment: env.name, ...opts.trailers, Platform: parseVersion(detected?.version)?.version }, body);
-  let commit = await commitChange(ref, message);
-  if (!commit && opts.always) {
-    const author = readMeta(ref.dir).author ?? DEFAULT_AUTHOR;
-    commit = await git.commit({ fs, dir: ref.dir, message, author: { ...author, timestamp: Math.floor(Date.now() / 1000) } });
-  }
+  const commit = await commitChange(ref, message, { always: opts.always });
   return { env: env.name, commit, total: r.artifacts, counts: r.counts, drifted, ...(warnings.length ? { warnings } : {}) };
 }
 

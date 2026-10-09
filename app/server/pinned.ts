@@ -5,21 +5,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import git from 'isomorphic-git';
 import { upgradeTree } from './engine-sync.ts';
+import { g, type ProjectRepo } from './repo.ts';
 
-export async function readJsonAt(dir: string, commit: string, filepath: string): Promise<unknown> {
+export async function readJsonAt(repo: ProjectRepo, commit: string, filepath: string): Promise<unknown> {
   try {
-    const { blob } = await git.readBlob({ fs, dir, oid: commit, filepath });
+    const { blob } = await git.readBlob({ ...g(repo), oid: commit, filepath });
     return JSON.parse(Buffer.from(blob).toString('utf8'));
   } catch {
     return undefined;
   }
 }
 
-export async function resolveCommit(dir: string, ref: string): Promise<string | null> {
+export async function resolveCommit(repo: ProjectRepo, ref: string): Promise<string | null> {
   if (!/^[0-9a-f]{4,40}$/i.test(ref)) return null;
   try {
-    const oid = ref.length === 40 ? ref : await git.expandOid({ fs, dir, oid: ref });
-    await git.readCommit({ fs, dir, oid });
+    const oid = ref.length === 40 ? ref : await git.expandOid({ ...g(repo), oid: ref });
+    await git.readCommit({ ...g(repo), oid });
     return oid;
   } catch {
     return null;
@@ -36,17 +37,17 @@ export const isSafeEntryName = (name: string): boolean => (
 
 // Writes every file under `subdir` at `commit` into `dest` (emptied first).
 // Returns false when the commit has no such folder.
-export async function materializeTree(dir: string, commit: string, subdir: string, dest: string): Promise<boolean> {
+export async function materializeTree(repo: ProjectRepo, commit: string, subdir: string, dest: string): Promise<boolean> {
   let root: string;
   try {
-    root = (await git.readTree({ fs, dir, oid: commit, filepath: subdir })).oid;
+    root = (await git.readTree({ ...g(repo), oid: commit, filepath: subdir })).oid;
   } catch {
     return false;
   }
   fs.rmSync(dest, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   const walk = async (oid: string, base: string): Promise<void> => {
     fs.mkdirSync(base, { recursive: true });
-    const { tree } = await git.readTree({ fs, dir, oid });
+    const { tree } = await git.readTree({ ...g(repo), oid });
     // Windows and macOS would write two names that differ only in letter
     // case into one file, silently.
     const seen = new Map<string, string>();
@@ -62,7 +63,7 @@ export async function materializeTree(dir: string, commit: string, subdir: strin
       if (!isSafeEntryName(entry.path)) continue;
       const target = path.join(base, entry.path);
       if (entry.type === 'tree') await walk(entry.oid, target);
-      else if (entry.type === 'blob') fs.writeFileSync(target, (await git.readBlob({ fs, dir, oid: entry.oid })).blob);
+      else if (entry.type === 'blob') fs.writeFileSync(target, (await git.readBlob({ ...g(repo), oid: entry.oid })).blob);
     }
   };
   await walk(root, dest);

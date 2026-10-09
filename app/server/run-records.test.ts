@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { commitAll, ensureRepo } from './repo.ts';
+import { commitAll, ensureRepo, managedRepo } from './repo.ts';
 import { lastPromoted, RUNS_DIR } from './run-records.ts';
 import type { ProjectRef } from './project-meta.ts';
 
@@ -15,12 +15,12 @@ const PLANTED = 'Planted-Old-Db-Pa55';
 test('lastPromoted strips a database password an older source snapshot holds', async (t) => {
   const dir = mkdtempSync(path.join(tmpdir(), 'km-lastpromoted-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  await ensureRepo(dir);
+  await ensureRepo(managedRepo(dir));
   const key = 'connections/Warehouse DB/connection';
   const file = path.join(dir, 'snapshots', 'dev', 'connections', 'Warehouse DB', 'connection.json');
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify({ id: 'c', name: 'Warehouse DB', type: 'postgres', config: { configType: 'postgres', host: 'db.example.com', password: PLANTED } }));
-  const commit = await commitAll(dir, 'Snapshot of Dev', { name: 'Tester', email: 'tester@example.com' });
+  const commit = await commitAll(managedRepo(dir), 'Snapshot of Dev', { name: 'Tester', email: 'tester@example.com' });
   assert.ok(commit);
   mkdirSync(path.join(dir, RUNS_DIR), { recursive: true });
   writeFileSync(path.join(dir, RUNS_DIR, 'r1.json'), JSON.stringify({

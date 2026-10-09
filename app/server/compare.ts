@@ -11,6 +11,7 @@ import type {
 import { ApiError, badRequest, notFound } from './errors.ts';
 import { resolveCommit } from './pinned.ts';
 import { capturingFactory, crossVersionFor, rememberPlatform } from './platforms.ts';
+import { projectRepo } from './project-repo.ts';
 import { readTreeAt } from './repo.ts';
 import { loadConfig, loadOverrides, type ClientFactory, type EngineEnv } from './engine.ts';
 import {
@@ -249,9 +250,9 @@ export function registerCompareRoutes(router: Router, ctx: SyncContext): void {
     if (mode !== 'preview' && mode !== 'raw') throw badRequest('"mode" is "preview" or "raw".');
     let source: CompareSource;
     if (body.sourceCommit !== undefined) {
-      const commit = typeof body.sourceCommit === 'string' ? await resolveCommit(ref.dir, body.sourceCommit) : null;
+      const commit = typeof body.sourceCommit === 'string' ? await resolveCommit(await projectRepo(ref), body.sourceCommit) : null;
       if (!commit) throw badRequest('"sourceCommit" is not a commit of this project.');
-      const artifacts = await readTreeAt(ref.dir, commit, `snapshots/${from}`);
+      const artifacts = await readTreeAt(await projectRepo(ref), commit, `snapshots/${from}`);
       if (!artifacts.size) throw new ApiError(404, 'no_snapshot', `That commit holds no snapshot of ${displayName(from)}.`);
       source = { artifacts, commit };
     } else {

@@ -7,6 +7,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ApiError, mapError, notFound } from './errors.ts';
 import { checkApi, checkHost, safeEqual, sessionCookie } from './security.ts';
 import type { Router } from './router.ts';
+import { inRequestScope } from './request-scope.ts';
 import { defaultLogger, type Logger } from './log.ts';
 import { isReservedDeviceName } from './engine-sync.ts';
 
@@ -180,7 +181,7 @@ export function createRequestHandler(opts: HandlerOptions) {
           res.setHeader('allow', m.allowed.join(', '));
           throw new ApiError(405, 'method_not_allowed', 'Method not allowed.');
         }
-        const out = await m.handler({ req, res, params: m.params, query: url.searchParams, body });
+        const out = await inRequestScope(() => m.handler({ req, res, params: m.params, query: url.searchParams, body }));
         if (out) sendJson(res, out.status ?? 200, out.json);
         return;
       }

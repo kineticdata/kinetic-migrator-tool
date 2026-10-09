@@ -23,6 +23,7 @@ import { platformText } from '../lib/platform';
 import { latestByEnv, newestFirst, useProjectContext } from '../lib/project';
 import { groupOf, typeCounts } from '../lib/type-counts';
 import { ApiError } from '../api/client';
+import { ExternalRepoBanner } from '../components/ExternalRepoBanner';
 
 // The children of the tree nodes in `parents` (loaded and cached like Explore's tree).
 function useChildren(projectId: string, env: string, commit: string | undefined, parents: string[]) {
@@ -274,6 +275,7 @@ export function OverviewPage() {
         <h1 className="text-xl font-semibold tracking-tight text-fg">Overview</h1>
         <p className="mt-0.5 text-sm text-muted">Changes move left to right through the pipeline.</p>
       </div>
+      <ExternalRepoBanner projectId={project.id} />
       <div className="flex items-stretch overflow-x-auto pb-2">
         {envs.map((env, i) => (
           <div key={env.name} className="flex shrink-0 items-stretch">
