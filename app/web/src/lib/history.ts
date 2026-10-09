@@ -23,10 +23,12 @@ export function eventInfo(e: HistoryEvent): EventInfo {
       if (e.status === 'failed') return { label: 'Failed', tone: 'danger', symbol: '×' };
       if (e.status === 'cancelled') return { label: 'Stopped', tone: 'danger', symbol: '■' };
       if (e.status === 'partial') return { label: 'Partly applied', tone: 'drift', symbol: '◐' };
+      if (e.warnings?.length) return { label: 'Applied, snapshot failed', tone: 'drift', symbol: '!' };
       return { label: 'Applied', tone: 'added', symbol: '✓' };
     case 'restore':
       if (e.status === 'failed') return { label: 'Restore failed', tone: 'danger', symbol: '×' };
       if (e.status === 'partial' || e.status === 'cancelled') return { label: 'Partly restored', tone: 'drift', symbol: '◐' };
+      if (e.warnings?.length) return { label: 'Restored, snapshot failed', tone: 'drift', symbol: '!' };
       return { label: 'Restored', tone: 'changed', symbol: '↺' };
     default: return { label: 'Project', tone: 'neutral', symbol: '•' };
   }

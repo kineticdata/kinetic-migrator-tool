@@ -677,3 +677,18 @@ test('a promotion across major platform versions is allowed, with the warning in
   expect(note).toHaveTextContent('Dev runs 6.1.7 and Test runs 7.0.0-rc3 — review differences carefully.');
   expect(next()).toBeEnabled();
 });
+
+test('applied, but the snapshot afterwards failed: the warning is shown instead of a plain Applied', async () => {
+  const warning = 'The changes were applied, but the snapshot of Test afterwards failed: the server returned an error (503). Take a snapshot before comparing again.';
+  setup(simple(), { applyJobs: [{ id: 'a1', result: { runId: 'r1', status: 'applied', commit: 'c-run', backupCommit: 'c-backup', snapshotCommit: null, done: 3, error: null, warnings: [warning] } }] });
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  await toConfirm(user);
+  await user.type(screen.getByLabelText(/Type test to confirm/), 'test');
+  await user.click(screen.getByRole('button', { name: 'Apply to Test' }));
+  expect(await screen.findByRole('heading', { name: 'Applied to Test, with a warning' })).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Applied to Test' })).toBeNull();
+  expect(screen.getByRole('alert')).toHaveTextContent(warning);
+  expect(screen.queryByText(/3 changes applied to Test\./)).toBeNull();
+  expect(screen.getByRole('link', { name: 'View in History' })).toBeInTheDocument();
+});

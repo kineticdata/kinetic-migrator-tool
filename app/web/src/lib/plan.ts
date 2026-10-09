@@ -279,20 +279,22 @@ export interface ApplyOutcome {
   done: number;
   error: string | null;
   backupCommit: string | null;
+  // Applied, but the snapshot taken afterwards failed (see ApplyResult).
+  warnings: string[];
 }
 
 // The outcome of a finished apply job, with or without a result (a job that
 // failed or was cancelled before reporting has none).
 export function applyOutcome(
-  job: { status: string; result?: { status: Outcome; done: number; error: string | null; backupCommit: string | null }; error: string | null },
+  job: { status: string; result?: { status: Outcome; done: number; error: string | null; backupCommit: string | null; warnings?: string[] }; error: string | null },
   checklist: ChecklistState,
 ): ApplyOutcome {
   const r = job.status === 'succeeded' ? job.result : undefined;
-  if (r) return { status: r.status, done: r.done, error: r.error, backupCommit: r.backupCommit };
+  if (r) return { status: r.status, done: r.done, error: r.error, backupCommit: r.backupCommit, warnings: r.warnings ?? [] };
   const status: Outcome = job.status === 'cancelled' ? 'cancelled' : 'failed';
   const done = Object.values(checklist.items).filter((i) => i.status === 'done').length;
   const error = job.error ?? (status === 'cancelled' ? 'The apply was cancelled.' : 'The apply did not finish.');
-  return { status, done, error, backupCommit: null };
+  return { status, done, error, backupCommit: null, warnings: [] };
 }
 
 // A finished run leaves no row running: on success a row still running
