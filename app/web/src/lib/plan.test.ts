@@ -190,9 +190,11 @@ test('links to the backup and to a restore from it', () => {
 test('the outcome of a finished apply, with or without a result', () => {
   const list = checklistFrom([{ type: 'item', key: 'a', status: 'done' }, { type: 'item', key: 'b', status: 'running' }]);
   const result = { status: 'cancelled' as const, done: 1, error: 'The apply was cancelled.', backupCommit: 'c-b' };
-  expect(applyOutcome({ status: 'succeeded', result, error: null }, list)).toEqual(result);
-  expect(applyOutcome({ status: 'failed', error: 'Lost contact with the job.' }, list)).toEqual({ status: 'failed', done: 1, error: 'Lost contact with the job.', backupCommit: null });
-  expect(applyOutcome({ status: 'cancelled', error: null }, list)).toEqual({ status: 'cancelled', done: 1, error: 'The apply was cancelled.', backupCommit: null });
+  expect(applyOutcome({ status: 'succeeded', result, error: null }, list)).toEqual({ ...result, warnings: [] });
+  const warned = { status: 'applied' as const, done: 2, error: null, backupCommit: 'c-b', warnings: ['The changes were applied, but the snapshot of Test afterwards failed: x. Take a snapshot before comparing again.'] };
+  expect(applyOutcome({ status: 'succeeded', result: warned, error: null }, list)).toEqual(warned);
+  expect(applyOutcome({ status: 'failed', error: 'Lost contact with the job.' }, list)).toEqual({ status: 'failed', done: 1, error: 'Lost contact with the job.', backupCommit: null, warnings: [] });
+  expect(applyOutcome({ status: 'cancelled', error: null }, list)).toEqual({ status: 'cancelled', done: 1, error: 'The apply was cancelled.', backupCommit: null, warnings: [] });
 });
 
 test('a finished run leaves nothing running, and Resume carries only finished rows', () => {
