@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Web app
+
+- Projects inside a repository you already have (a monorepo, any subfolder,
+  any branch, a linked worktree or a submodule) open and work in
+  **external mode**: Kinetic Migrator writes the project's files and leaves
+  committing to you. It never commits, stages, pushes or changes the
+  branches, index, config, remotes or root `.gitignore` of your repository.
+  History, backups, Restore and pinned changesets use a private history
+  kept in the app's data folder (`KINETIC_MIGRATOR_DATA_DIR` overrides it).
+- Overview and History show which repository and branch the project is in
+  and how many of its files changed since your last commit. Settings →
+  Repository shows that repository read-only, without remote, token or
+  push; the author applies to the private history.
+- Branch switches and edits made outside the app are recorded in the private
+  history ("Files changed outside Kinetic Migrator") before the app's next
+  change. While a merge, rebase, cherry-pick or revert is in progress the
+  project is read-only. Bare repositories and broken `.git` files are
+  refused with plain messages.
+- The refusal to open a repository on a branch other than `main` now applies
+  only to repositories Kinetic Migrator created; those are marked with
+  `.git/kinetic-migrator.json`. Existing managed projects stay managed.
+
 ## 0.1.0 — 2026-10-08
 
 The first release of Kinetic Migrator (command: `kinetic-migrate`).

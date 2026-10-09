@@ -57,6 +57,41 @@ tab it opened:
   flags), are scrubbed from every log line, job event, run record and error,
   and are stored only in the system keychain or in memory.
 
+### Project history: `ProjectRepo`
+
+Server code never assumes `<dir>/.git`. `projectRepo(ref)`
+(`app/server/project-repo.ts`) returns a frozen `ProjectRepo`
+`{ mode, dir, gitdir, user? }`, and every function in `repo.ts` and
+`pinned.ts` takes one:
+
+- `managed`: `gitdir` is `<dir>/.git`.
+- `external` (the folder is inside the user's own repository): `gitdir` is
+  the private history in the app data folder (`appDataDir()`;
+  `KINETIC_MIGRATOR_DATA_DIR` overrides it, and the test runner sets it to a
+  temporary folder). `user` describes the user's repository (`root`,
+  `gitdir`, `commondir` for linked worktrees, `kind`, `subfolder`) for
+  reading only.
+
+The promise that the user's repository is never written through git is kept
+by construction: `g(repo)` hands isomorphic-git `gitFs(repo)`, a file system
+that refuses writes outside `repo.gitdir` (and anywhere in the user's
+repository), and the user's repository is only read through `READ_ONLY_FS`,
+which refuses every write (isomorphic-git's `statusMatrix` would otherwise
+refresh the user's index). `projectRepo` also refuses a private history
+located inside the user's repository. `app/server/external-repo.test.ts`
+fingerprints a monorepo fixture byte for byte before and after a full
+journey.
+
+Writes go through `withProjectLock` and `commitChange` (`project-meta.ts`).
+For an external project the lock first refuses while a merge, rebase,
+cherry-pick or revert is in progress (`409 repository_busy`) and records
+outside changes as "Files changed outside Kinetic Migrator";
+`syncHistory(ref)` does the same cheaply before reads of the latest
+snapshot commit and History. `commitChange` creates the private history
+(and the project id) on first use. The commit author of an external project
+is kept in the private history's `kinetic-migrator.json`, not in the shared
+`kinetic-migrate.json`. Remotes and pushing throw for an external repo.
+
 ## Repository layout
 
 | Path | What it holds |
@@ -74,7 +109,8 @@ tab it opened:
 | `lib/sync/ui-command.mjs` | `kinetic-migrate ui` |
 | `app/server/main.ts` | `startServer()` |
 | `app/server/http.ts`, `security.ts`, `router.ts` | Request handling and access control |
-| `app/server/projects.ts`, `environments.ts`, `project-meta.ts`, `repo.ts` | Projects, environments, credentials, git |
+| `app/server/projects.ts`, `environments.ts`, `project-meta.ts` | Projects, environments, credentials |
+| `app/server/project-repo.ts`, `repo.ts`, `pinned.ts`, `locks.ts` | Where history lives (`ProjectRepo`), git over isomorphic-git, pinned reads, locks |
 | `app/server/snapshots.ts`, `explore.ts`, `compare.ts`, `runs.ts`, `changesets.ts`, `history.ts`, `repository.ts` | The API behind each screen |
 | `app/server/secrets.ts`, `secrets-windows.ts` | Keychain stores (macOS, Windows, Linux, memory) |
 | `app/server/log.ts`, `scrub.ts` | Logging and secret scrubbing |

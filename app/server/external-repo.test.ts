@@ -371,3 +371,21 @@ test('managed projects stay managed: their own repository, with the marker', asy
   await git.commit({ fs, dir: own, message: 'mine', author });
   assert.equal((await projectRepo({ dir: own })).mode, 'external');
 });
+
+test('a project folder in a submodule is external, read through the superproject’s modules folder', async (t) => {
+  const { root } = await monorepo(t, { dirty: false });
+  // A submodule at vendor/config whose git folder is .git/modules/vendor/config.
+  const modules = path.join(root, '.git', 'modules', 'vendor', 'config');
+  const sub = path.join(root, 'vendor', 'config');
+  mkdirSync(sub, { recursive: true });
+  await git.init({ fs, dir: sub, gitdir: modules, defaultBranch: 'main' });
+  write(sub, 'kinetic-sync.config.json', '{}');
+  await git.add({ fs, dir: sub, gitdir: modules, filepath: 'kinetic-sync.config.json' });
+  await git.commit({ fs, dir: sub, gitdir: modules, message: 'sub', author });
+  writeFileSync(path.join(sub, '.git'), 'gitdir: ../../.git/modules/vendor/config\n');
+  const found = findEnclosingRepository(sub)!;
+  assert.deepEqual([found.kind, found.root, found.gitdir, found.subfolder], ['submodule', sub, modules, '']);
+  const repo = await projectRepo({ dir: sub });
+  assert.equal(repo.mode, 'external');
+  assert.equal(await userChangedFiles(found), 0);
+});

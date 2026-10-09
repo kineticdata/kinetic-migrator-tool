@@ -330,8 +330,52 @@ to Credential Manager once it is ready."
 
 ### "This folder is a git repository on branch master; Kinetic Migrator manages projects on main."
 
-**Fix:** rename the branch (`git -C <folder> branch -m main`) and open the
-folder again.
+This is a repository Kinetic Migrator created for the project.
+**Fix:** switch back (`git -C <folder> checkout main`) or rename the branch
+(`git -C <folder> branch -m main`) and open the folder again. Projects inside
+a repository of your own open on any branch.
+
+### "Your repository … has a merge in progress. Finish or abort it in git first: until then Kinetic Migrator only reads this project."
+
+The project is inside your own repository and git is part-way through a
+merge, rebase, cherry-pick or revert there. Writing project files now could
+tangle that work, so snapshots, applies and setting changes are refused.
+**Fix:** finish it (`git commit`, `git rebase --continue`, …) or abort it
+(`git merge --abort`, `git rebase --abort`, …), then try again.
+
+### "This folder is inside a bare git repository …" / "… points to a git folder that does not exist …"
+
+A bare repository has no working files to keep a project in: clone it and
+open the project folder in the clone. A `.git` file that points nowhere is
+usually a deleted worktree or a moved submodule: run `git worktree prune`
+(or repair the submodule) and open the project again.
+
+### "Kinetic Migrator keeps this project's history in …, which is inside your repository."
+
+The app's data folder (see [Concepts](CONCEPTS.md#managed-and-external-projects))
+lies inside the repository the project is in, where its private history
+must not go. **Fix:** set `KINETIC_MIGRATOR_DATA_DIR` to a folder outside
+that repository and start the app again.
+
+### New projects are "in your repository" unexpectedly
+
+The workspace folder is inside a git repository, for example a home folder
+kept in git. Projects created there are external: the app never commits to
+that repository. **Fix:** use a workspace outside it
+(`kinetic-migrate ui --workspace <folder>`) to get projects with their own
+repositories.
+
+### History looks different on a teammate's computer
+
+For a project inside your own repository, History, backups and the commits
+saved changesets are pinned to live in this computer's private history; they
+are not in your repository. **Fix:** on the other computer, take a fresh
+snapshot and save the changeset again.
+
+### "This project is in your own repository: push it with your usual git tools."
+
+Remotes, tokens and Push are only for projects in their own Kinetic Migrator
+repository. Commit and push your repository yourself.
 
 ### "That folder is not a Kinetic project (no kinetic-sync.config.json or environment files in environments/)."
 
