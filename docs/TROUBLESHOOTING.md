@@ -84,6 +84,14 @@ Settings → Environments shows the same message. The project still opens.
 accepted, for a space running on this computer. **Fix:** use the space's
 `https://` address.
 
+### "The space redirected the request to …; not following."
+
+**Cause:** the space (or a proxy in front of it) answered with a redirect
+that Kinetic Migrator will not follow: to another address, to plain
+`http://`, or for a change (a write), whose body can hold passwords. A
+common cause is a proxy that redirects https requests to http. **Fix:** use
+the space's final `https://` address as the Space URL, or fix the proxy.
+
 ### "Could not reach the server; check the URL."
 
 **Cause:** the host does not answer (wrong address, VPN, proxy).
@@ -164,7 +172,7 @@ edited by hand). Take a new snapshot of that environment.
 
 ## Plans
 
-### "Routine … is used by exported workflows but does not exist in the target" / "Handler … is used by exported workflows but is not installed in the target"
+### "Routine … is used by workflows being promoted but does not exist in the target" / "Handler … is used by workflows being promoted but is not installed in the target"
 
 **Cause:** a selected workflow, WebAPI or routine runs a routine or handler the
 target lacks, and it is not in the selection. **Fix:** add it to the changeset

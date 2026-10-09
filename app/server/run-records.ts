@@ -3,6 +3,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunRecord } from '../shared/sync-api.ts';
+import { redacted } from './engine-sync.ts';
 import { readJsonAt } from './pinned.ts';
 import type { ProjectRef } from './project-meta.ts';
 
@@ -38,7 +39,9 @@ export async function lastPromoted(ref: ProjectRef, env: string, key: string): P
     if (run.to !== env || !run.source.commit) continue;
     if (!run.items.some((i) => i.key === key && i.status === 'done')) continue;
     const data = await readJsonAt(ref.dir, run.source.commit, `${run.source.path}/${key}.json`);
-    if (data !== undefined) return { data, at: run.finishedAt };
+    // A raw blob read (not through rekeyTree): credentials an older source
+    // snapshot still holds are stripped here.
+    if (data !== undefined) return { data: redacted(key, data), at: run.finishedAt };
   }
   return null;
 }

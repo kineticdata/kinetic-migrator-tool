@@ -733,8 +733,13 @@ async function runApplyJob(ctx: SyncContext, ref: ProjectRef, plan: StoredPlan, 
         : scrub(failure.message).replace(/[.\s]+$/, '');
       warnings.push(`The changes were applied, but the snapshot of ${To} afterwards failed: ${reason}. Take a snapshot before comparing again.`);
       emit({ type: 'warning', message: warnings[warnings.length - 1] });
-      writeFileSync(path.join(ref.dir, RUNS_DIR, `${runId}.json`), stableStringify(scrub({ ...safe, warnings })));
-      await commitChange(ref, commitMessage(`Recorded that the snapshot of ${To} after the apply failed`, { Environment: r.to }));
+      // Recording it must not turn an applied run into a failed job.
+      try {
+        writeFileSync(path.join(ref.dir, RUNS_DIR, `${runId}.json`), stableStringify(scrub({ ...safe, warnings })));
+        await commitChange(ref, commitMessage(`Recorded that the snapshot of ${To} after the apply failed`, { Environment: r.to }));
+      } catch (recordErr) {
+        ctx.logger?.error('recording the failed snapshot after apply', scrubError(recordErr, known));
+      }
     }
   }
   // A cancelled apply still reports what it did (the job keeps this result).

@@ -139,10 +139,10 @@ test('Review lists counts and items; Next waits until every attention item is ti
 });
 
 test('plan errors block with a plain fix', async () => {
-  setup(simple({ errors: ['Routine Notify Manager is used by exported workflows but does not exist in the target'] }));
+  setup(simple({ errors: ['Routine Notify Manager is used by workflows being promoted but does not exist in the target'] }));
   renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
   const problems = await screen.findByRole('region', { name: 'Problems' });
-  expect(problems).toHaveTextContent('Routine Notify Manager is used by exported workflows');
+  expect(problems).toHaveTextContent('Routine Notify Manager is used by workflows being promoted');
   expect(problems).toHaveTextContent('Add the routine to the changeset, or create it in Test first');
   expect(next()).toBeDisabled();
 });
@@ -691,4 +691,19 @@ test('applied, but the snapshot afterwards failed: the warning is shown instead 
   expect(screen.getByRole('alert')).toHaveTextContent(warning);
   expect(screen.queryByText(/3 changes applied to Test\./)).toBeNull();
   expect(screen.getByRole('link', { name: 'View in History' })).toBeInTheDocument();
+});
+
+test('a partly applied run whose snapshot afterwards failed shows the warning with the failure', async () => {
+  const warning = 'The changes were applied, but the snapshot of Test afterwards failed: the server returned an error (503). Take a snapshot before comparing again.';
+  setup(simple(), { applyJobs: [{ id: 'a1', result: { runId: 'r1', status: 'partial', commit: 'c-run', backupCommit: 'c-backup', snapshotCommit: null, done: 1, error: 'kapps/hr/forms/leave/form: Form rejected', warnings: [warning] } }] });
+  const user = userEvent.setup();
+  renderWithApp(<AppRoutes />, { route: '/p/acme-demo/plan/pl1' });
+  await toConfirm(user);
+  await user.type(screen.getByLabelText(/Type test to confirm/), 'test');
+  await user.click(screen.getByRole('button', { name: 'Apply to Test' }));
+  expect(await screen.findByRole('heading', { name: 'Partly applied to Test' })).toBeInTheDocument();
+  const alert = screen.getByRole('alert');
+  expect(alert).toHaveTextContent('Form rejected');
+  expect(alert).toHaveTextContent(warning);
+  expect(within(alert).getByRole('button', { name: 'Resume' })).toBeInTheDocument();
 });

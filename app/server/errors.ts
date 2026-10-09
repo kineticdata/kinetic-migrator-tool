@@ -35,6 +35,11 @@ export function toApiError(err: unknown): ApiError {
       return new ApiError(409, 'cancelled', 'The job was cancelled.');
     case 'ReadOnlyError':
       return new ApiError(403, 'read_only', 'This environment is read-only.');
+    case 'RedirectRefusedError': {
+      // Built from the redirect's origin and path only (never its query).
+      const to = (err as { to?: unknown }).to;
+      return new ApiError(502, 'redirect_refused', `The space redirected the request to ${typeof to === 'string' ? to : 'another address'}; not following.`);
+    }
     case 'InsecureUrlError':
       // Never sent anything: the address would have carried the password in clear.
       return new ApiError(400, 'insecure_url', INSECURE_URL_MESSAGE);

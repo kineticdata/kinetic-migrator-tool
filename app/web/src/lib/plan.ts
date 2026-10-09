@@ -87,8 +87,8 @@ export function errorFix(message: string, from: string, to: string): { message: 
   const From = envLabel(from);
   const To = envLabel(to);
   const rules: Array<[RegExp, string]> = [
-    [/^Routine .+ is used by exported workflows but does not exist in the target/, `Add the routine to the changeset, or create it in ${To} first, then plan again.`],
-    [/^Handler .+ is used by exported workflows but is not installed in the target/, `Add the handler to the changeset, or install it in ${To} first, then plan again.`],
+    [/^Routine .+ is used by (?:exported workflows|workflows being promoted) but does not exist in the target/, `Add the routine to the changeset, or create it in ${To} first, then plan again.`],
+    [/^Handler .+ is used by (?:exported workflows|workflows being promoted) but is not installed in the target/, `Add the handler to the changeset, or install it in ${To} first, then plan again.`],
     [/: not in the source snapshot$/, `Take a new snapshot of ${From}, or take this item out of the changeset.`],
     [/(same name but id|probably renamed)/, `Reconcile it by hand in ${To} (rename or remove one of the two), take a new snapshot, then plan again.`],
     [/^Unrecognized file in (export|the source snapshot)/, `Take a new snapshot of ${From}.`],

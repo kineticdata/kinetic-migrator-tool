@@ -20,18 +20,27 @@ export function eventInfo(e: HistoryEvent): EventInfo {
     case 'changeset': return { label: 'Changeset saved', tone: 'neutral', symbol: '≡' };
     case 'drift': return { label: 'Drift detected', tone: 'drift', symbol: '!' };
     case 'applied':
-      if (e.status === 'failed') return { label: 'Failed', tone: 'danger', symbol: '×' };
-      if (e.status === 'cancelled') return { label: 'Stopped', tone: 'danger', symbol: '■' };
-      if (e.status === 'partial') return { label: 'Partly applied', tone: 'drift', symbol: '◐' };
-      if (e.warnings?.length) return { label: 'Applied, snapshot failed', tone: 'drift', symbol: '!' };
-      return { label: 'Applied', tone: 'added', symbol: '✓' };
-    case 'restore':
-      if (e.status === 'failed') return { label: 'Restore failed', tone: 'danger', symbol: '×' };
-      if (e.status === 'partial' || e.status === 'cancelled') return { label: 'Partly restored', tone: 'drift', symbol: '◐' };
-      if (e.warnings?.length) return { label: 'Restored, snapshot failed', tone: 'drift', symbol: '!' };
-      return { label: 'Restored', tone: 'changed', symbol: '↺' };
+    case 'restore': {
+      const info = runInfo(e);
+      // The snapshot taken after the run failed, whatever the run's outcome.
+      if (!e.warnings?.length) return info;
+      const success = e.status !== 'failed' && e.status !== 'cancelled' && e.status !== 'partial';
+      return { ...info, label: `${info.label}, snapshot failed`, ...(success ? { tone: 'drift' as Tone, symbol: '!' } : {}) };
+    }
     default: return { label: 'Project', tone: 'neutral', symbol: '•' };
   }
+}
+
+function runInfo(e: HistoryEvent): EventInfo {
+  if (e.type === 'restore') {
+    if (e.status === 'failed') return { label: 'Restore failed', tone: 'danger', symbol: '×' };
+    if (e.status === 'partial' || e.status === 'cancelled') return { label: 'Partly restored', tone: 'drift', symbol: '◐' };
+    return { label: 'Restored', tone: 'changed', symbol: '↺' };
+  }
+  if (e.status === 'failed') return { label: 'Failed', tone: 'danger', symbol: '×' };
+  if (e.status === 'cancelled') return { label: 'Stopped', tone: 'danger', symbol: '■' };
+  if (e.status === 'partial') return { label: 'Partly applied', tone: 'drift', symbol: '◐' };
+  return { label: 'Applied', tone: 'added', symbol: '✓' };
 }
 
 // The type filter's choices (in timeline order of importance).

@@ -652,6 +652,12 @@ function ApplyStep({ projectId, plan, groups, checklist, job, outcome, oneRun, k
             <AlertOctagon size={16} aria-hidden className="mt-0.5 shrink-0" />
             <span>{summary}{outcome.error && outcome.error !== 'The apply was cancelled.' ? ` ${outcome.error}` : ''}</span>
           </p>
+          {warnings.map((w) => (
+            <p key={w} className="mt-1 flex items-start gap-2 text-sm text-fg">
+              <AlertTriangle size={16} aria-hidden className="mt-0.5 shrink-0 text-drift" />
+              <span>{w}</span>
+            </p>
+          ))}
           <p className="mt-1 pl-6 text-[13px] text-fg">
             Nothing was rolled back. Resume plans again against {To} and continues with what is left; or restore {To} from the backup.
           </p>

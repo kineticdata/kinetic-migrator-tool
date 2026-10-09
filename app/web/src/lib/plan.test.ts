@@ -91,9 +91,9 @@ test('kept space settings: the "not copied" note is covered by Environment value
 });
 
 test('plan errors come with a plain fix', () => {
-  expect(errorFix('Routine Notify Manager is used by exported workflows but does not exist in the target', 'dev', 'test').fix)
+  expect(errorFix('Routine Notify Manager is used by workflows being promoted but does not exist in the target', 'dev', 'test').fix)
     .toMatch(/Add the routine to the changeset, or create it in Test first/);
-  expect(errorFix('Handler smtp_send_v1 is used by exported workflows but is not installed in the target', 'dev', 'test').fix)
+  expect(errorFix('Handler smtp_send_v1 is used by workflows being promoted but is not installed in the target', 'dev', 'test').fix)
     .toMatch(/install it in Test/);
   expect(errorFix('kapps/hr/forms/a/form: not in the source snapshot', 'dev', 'test').fix).toMatch(/new snapshot of Dev/);
   expect(errorFix('kapps/hr/forms/a/form: id 12 already exists in the target as kapps/hr/forms/b/form; it was probably renamed — reconcile by hand before promoting', 'dev', 'test').fix)

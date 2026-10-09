@@ -19,9 +19,15 @@
   plans, compares, applies and restores from it never send or show the
   stored password and match a new snapshot. Its files and git history still
   hold it: take a new snapshot, and treat the old commits as sensitive.
-- **A failed snapshot after an apply** is now part of the run: the Plan page
-  shows "Applied to <env>, with a warning" and the reason, and History labels
-  the run "Applied, snapshot failed".
+- **Redirects are never followed with credentials elsewhere.** A request to a
+  space follows a redirect only when it is a GET and stays on the
+  environment's own https origin (or loopback http). Any other redirect,
+  including every redirect of a write (whose body may hold secrets), is an
+  error: "The space redirected the request to <address>; not following."
+- **A failed snapshot after an apply** is now part of the run, whatever its
+  outcome: the Plan page shows the warning and the reason (with "Applied to
+  <env>, with a warning", or beside a partial or failed run's error), and
+  History adds "snapshot failed" to the run's label.
 - **Team "may use" warnings** match whole team names in security policy rules
   and attribute values, so `Ops` no longer matches `DevOps` or `IT::Ops`.
 - Messages that pointed at the legacy `export/` folder now name the
