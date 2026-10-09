@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Changeset } from '../shared/sync-api.ts';
-import { log } from './repo.ts';
+import { log, managedRepo } from './repo.ts';
 import { assertNoSecret, harness } from './sync-fixtures.ts';
 
 const P = '/api/projects/sync-test';
@@ -14,7 +14,7 @@ test('changesets CRUD, pinned to the source snapshot commit, committed per chang
   const h = await harness(t);
   assert.equal((await h.call('POST', `${P}/changesets`, { name: 'Q4', from: 'dev', keys: [FORM] })).status, 404, 'no snapshot yet');
   const snap = (await h.job('POST', `${P}/snapshots`, { env: 'dev' })).result;
-  const count = async () => (await log(h.dir, { limit: 1000 })).length;
+  const count = async () => (await log(managedRepo(h.dir), { limit: 1000 })).length;
   let n = await count();
 
   const created = await h.call('POST', `${P}/changesets`, { name: 'Q4 forms', description: 'IT request changes', from: 'dev', keys: [FORM, FORM] });
@@ -26,7 +26,7 @@ test('changesets CRUD, pinned to the source snapshot commit, committed per chang
   assert.deepEqual(cs.appliedTo, []);
   assert.ok(existsSync(path.join(h.dir, 'changesets', `${cs.id}.json`)));
   assert.equal(await count(), ++n);
-  assert.match((await log(h.dir, { limit: 1 }))[0].message, /^Saved changeset 'Q4 forms'/);
+  assert.match((await log(managedRepo(h.dir), { limit: 1 }))[0].message, /^Saved changeset 'Q4 forms'/);
 
   assert.equal((await h.call('POST', `${P}/changesets`, { name: 'x', from: 'dev', keys: ['teams/Nobody'] })).status, 400);
   assert.equal((await h.call('POST', `${P}/changesets`, { name: 'x', from: 'dev', keys: [] })).status, 400);

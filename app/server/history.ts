@@ -3,15 +3,14 @@
 // enriched from run records. Restore starts a comparison with a backup (or
 // any snapshot commit) as the source and the live target as To, pre-ticking
 // the items the apply that took that backup touched.
-import fs from 'node:fs';
-import git from 'isomorphic-git';
 import type { HistoryDetail, HistoryEvent, HistoryType } from '../shared/sync-api.ts';
 import { ApiError, badRequest, notFound } from './errors.ts';
 import { startCompare } from './compare.ts';
 import { isEntryKey, parseEntryKey } from './engine-sync.ts';
 import { resolveCommit } from './pinned.ts';
-import { isPlainObject, type ProjectRef } from './project-meta.ts';
-import { log, readTreeAt, type LogEntry } from './repo.ts';
+import { isPlainObject, syncHistory, type ProjectRef } from './project-meta.ts';
+import { projectRepo } from './project-repo.ts';
+import { log, readEntry, readTreeAt, type LogEntry } from './repo.ts';
 import type { Router } from './router.ts';
 import { listRuns, readRun } from './run-records.ts';
 import { requireEnvironment, type SyncContext } from './snapshots.ts';
@@ -58,21 +57,18 @@ export function eventsFor(ref: ProjectRef, entry: LogEntry): HistoryEvent[] {
 
 export async function history(ref: ProjectRef, filter: { env?: string | null; type?: string | null }): Promise<HistoryEvent[]> {
   if (filter.type && !TYPES.includes(filter.type as HistoryType)) throw badRequest(`"type" is one of ${TYPES.join(', ')}.`);
-  const entries = await log(ref.dir, { limit: ALL });
+  await syncHistory(ref);
+  const entries = await log(await projectRepo(ref), { limit: ALL });
   return entries.flatMap((e) => eventsFor(ref, e))
     .filter((e) => (!filter.env || e.env === filter.env) && (!filter.type || e.type === filter.type));
 }
 
 async function findEntry(ref: ProjectRef, commit: string): Promise<LogEntry> {
-  const oid = await resolveCommit(ref.dir, commit);
-  if (!oid) throw notFound('No such commit in this project.');
-  const { commit: c } = await git.readCommit({ fs, dir: ref.dir, oid });
-  return {
-    oid,
-    message: c.message.replace(/\n$/, ''),
-    at: new Date(c.author.timestamp * 1000).toISOString(),
-    author: { name: c.author.name, email: c.author.email },
-  };
+  const repo = await projectRepo(ref);
+  const oid = await resolveCommit(repo, commit);
+  const entry = oid ? await readEntry(repo, oid) : null;
+  if (!entry) throw notFound('No such commit in this project.');
+  return entry;
 }
 
 export function registerHistoryRoutes(router: Router, ctx: SyncContext): void {
@@ -99,7 +95,7 @@ export function registerHistoryRoutes(router: Router, ctx: SyncContext): void {
       throw new ApiError(400, 'not_a_backup', 'Only a backup or snapshot can be restored.');
     }
     const env = requireEnvironment(ref, trailers.Environment);
-    const artifacts = await readTreeAt(ref.dir, entry.oid, `snapshots/${env}`);
+    const artifacts = await readTreeAt(await projectRepo(ref), entry.oid, `snapshots/${env}`);
     if (!artifacts.size) throw new ApiError(404, 'no_snapshot', 'This commit holds no snapshot to restore.');
     const touched = listRuns(ref).find((r) => r.backupCommit === entry.oid);
     const day = entry.at.slice(0, 16).replace('T', ' ');

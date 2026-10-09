@@ -15,6 +15,7 @@ const TOKEN = 'typed-token-123456';
 
 function setup(initial: Partial<RepositorySettings> = {}) {
   let settings: RepositorySettings = {
+    mode: 'managed',
     author: { name: 'kinetic-migrate', email: 'kinetic-migrate@localhost' },
     remote: { url: null, token: { has: false } },
     lastPush: null,

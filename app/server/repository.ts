@@ -2,18 +2,21 @@
 // the optional remote (git config, never committed), a write-only token in the
 // secrets store, and pushing as a job. The last push outcome is kept in
 // .git/, so it stays local. The token is sent only to the remote.
+// A project inside the user's own repository (external) shows that
+// repository read-only instead: no remote, token or push, and its author
+// applies to the private history only.
 // Routes: GET/PUT /api/projects/:p/repository, POST /api/projects/:p/repository/push.
 import fs from 'node:fs';
 import path from 'node:path';
-import git from 'isomorphic-git';
-import type { LastPush, RepositoryAuthor, RepositorySettings } from '../shared/repository-api.ts';
+import type { ExternalRepository, LastPush, RepositoryAuthor, RepositorySettings } from '../shared/repository-api.ts';
 import { ApiError, badRequest } from './errors.ts';
 import type { JobRegistry } from './jobs.ts';
 import {
-  DEFAULT_AUTHOR, commitChange, isPlainObject, readMeta, secretsId, withProjectLock, withSecretsLock, writeMeta, type ProjectRef,
+  DEFAULT_AUTHOR, authorOf, commitChange, isPlainObject, readMeta, secretsId, withProjectLock, withSecretsLock, writeMeta, type ProjectRef,
 } from './project-meta.ts';
+import { projectRepo, setPrivateAuthor, userBranch, userChangedFiles, userOperation, userRepoName, type ProjectRepo } from './project-repo.ts';
 import { findProject } from './projects.ts';
-import { getRemote, isSafeRemoteUrl, push as repoPush, setRemote } from './repo.ts';
+import { getRemote, headOid, isSafeRemoteUrl, push as repoPush, setRemote } from './repo.ts';
 import type { Router } from './router.ts';
 import { accountFor, type SecretStore } from './secrets.ts';
 
@@ -23,7 +26,7 @@ export interface RepositoryContext {
   jobs: JobRegistry;
 }
 
-type PushFn = (dir: string, opts: { store: SecretStore; account: string }) => Promise<void>;
+type PushFn = (repo: ProjectRepo, opts: { store: SecretStore; account: string }) => Promise<void>;
 let pushImpl: PushFn = repoPush;
 
 // Tests swap the push (a real one needs a git server); returns the undo.
@@ -38,6 +41,17 @@ const tokenAccount = async (ref: ProjectRef) => accountFor(await secretsId(ref),
 
 const LAST_PUSH = 'kinetic-migrate-last-push.json';
 const lastPushFile = (ref: ProjectRef) => path.join(ref.dir, '.git', LAST_PUSH);
+
+const EXTERNAL_MESSAGE = 'This project is in your own repository: push it with your usual git tools. Kinetic Migrator never changes that repository’s remotes or pushes it.';
+const externalRefusal = () => new ApiError(400, 'external_repository', EXTERNAL_MESSAGE);
+
+export async function externalInfo(repo: ProjectRepo): Promise<ExternalRepository> {
+  const u = repo.user!;
+  return {
+    root: u.root, name: userRepoName(u), kind: u.kind, branch: userBranch(u), subfolder: u.subfolder,
+    changedFiles: await userChangedFiles(u).catch(() => null), operation: userOperation(u), historyPath: repo.gitdir,
+  };
+}
 
 function readLastPush(ref: ProjectRef): LastPush | null {
   try {
@@ -81,9 +95,14 @@ function displayUrl(url: string | null): string | null {
 }
 
 export async function repositorySettings(ref: ProjectRef, store: SecretStore): Promise<RepositorySettings> {
+  const repo = await projectRepo(ref);
+  if (repo.mode === 'external') {
+    return { mode: 'external', author: authorOf(ref, repo), remote: { url: null, token: { has: false } }, lastPush: null, external: await externalInfo(repo) };
+  }
   const meta = readMeta(ref.dir);
-  const url = await getRemote(ref.dir).catch(() => null);
+  const url = await getRemote(repo).catch(() => null);
   return {
+    mode: 'managed',
     author: meta.author ?? DEFAULT_AUTHOR,
     remote: { url: displayUrl(url), token: { has: url ? await store.has(await tokenAccount(ref)) : false } },
     lastPush: readLastPush(ref),
@@ -130,6 +149,12 @@ export async function putRepository(ref: ProjectRef, store: SecretStore, body: u
   const author = body.author === undefined ? undefined : parseAuthor(body.author);
   const remoteUrl = body.remoteUrl === undefined ? undefined : parseRemoteUrl(body.remoteUrl);
   const token = body.token === undefined ? undefined : parseToken(body.token);
+  const repo = await projectRepo(ref);
+  if (repo.mode === 'external') {
+    if (body.remoteUrl !== undefined || body.token !== undefined) throw externalRefusal();
+    if (author) await setPrivateAuthor(repo, author);
+    return repositorySettings(ref, store);
+  }
   const account = await tokenAccount(ref);
   let remoteChanged = false;
   await withProjectLock(ref, async () => {
@@ -138,9 +163,9 @@ export async function putRepository(ref: ProjectRef, store: SecretStore, body: u
       await commitChange(ref, 'Updated repository settings');
     }
     if (remoteUrl !== undefined) {
-      const current = await getRemote(ref.dir).catch(() => null);
+      const current = await getRemote(repo).catch(() => null);
       remoteChanged = (current ?? null) !== remoteUrl;
-      if (remoteChanged) await setRemote(ref.dir, remoteUrl);
+      if (remoteChanged) await setRemote(repo, remoteUrl);
     }
     // The last outcome is about settings that may no longer hold.
     clearLastPush(ref);
@@ -174,14 +199,6 @@ function pushError(err: unknown): ApiError {
   return new ApiError(502, 'push_failed', message);
 }
 
-async function headOid(dir: string): Promise<string | null> {
-  try {
-    return await git.resolveRef({ fs, dir, ref: 'HEAD' });
-  } catch {
-    return null;
-  }
-}
-
 export function registerRepositoryRoutes(router: Router, ctx: RepositoryContext): void {
   const find = (id: string) => findProject(ctx.workspace, id);
 
@@ -191,7 +208,9 @@ export function registerRepositoryRoutes(router: Router, ctx: RepositoryContext)
 
   router.post('/api/projects/:p/repository/push', async ({ params }) => {
     const ref = find(params.p);
-    if (!(await getRemote(ref.dir).catch(() => null))) throw new ApiError(400, 'no_remote', 'Connect a remote repository first.');
+    const repo = await projectRepo(ref);
+    if (repo.mode === 'external') throw externalRefusal();
+    if (!(await getRemote(repo).catch(() => null))) throw new ApiError(400, 'no_remote', 'Connect a remote repository first.');
     const account = await tokenAccount(ref);
     const jobId = ctx.jobs.createJob('push', async (emit) => {
       emit({ type: 'step', step: 'push', status: 'running' });
@@ -199,8 +218,8 @@ export function registerRepositoryRoutes(router: Router, ctx: RepositoryContext)
       try {
         // Only reading HEAD needs the lock; the push itself runs outside it
         // so a slow remote never holds up snapshots or applies.
-        const commit = await withProjectLock(ref, () => headOid(ref.dir));
-        await pushImpl(ref.dir, { store: ctx.secrets, account });
+        const commit = await withProjectLock(ref, () => headOid(repo));
+        await pushImpl(repo, { store: ctx.secrets, account });
         const last: LastPush = { at: at(), ok: true, commit, message: null };
         writeLastPush(ref, last);
         emit({ type: 'step', step: 'push', status: 'done' });

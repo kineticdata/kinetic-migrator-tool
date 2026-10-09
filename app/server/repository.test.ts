@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RepositorySettings } from '../shared/repository-api.ts';
-import { log } from './repo.ts';
+import { log, managedRepo } from './repo.ts';
 import { MemoryStore } from './secrets.ts';
 import { startTestServer, type RawResponse } from './test-helpers.ts';
 
@@ -69,6 +69,7 @@ test('repository settings: author, remote and a write-only token', async (t) => 
   const h = await setup(t);
   const empty = (await h.call('GET', `${P}/repository`)).json as RepositorySettings;
   assert.deepEqual(empty, {
+    mode: 'managed',
     author: { name: 'kinetic-migrate', email: 'kinetic-migrate@localhost' },
     remote: { url: null, token: { has: false } },
     lastPush: null,
@@ -79,6 +80,7 @@ test('repository settings: author, remote and a write-only token', async (t) => 
   });
   assert.equal(put.status, 200, put.body);
   assert.deepEqual(put.json, {
+    mode: 'managed',
     author: { name: 'Pat Example', email: 'pat@example.com' },
     remote: { url: 'https://git.example.com/team/project.git', token: { has: true } },
     lastPush: null,
@@ -86,7 +88,7 @@ test('repository settings: author, remote and a write-only token', async (t) => 
   assert.deepEqual((await h.call('GET', `${P}/repository`)).json, put.json);
 
   // The author is committed with the project and used for later commits.
-  const [latest] = await log(h.dir, { limit: 1 });
+  const [latest] = await log(managedRepo(h.dir), { limit: 1 });
   assert.equal(latest.message, 'Updated repository settings');
   assert.deepEqual(latest.author, { name: 'Pat Example', email: 'pat@example.com' });
   const meta = readFileSync(path.join(h.dir, 'kinetic-migrate.json'), 'utf8');
@@ -153,7 +155,7 @@ test('repository settings: author, remote and a write-only token', async (t) => 
 test('a remote set outside the app is shown without credentials in its URL', async (t) => {
   const h = await setup(t);
   const { setRemote } = await import('./repo.ts');
-  await setRemote(h.dir, `https://someone:${TOKEN}@git.example.com/team/project.git`);
+  await setRemote(managedRepo(h.dir), `https://someone:${TOKEN}@git.example.com/team/project.git`);
   const got = (await h.call('GET', `${P}/repository`)).json as RepositorySettings;
   assert.equal(got.remote.url, 'https://git.example.com/team/project.git');
   h.noToken();
@@ -204,7 +206,7 @@ test('push succeeds: last push records the commit pushed', async (t) => {
   const ok = await h.job(`${P}/repository/push`);
   assert.equal(ok.status, 'succeeded', JSON.stringify(ok.error));
   assert.deepEqual(seen, [TOKEN]);
-  const [head] = await log(h.dir, { limit: 1 });
+  const [head] = await log(managedRepo(h.dir), { limit: 1 });
   assert.deepEqual(ok.result, { ok: true, commit: head.oid, at: ok.result.at, message: null });
   const settings = (await h.call('GET', `${P}/repository`)).json as RepositorySettings;
   assert.deepEqual(settings.lastPush, ok.result);
@@ -215,7 +217,7 @@ test('push refuses a plain-http remote set outside the app, and never sends the 
   const h = await setup(t);
   await h.call('PUT', `${P}/repository`, { token: TOKEN });
   const { setRemote } = await import('./repo.ts');
-  await setRemote(h.dir, 'http://git.example.com/team/project.git');
+  await setRemote(managedRepo(h.dir), 'http://git.example.com/team/project.git');
   const refused = await h.job(`${P}/repository/push`);
   assert.equal(refused.status, 'failed');
   assert.equal(refused.error.code, 'push_failed');

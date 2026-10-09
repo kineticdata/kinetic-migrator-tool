@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunRecord } from '../shared/sync-api.ts';
 import { readJsonAt } from './pinned.ts';
+import { projectRepo } from './project-repo.ts';
 import type { ProjectRef } from './project-meta.ts';
 
 export const RUNS_DIR = 'runs';
@@ -37,7 +38,7 @@ export async function lastPromoted(ref: ProjectRef, env: string, key: string): P
   for (const run of listRuns(ref)) {
     if (run.to !== env || !run.source.commit) continue;
     if (!run.items.some((i) => i.key === key && i.status === 'done')) continue;
-    const data = await readJsonAt(ref.dir, run.source.commit, `${run.source.path}/${key}.json`);
+    const data = await readJsonAt(await projectRepo(ref), run.source.commit, `${run.source.path}/${key}.json`);
     if (data !== undefined) return { data, at: run.finishedAt };
   }
   return null;

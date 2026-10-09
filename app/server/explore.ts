@@ -8,6 +8,7 @@ import { badRequest, notFound } from './errors.ts';
 import { compareText, moduleFor, segmentLabel, summarize, type Edge } from './engine-sync.ts';
 import { hasEnvSecret, pipelineOrder } from './environments.ts';
 import type { ProjectRef } from './project-meta.ts';
+import { projectRepo } from './project-repo.ts';
 import { log } from './repo.ts';
 import type { Router } from './router.ts';
 import type { SecretStore } from './secrets.ts';
@@ -93,7 +94,7 @@ export async function exploreItem(ref: ProjectRef, snap: Snapshot, key: string, 
   const data = snap.artifacts.get(key);
   const type = moduleFor(key)?.type ?? 'unknown';
   const rel = snap.relationships();
-  const history = (await log(ref.dir, { path: `snapshots/${snap.env}/${key}.json`, limit: 50 }))
+  const history = (await log(await projectRepo(ref), { path: `snapshots/${snap.env}/${key}.json`, limit: 50 }))
     .map((e) => ({ commit: e.oid, at: e.at, message: e.message.split('\n')[0] }));
   return {
     key,

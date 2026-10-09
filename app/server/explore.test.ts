@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ExploreItem, SearchResponse, SnapshotResult, TreeNode } from '../shared/sync-api.ts';
-import { log, readTreeAt } from './repo.ts';
+import { log, readTreeAt, managedRepo } from './repo.ts';
 import { PLANTED, PLANTED_CONN, assertNoSecret, harness } from './sync-fixtures.ts';
 import { setEnvSecret } from './environments.ts';
 import { SEARCH_LIMIT, buildCatalog, search } from './explore.ts';
@@ -26,7 +26,7 @@ test('snapshot → commit, explore tree (lazy), item, search; no secret anywhere
   assert.match(snap.events, /event: progress/);
   assert.deepEqual(h.writes(), [], 'a snapshot never writes to the environment');
   assert.ok(existsSync(path.join(h.dir, 'snapshots', 'dev', 'space.json')));
-  const head = (await log(h.dir, { limit: 1 }))[0];
+  const head = (await log(managedRepo(h.dir), { limit: 1 }))[0];
   assert.equal(head.oid, r.commit);
   assert.match(head.message, /^Snapshot of Dev\n\nEnvironment: dev$/);
   const project = (await h.call('GET', P)).json;
@@ -83,7 +83,7 @@ test('snapshot → commit, explore tree (lazy), item, search; no secret anywhere
   assert.equal(again.result.commit, null);
   // Nothing secret in any response or in the repository.
   assertNoSecret(h);
-  const tree = await readTreeAt(h.dir, head.oid, '');
+  const tree = await readTreeAt(managedRepo(h.dir), head.oid, '');
   assert.ok(!JSON.stringify([...tree]).includes(PLANTED));
   assert.ok(!JSON.stringify([...tree]).includes(PLANTED_CONN));
 });

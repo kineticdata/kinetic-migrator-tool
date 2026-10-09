@@ -15,11 +15,38 @@ export interface LastPush {
   message: string | null;
 }
 
+// A project inside the user's own repository (external mode): read-only
+// facts about that repository. Kinetic Migrator never commits, changes the
+// index or config, or pushes there; its own history of the project is kept
+// privately in `historyPath`.
+export interface ExternalRepository {
+  // The repository's work tree root and its folder name.
+  root: string;
+  name: string;
+  kind: 'repository' | 'worktree' | 'submodule';
+  // null when HEAD is detached.
+  branch: string | null;
+  // The project folder relative to root ('/'-separated, '' at the root).
+  subfolder: string;
+  // Files in the project folder that differ from the user's last commit
+  // (null when it could not be worked out).
+  changedFiles: number | null;
+  // A git operation in progress there: the project is read-only until it ends.
+  operation: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | null;
+  historyPath: string;
+}
+
 export interface RepositorySettings {
+  // managed: the project's own repository, which the app commits to (and can
+  // push). external: inside the user's repository (see `external`).
+  mode: 'managed' | 'external';
+  // Managed: committed in kinetic-migrate.json. External: this computer's
+  // private history only.
   author: RepositoryAuthor;
   // The token is never returned: only whether one is stored.
   remote: { url: string | null; token: { has: boolean } };
   lastPush: LastPush | null;
+  external?: ExternalRepository;
 }
 
 // Fields left out stay as they are. `remoteUrl: null` (or '') disconnects the

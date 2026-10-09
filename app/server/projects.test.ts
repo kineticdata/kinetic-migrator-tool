@@ -10,7 +10,7 @@ import type { ConnectionTestResult, CredentialsStatus, ProjectDetail, ProjectSum
 import { createClient, type ClientFactory } from './engine.ts';
 import git from 'isomorphic-git';
 import fs from 'node:fs';
-import { ensureRepo, log, readTreeAt } from './repo.ts';
+import { ensureRepo, log, readTreeAt, managedRepo } from './repo.ts';
 import { MemoryStore } from './secrets.ts';
 import { readMeta } from './project-meta.ts';
 import { resolveEnv, setEnvSecret } from './environments.ts';
@@ -66,7 +66,7 @@ async function setup(t: { after: (fn: () => Promise<void> | void) => void }, fet
 }
 
 async function commitCount(dir: string): Promise<number> {
-  return (await log(dir, { limit: 1000 })).length;
+  return (await log(managedRepo(dir), { limit: 1000 })).length;
 }
 
 test('create, list and open projects', async (t) => {
@@ -97,8 +97,8 @@ test('create, list and open projects', async (t) => {
   const op = opened.json as ProjectDetail;
   assert.match(readMeta(outside).secretsId ?? '', /^[0-9a-f-]{36}$/);
   assert.deepEqual(op.environments.map((e) => e.name), ['test']);
-  const head = (await log(outside, { limit: 1 }))[0];
-  const tree = await readTreeAt(outside, head.oid, '');
+  const head = (await log(managedRepo(outside), { limit: 1 }))[0];
+  const tree = await readTreeAt(managedRepo(outside), head.oid, '');
   assert.ok(!JSON.stringify([...tree]).includes(PLANTED));
 
   assert.equal((await call('POST', '/api/projects/open', { path: tmpdir() })).status, 400);
@@ -244,8 +244,8 @@ test('environments: add, order, credentials, delete — one commit per mutation,
 
   // Nothing ever echoed the password; nothing committed it.
   for (const b of bodies) assert.ok(!b.includes(PLANTED), `response leaked the password: ${b.slice(0, 200)}`);
-  const head = (await log(dir, { limit: 1 }))[0];
-  assert.ok(!JSON.stringify([...(await readTreeAt(dir, head.oid, ''))]).includes(PLANTED));
+  const head = (await log(managedRepo(dir), { limit: 1 }))[0];
+  assert.ok(!JSON.stringify([...(await readTreeAt(managedRepo(dir), head.oid, ''))]).includes(PLANTED));
 });
 
 test('test connection reports the failing step without leaking secrets', async (t) => {
@@ -317,7 +317,7 @@ test('a CLI-created project in the workspace gets a secrets id when first used',
   assert.match(readFileSync(path.join(dir, '.gitignore'), 'utf8'), /^\.env\*$/m);
 });
 
-test('opening refuses folders that are not projects and repositories on another branch, and commits only the project layout', async (t) => {
+test('opening refuses folders that are not projects and managed repositories on another branch, and commits only the project layout', async (t) => {
   const { call } = await setup(t);
   const tmp = (prefix: string) => {
     const d = mkdtempSync(path.join(tmpdir(), prefix));
@@ -336,10 +336,10 @@ test('opening refuses folders that are not projects and repositories on another 
   assert.equal(existsSync(path.join(infra, '.git')), false, 'no repository created');
   assert.equal(existsSync(path.join(infra, 'kinetic-migrate.json')), false, 'nothing written');
 
-  // A project folder inside a repository checked out on another branch.
+  // A repository Kinetic Migrator manages, checked out on another branch.
   const feature = tmp('km-branch-');
   writeFileSync(path.join(feature, 'kinetic-sync.config.json'), '{}');
-  await ensureRepo(feature);
+  await ensureRepo(managedRepo(feature));
   writeFileSync(path.join(feature, 'README.md'), 'x');
   await git.add({ fs, dir: feature, filepath: 'README.md' });
   await git.commit({ fs, dir: feature, message: 'init', author: { name: 'a', email: 'a@example.com' } });
@@ -347,7 +347,7 @@ test('opening refuses folders that are not projects and repositories on another 
   const otherBranch = await call('POST', '/api/projects/open', { path: feature });
   assert.equal(otherBranch.status, 400);
   assert.equal(otherBranch.json.error.message, 'This folder is a git repository on branch infra-work; Kinetic Migrator manages projects on main.');
-  assert.equal((await log(feature, { limit: 10 })).length, 1, 'nothing committed');
+  assert.equal((await log(managedRepo(feature), { limit: 10 })).length, 1, 'nothing committed');
   assert.equal(existsSync(path.join(feature, 'kinetic-migrate.json')), false, 'nothing written');
 
   // A valid project with stray files outside the layout: only the layout is committed.
@@ -361,7 +361,7 @@ test('opening refuses folders that are not projects and repositories on another 
   writeFileSync(path.join(cli, 'terraform', 'main.tf'), 'x');
   const opened = await call('POST', '/api/projects/open', { path: cli });
   assert.equal(opened.status, 200, opened.body);
-  const head = (await log(cli, { limit: 1 }))[0];
+  const head = (await log(managedRepo(cli), { limit: 1 }))[0];
   const files = (await git.listFiles({ fs, dir: cli, ref: head.oid })).sort();
   assert.deepEqual(files, ['.gitattributes', '.gitignore', 'environments/test.json', 'kinetic-migrate.json', 'snapshots/test/space.json']);
   assert.match(readFileSync(path.join(cli, '.gitattributes'), 'utf8'), /^\* text=auto eol=lf$/m);

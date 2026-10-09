@@ -30,6 +30,7 @@ import { currentKeys, readChangeset, recordApplied, removeList } from './changes
 import { hasEnvSecret, readEnvironmentFile, readOverrides, resolveEnv, setEnvSecret } from './environments.ts';
 import type { Emit } from './jobs.ts';
 import { materializeTree, resolveCommit } from './pinned.ts';
+import { projectRepo } from './project-repo.ts';
 import { capturingFactory, crossVersionFor, rememberPlatform } from './platforms.ts';
 import { commitChange, displayName, isPlainObject, secretsId, withProjectLock, type ProjectRef } from './project-meta.ts';
 import type { Router } from './router.ts';
@@ -365,7 +366,7 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     from = requireEnvironment(ref, body.from);
     keys = keyList(body.selected, remove.length > 0);
     if (body.sourceCommit !== undefined) {
-      commit = typeof body.sourceCommit === 'string' ? await resolveCommit(ref.dir, body.sourceCommit) : null;
+      commit = typeof body.sourceCommit === 'string' ? await resolveCommit(await projectRepo(ref), body.sourceCommit) : null;
       if (!commit) throw badRequest('"sourceCommit" is not a commit of this project.');
     } else commit = await latestSnapshotCommit(ref, from);
     if (!commit) throw new ApiError(404, 'no_snapshot', `There is no snapshot of ${displayName(from)} yet: take one first.`);
@@ -388,7 +389,7 @@ async function startPlan(ctx: SyncContext, ref: ProjectRef, body: unknown): Prom
     throw scrubError(err, known);
   }));
   async function runPlanJob(emit: Emit, signal: AbortSignal): Promise<PlanResult> {
-    if (!(await materializeTree(ref.dir, pinned, sourcePath, sourceDir))) {
+    if (!(await materializeTree(await projectRepo(ref), pinned, sourcePath, sourceDir))) {
       throw new ApiError(404, 'no_snapshot', `The pinned snapshot of ${displayName(from)} is missing from the project history.`);
     }
     const select = new Set(keys);
